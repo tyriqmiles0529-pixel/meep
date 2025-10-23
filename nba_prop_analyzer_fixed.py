@@ -1012,6 +1012,12 @@ def run_analysis():
 
     print(f"\n   Total props extracted: {len(all_props)}")
     print(f"   Player props (PTS/AST/REB/3PM): {len(player_props)}")
+
+    # OPTIMIZATION: Limit to first 10 player props for faster testing
+    if len(player_props) > 10:
+        print(f"   ⚡ Limiting to first 10 player props for speed")
+        player_props = player_props[:10]
+
     print(f"   Game bets (ML/Spread/Total): {len(game_bets)}")
     print(f"   Total to analyze: {len(player_props) + len(game_bets)}\n")
 
