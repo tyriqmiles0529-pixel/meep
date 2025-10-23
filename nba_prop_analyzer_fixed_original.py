@@ -9,16 +9,6 @@ import pickle
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 
-# Import RIQ modules
-from riq_scoring import (
-    KellyConfig, ExposureCaps, Candidate, ScoredPick,
-    score_candidate, select_portfolio, sample_beta_posterior,
-    american_to_decimal, break_even_p
-)
-from riq_prop_models import (
-    project_stat, prop_win_probability, blend_seasons, compute_n_eff
-)
-
 # ============================================
 # API ENDPOINT STRUCTURE - CORRECTED FOR PRO PLAN
 # ============================================
@@ -44,38 +34,18 @@ LEAGUE_ID = 12
 SEASON = "2025-2026"  # Current season for games/odds
 STATS_SEASON = "2024-2025"  # Last season for player/team stats
 BOOKMAKER_ID = 4
-TOP_PROPS_PER_CATEGORY = 5  # Top 5 per category
+TOP_PROPS = 15
 LOOKBACK_GAMES = 10
+KELLY_FRACTION = 0.25
 BANKROLL = 100.0
+MIN_CONFIDENCE = 0.40  # Lowered to 40%
+MIN_KELLY_STAKE = 0.01  # Allow bets as small as 1 cent
 MIN_GAMES_REQUIRED = 1  # Only need 1 game of data
 DEBUG_MODE = True  # Enable debug logging
 
 # Odds filtering - only analyze reasonable odds
 MIN_ODDS = -500  # Don't analyze heavy favorites (e.g., -999999)
 MAX_ODDS = +500  # Don't analyze extreme longshots
-
-# ELG and Kelly configuration
-KELLY_CONFIG = KellyConfig(
-    min_kelly_stake=0.01,
-    max_kelly_fraction=0.25,
-    conservative_quantile=0.25,
-    elg_samples=1000
-)
-
-# Exposure caps
-EXPOSURE_CAPS = ExposureCaps(
-    max_per_game=0.15,
-    max_per_player=0.10,
-    max_per_team=0.20,
-    max_total=0.50
-)
-
-# Early season blending
-PRIOR_GAMES_STRENGTH = 5.0
-TEAM_CONTINUITY_DEFAULT = 0.8
-
-# For game bets (moneyline/spread), keep a modest min-confidence if needed
-MIN_CONFIDENCE_GAME_BETS = 0.51  # Only for game-level bets
 
 # Data persistence
 WEIGHTS_FILE = "prop_weights.pkl"
@@ -564,7 +534,6 @@ def get_matchup_context(game_info: dict) -> dict:
 # ============================================
 def calculate_player_projection(player_stats: pd.DataFrame, prop_type: str,
                                 team_context: dict, opponent_defense: float = 1.0) -> Tuple[float, float]:
-    """Calculate player projection using prop-aware models."""
     if player_stats.empty:
         return 0.0, 0.0
 
@@ -573,47 +542,97 @@ def calculate_player_projection(player_stats: pd.DataFrame, prop_type: str,
         return 0.0, 0.0
 
     values = player_stats[stat_col].astype(float).values
-    
+    n = len(values)
+
+    weights = np.exp(np.linspace(0, 1, n))
+    base_projection = np.average(values, weights=weights)
+
+    std_dev = np.std(values, ddof=1) if n > 1 else base_projection * 0.20
+
     pace_multiplier = team_context.get("pace", 1.0)
-    
-    # Use prop-aware projection from riq_prop_models
-    mu, sigma = project_stat(
-        values=values,
-        prop_type=prop_type,
-        pace_multiplier=pace_multiplier,
-        defense_factor=opponent_defense
-    )
+    defense_multiplier = opponent_defense
 
-    return mu, sigma
+    if prop_type == "points":
+        adjustment = pace_multiplier * defense_multiplier
+    elif prop_type == "assists":
+        adjustment = pace_multiplier * (0.7 + 0.3 * defense_multiplier)
+    elif prop_type == "rebounds":
+        adjustment = (0.8 * pace_multiplier + 0.2)
+    elif prop_type == "threes":
+        adjustment = pace_multiplier * defense_multiplier
+    else:
+        adjustment = 1.0
+
+    adjusted_projection = base_projection * adjustment
+    adjusted_std_dev = std_dev * (0.9 + 0.1 * pace_multiplier)
+
+    return adjusted_projection, adjusted_std_dev
 
 
-# american_to_decimal now imported from riq_scoring
+def american_to_decimal(odds) -> float:
+    if isinstance(odds, str):
+        odds = float(odds)
+
+    if isinstance(odds, float):
+        if 1.0 <= odds <= 100.0:
+            return odds
+
+    odds = int(odds)
+    if odds > 0:
+        return (odds / 100) + 1
+    else:
+        return (100 / abs(odds)) + 1
 
 
-def calculate_win_probability(prop_type: str, values: np.ndarray, projection: float, 
-                              line: float, std_dev: float, pick: str = "over") -> float:
-    """Calculate win probability using prop-aware probability models."""
+def calculate_win_probability(projection: float, line: float, std_dev: float,
+                              pick: str = "over") -> float:
     if std_dev == 0:
         std_dev = projection * 0.20
 
-    # Use prop-aware probability model from riq_prop_models
-    p_hat, z_like = prop_win_probability(
-        prop_type=prop_type,
-        values=values,
-        line=line,
-        pick=pick,
-        mu=projection,
-        sigma=std_dev
-    )
+    z_score = (projection - line) / std_dev
 
-    # Don't artificially cap probabilities - let the model decide
-    return p_hat
+    def norm_cdf(x):
+        a1 =  0.254829592
+        a2 = -0.284496736
+        a3 =  1.421413741
+        a4 = -1.453152027
+        a5 =  1.061405429
+        p  =  0.3275911
+
+        sign = 1 if x >= 0 else -1
+        x = abs(x) / np.sqrt(2.0)
+
+        t = 1.0 / (1.0 + p * x)
+        y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * np.exp(-x * x)
+
+        return 0.5 * (1.0 + sign * y)
+
+    if pick == "over":
+        win_prob = 1 - norm_cdf(z_score)
+    else:
+        win_prob = norm_cdf(z_score)
+
+    # Wider bounds: 25% to 90%
+    return max(0.25, min(0.90, win_prob))
 
 
-# calculate_kelly_stake replaced by dynamic_fractional_kelly from riq_scoring
+def calculate_kelly_stake(win_prob: float, odds: int, bankroll: float,
+                         fraction: float = KELLY_FRACTION) -> Tuple[float, float]:
+    decimal_odds = american_to_decimal(odds)
+    b = decimal_odds - 1
+    p = win_prob
+    q = 1 - p
+
+    kelly = (b * p - q) / b
+
+    fractional_kelly = max(0, kelly * fraction)
+
+    stake = bankroll * fractional_kelly
+
+    return fractional_kelly * 100, stake
+
 
 def calculate_expected_value(win_prob: float, odds: int, stake: float) -> float:
-    """Calculate expected value for backwards compatibility."""
     decimal_odds = american_to_decimal(odds)
     profit = stake * (decimal_odds - 1)
     loss_prob = 1 - win_prob
@@ -779,20 +798,16 @@ def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
 
 
 def analyze_prop(prop: dict, matchup_context: dict = None) -> Optional[dict]:
-    """
-    Analyze a prop using ELG-based scoring framework.
-    Returns prop dict with ELG score and all metadata, or None if filtered.
-    """
     ALLOWED_PROPS = ["points", "assists", "rebounds", "threes", "moneyline", "spread", "game_total"]
     if prop["prop_type"] not in ALLOWED_PROPS:
         return None
 
-    # Filter unreasonable odds
+    # Filter unreasonable odds (e.g., -999999 or extreme longshots)
     odds = prop.get("odds")
     if odds is not None and (odds < MIN_ODDS or odds > MAX_ODDS):
         if DEBUG_MODE:
             player_name = prop.get("player", prop.get("prop_type", "Unknown"))
-            print(f"      ❌ {player_name} {prop['prop_type']} - Odds {odds:+d} outside range [{MIN_ODDS}, {MAX_ODDS}]")
+            print(f"      ❌ {player_name} {prop['prop_type']} - Odds {odds:+d} outside profitable range [{MIN_ODDS}, {MAX_ODDS}]")
         return None
 
     if matchup_context is None:
@@ -801,59 +816,62 @@ def analyze_prop(prop: dict, matchup_context: dict = None) -> Optional[dict]:
     # Handle game-level bets
     if prop["prop_type"] in ["moneyline", "spread", "game_total"]:
         odds = prop["odds"]
-        # Use implied probability as point estimate
-        p_hat = break_even_p(odds) * 1.02  # Slight edge assumption
-        
-        # For game bets, use modest min-confidence gate
-        if p_hat < MIN_CONFIDENCE_GAME_BETS:
+        if odds < 0:
+            implied_prob = abs(odds) / (abs(odds) + 100)
+        else:
+            implied_prob = 100 / (odds + 100)
+
+        adjusted_prob = implied_prob * 1.02
+
+        if adjusted_prob < MIN_CONFIDENCE:
             if DEBUG_MODE:
-                print(f"      ❌ {prop['prop_type']} - Win prob {p_hat*100:.1f}% < {MIN_CONFIDENCE_GAME_BETS*100:.1f}%")
+                print(f"      ❌ {prop['prop_type']} - Win prob {adjusted_prob*100:.1f}% < {MIN_CONFIDENCE*100:.1f}%")
             return None
-        
-        # Build Beta posterior with moderate n_eff
-        n_eff = compute_n_eff(prop["prop_type"], base_n_eff=50.0, confidence_multiplier=1.0)
-        p_samples = sample_beta_posterior(p_hat, n_eff, num_samples=KELLY_CONFIG.elg_samples)
-        
-        # Score using ELG framework
-        scored_pick = score_candidate(prop, p_samples, odds, BANKROLL, KELLY_CONFIG)
-        
-        if scored_pick is None:
+
+        kelly_pct, stake = calculate_kelly_stake(adjusted_prob, odds, BANKROLL)
+
+        if stake < MIN_KELLY_STAKE:
             if DEBUG_MODE:
-                print(f"      ❌ {prop['prop_type']} - Failed ELG gates")
+                print(f"      ❌ {prop['prop_type']} - Stake ${stake:.2f} < ${MIN_KELLY_STAKE}")
             return None
-        
-        # Update prop with scoring results
+
+        ev = calculate_expected_value(adjusted_prob, odds, stake)
+
         decimal_odds = american_to_decimal(odds)
-        potential_profit = scored_pick.candidate.stake * (decimal_odds - 1)
-        
+        potential_profit = stake * (decimal_odds - 1)
+
+        composite_score = (
+            (adjusted_prob * 100 * 0.60) +
+            (kelly_pct * 0.40)
+        )
+
+        if DEBUG_MODE:
+            print(f"      ✅ {prop['prop_type']} PASSED - Win: {adjusted_prob*100:.1f}%, Stake: ${stake:.2f}")
+
         prop.update({
-            "projection": prop.get("line", 0),
+            "projection": prop["line"],
             "std_dev": 0,
             "disparity": 0,
             "pick": prop.get("player", "N/A"),
             "edge": 0,
             "risk_adjusted": 0,
             "trend": 0,
-            "win_prob": round(scored_pick.candidate.win_prob, 2),
-            "kelly_pct": round(scored_pick.candidate.kelly_pct, 2),
-            "stake": round(scored_pick.candidate.stake, 2),
+            "win_prob": round(adjusted_prob * 100, 2),
+            "kelly_pct": round(kelly_pct, 2),
+            "stake": round(stake, 2),
             "potential_profit": round(potential_profit, 2),
-            "ev": calculate_expected_value(p_hat, odds, scored_pick.candidate.stake),
-            "elg": round(scored_pick.elg_score, 4),
+            "ev": round(ev, 2),
             "confidence_mult": 1.0,
-            "roi": round((potential_profit / scored_pick.candidate.stake) * 100, 2) if scored_pick.candidate.stake > 0 else 0,
-            "composite_score": round(scored_pick.composite_score, 2),
+            "roi": round((potential_profit / stake) * 100, 2) if stake > 0 else 0,
+            "composite_score": round(composite_score, 2),
             "games_analyzed": 0,
             "pace_factor": round(matchup_context.get("pace", 1.0), 3),
             "defense_factor": 1.0
         })
-        
-        if DEBUG_MODE:
-            print(f"      ✅ {prop['prop_type']} PASSED - Win: {prop['win_prob']:.1f}%, ELG: {prop['elg']:.4f}, Stake: ${prop['stake']:.2f}")
-        
+
         return prop
 
-    # Handle player props with ELG framework
+    # Handle player props
     if DEBUG_MODE:
         print(f"   🏀 Analyzing: {prop['player']} {prop['prop_type']} {prop['line']}")
 
@@ -881,47 +899,55 @@ def analyze_prop(prop: dict, matchup_context: dict = None) -> Optional[dict]:
 
     disparity = projection - prop["line"]
     edge = (disparity / prop["line"]) * 100
+
     pick = "over" if disparity > 0 else "under"
+
     risk_adjusted = disparity / std_dev if std_dev > 0 else 0
 
-    # Get stat values for probability model
+    win_prob = calculate_win_probability(projection, prop["line"], std_dev, pick)
+
+    confidence_mult = get_prop_confidence_multiplier(prop["prop_id"])
+    adjusted_prob = min(0.90, win_prob * confidence_mult)
+
+    if adjusted_prob < MIN_CONFIDENCE:
+        if DEBUG_MODE:
+            print(f"      ❌ Low confidence: {adjusted_prob*100:.1f}% < {MIN_CONFIDENCE*100:.1f}%")
+        return None
+
+    kelly_pct, stake = calculate_kelly_stake(adjusted_prob, prop["odds"], BANKROLL)
+
+    if stake < MIN_KELLY_STAKE:
+        if DEBUG_MODE:
+            print(f"      ❌ Small stake: ${stake:.2f} < ${MIN_KELLY_STAKE}")
+        return None
+
+    ev = calculate_expected_value(adjusted_prob, prop["odds"], stake)
+
+    decimal_odds = american_to_decimal(prop["odds"])
+    potential_profit = stake * (decimal_odds - 1)
+
     stat_col = stat_map.get(prop["prop_type"])
     if stat_col and stat_col in player_stats.columns:
         values = player_stats[stat_col].astype(float).values
+        if len(values) >= 7:
+            avg_last3 = np.mean(values[:3])
+            avg_last7 = np.mean(values[:7])
+            trend = ((avg_last3 - avg_last7) / avg_last7) * 100 if avg_last7 > 0 else 0
+        else:
+            trend = 0
     else:
-        values = np.array([])
+        trend = 0
 
-    # Calculate win probability using prop-aware models
-    p_hat = calculate_win_probability(
-        prop["prop_type"], values, projection, prop["line"], std_dev, pick
+    composite_score = (
+        (adjusted_prob * 100 * 0.50) +
+        (kelly_pct * 0.25) +
+        (max(0, ev) * 0.15) +
+        (max(0, risk_adjusted * 5) * 0.10)
     )
-    
-    # Build Beta posterior with market-specific n_eff
-    confidence_mult = get_prop_confidence_multiplier(prop["prop_id"])
-    n_eff = compute_n_eff(prop["prop_type"], base_n_eff=30.0, confidence_multiplier=confidence_mult)
-    p_samples = sample_beta_posterior(p_hat, n_eff, num_samples=KELLY_CONFIG.elg_samples)
-    
-    # Score using ELG framework (NO MIN_CONFIDENCE gate for player props)
-    scored_pick = score_candidate(prop, p_samples, prop["odds"], BANKROLL, KELLY_CONFIG)
-    
-    if scored_pick is None:
-        if DEBUG_MODE:
-            print(f"      ❌ Failed ELG gates - p_conservative <= p_be or ELG <= 0")
-        return None
-    
-    # Calculate additional metrics
-    decimal_odds = american_to_decimal(prop["odds"])
-    potential_profit = scored_pick.candidate.stake * (decimal_odds - 1)
-    ev = calculate_expected_value(p_hat, prop["odds"], scored_pick.candidate.stake)
-    
-    # Calculate trend
-    trend = 0
-    if len(values) >= 7:
-        avg_last3 = np.mean(values[:3])
-        avg_last7 = np.mean(values[:7])
-        trend = ((avg_last3 - avg_last7) / avg_last7) * 100 if avg_last7 > 0 else 0
 
-    # Update prop with all results
+    if DEBUG_MODE:
+        print(f"      ✅ PASSED - Proj: {projection:.1f}, Line: {prop['line']}, Win: {adjusted_prob*100:.1f}%, Stake: ${stake:.2f}")
+
     prop.update({
         "projection": round(projection, 2),
         "std_dev": round(std_dev, 2),
@@ -930,93 +956,20 @@ def analyze_prop(prop: dict, matchup_context: dict = None) -> Optional[dict]:
         "edge": round(edge, 2),
         "risk_adjusted": round(risk_adjusted, 2),
         "trend": round(trend, 2),
-        "win_prob": round(scored_pick.candidate.win_prob, 2),
-        "kelly_pct": round(scored_pick.candidate.kelly_pct, 2),
-        "stake": round(scored_pick.candidate.stake, 2),
+        "win_prob": round(adjusted_prob * 100, 2),
+        "kelly_pct": round(kelly_pct, 2),
+        "stake": round(stake, 2),
         "potential_profit": round(potential_profit, 2),
         "ev": round(ev, 2),
-        "elg": round(scored_pick.elg_score, 4),
         "confidence_mult": round(confidence_mult, 3),
-        "roi": round((potential_profit / scored_pick.candidate.stake) * 100, 2) if scored_pick.candidate.stake > 0 else 0,
-        "composite_score": round(scored_pick.composite_score, 2),
+        "roi": round((potential_profit / stake) * 100, 2) if stake > 0 else 0,
+        "composite_score": round(composite_score, 2),
         "games_analyzed": len(player_stats),
         "pace_factor": round(matchup_context.get("pace", 1.0), 3),
         "defense_factor": round(opponent_defense, 3)
     })
 
-    if DEBUG_MODE:
-        print(f"      ✅ PASSED - Proj: {projection:.1f}, Line: {prop['line']}, Win: {prop['win_prob']:.1f}%, ELG: {prop['elg']:.4f}, Stake: ${prop['stake']:.2f}")
-
     return prop
-
-
-# ============================================
-# OUTPUT HELPERS
-# ============================================
-def top_by_category(analyzed_props: List[dict], top_n: int = 5) -> Dict[str, List[dict]]:
-    """
-    Group props by category and return top N per category by ELG score.
-    
-    Categories: Points, Assists, Rebounds, 3PM, Moneyline, Spread
-    """
-    categories = {
-        "Points": [],
-        "Assists": [],
-        "Rebounds": [],
-        "3PM": [],
-        "Moneyline": [],
-        "Spread": []
-    }
-    
-    for prop in analyzed_props:
-        prop_type = prop.get("prop_type", "")
-        
-        if prop_type == "points":
-            categories["Points"].append(prop)
-        elif prop_type == "assists":
-            categories["Assists"].append(prop)
-        elif prop_type == "rebounds":
-            categories["Rebounds"].append(prop)
-        elif prop_type == "threes":
-            categories["3PM"].append(prop)
-        elif prop_type == "moneyline":
-            categories["Moneyline"].append(prop)
-        elif prop_type == "spread":
-            categories["Spread"].append(prop)
-    
-    # Sort each category by ELG (fallback to composite_score if ELG missing)
-    result = {}
-    for cat, props in categories.items():
-        if len(props) > 0:
-            # Sort by ELG if available, else composite_score
-            sorted_props = sorted(props, key=lambda x: x.get("elg", x.get("composite_score", 0)), reverse=True)
-            result[cat] = sorted_props[:top_n]
-    
-    return result
-
-
-def print_top_by_category(top_cats: Dict[str, List[dict]]):
-    """Print Top N per category in a nice format."""
-    print("\n" + "=" * 70)
-    print(f"TOP {TOP_PROPS_PER_CATEGORY} BY CATEGORY (Ranked by ELG)")
-    print("=" * 70)
-    
-    for category, props in top_cats.items():
-        if len(props) == 0:
-            continue
-            
-        print(f"\n📊 {category.upper()}")
-        print("-" * 70)
-        
-        for idx, prop in enumerate(props, 1):
-            confidence_indicator = "🟢" if prop['win_prob'] >= 65 else "🟡" if prop['win_prob'] >= 55 else "🟠"
-            
-            print(f"{confidence_indicator} #{idx} | {prop['player']:<25s} | ELG: {prop.get('elg', 0):.4f}")
-            print(f"     Game: {prop['game']}")
-            print(f"     Line: {prop['line']:<6.1f} | Proj: {prop['projection']:<6.2f} | Pick: {prop['pick'].upper()}")
-            print(f"     Win: {prop['win_prob']:.1f}% | Kelly: {prop['kelly_pct']:.2f}% | Stake: ${prop['stake']:.2f}")
-            print(f"     EV: {prop['ev']:+.2f}% | ROI: {prop['roi']:.1f}%")
-            print()
 
 
 # ============================================
@@ -1024,16 +977,16 @@ def print_top_by_category(top_cats: Dict[str, List[dict]]):
 # ============================================
 def run_analysis():
     print("=" * 70)
-    print("NBA PROP ANALYZER - UNIFIED WITH ELG SCORING ✅")
+    print("NBA PROP ANALYZER - FIXED FOR PRO PLAN ✅")
     print("=" * 70)
     print(f"API Plan: PRO (Player Stats Enabled)")
     print(f"Games/Odds Season: {SEASON}")
     print(f"Player Stats Season: {STATS_SEASON} (most recent + current)")
     print(f"Bankroll: ${BANKROLL:,.2f}")
-    print(f"Kelly Config: Max {KELLY_CONFIG.max_kelly_fraction:.2%}, Conservative p{KELLY_CONFIG.conservative_quantile:.0%}")
-    print(f"Min Kelly Stake: ${KELLY_CONFIG.min_kelly_stake}")
+    print(f"Kelly Fraction: {KELLY_FRACTION:.2%}")
+    print(f"Min Confidence: {MIN_CONFIDENCE:.1%}")
+    print(f"Min Kelly Stake: ${MIN_KELLY_STAKE}")
     print(f"Min Games Required: {MIN_GAMES_REQUIRED}")
-    print(f"Scoring: Expected Log Growth (ELG) + Dynamic Fractional Kelly")
     print(f"Debug Mode: {'ON' if DEBUG_MODE else 'OFF'}")
     print("=" * 70)
     print()
@@ -1103,30 +1056,21 @@ def run_analysis():
     print(f"\n   ✅ {len(analyzed_props)} props meet criteria (out of {len(all_to_analyze)})\n")
 
     if not analyzed_props:
-        print("❌ No props met ELG thresholds")
+        print("❌ No props met minimum thresholds")
         print("\n💡 Troubleshooting:")
         print("   1. Check if player stats are being fetched (look for '📦 Cache hit' or '✅ Parsed' messages)")
-        print("   2. ELG gates: conservative p > break-even p, ELG > 0, stake >= min")
+        print("   2. Lower MIN_CONFIDENCE further (currently {:.1%})".format(MIN_CONFIDENCE))
         print("   3. Check API response structures match expected format")
         print("   4. Verify player names in odds match player search results")
         return
 
-    # Sort by ELG score (primary ranking)
-    analyzed_props.sort(key=lambda x: x.get("elg", x.get("composite_score", 0)), reverse=True)
-    
-    # Get top by category
-    top_cats = top_by_category(analyzed_props, TOP_PROPS_PER_CATEGORY)
-    
-    # Print top by category
-    print_top_by_category(top_cats)
-    
-    # Also show overall top props for backwards compatibility
-    top_props = analyzed_props[:15]  # Keep top 15 overall
+    analyzed_props.sort(key=lambda x: x["composite_score"], reverse=True)
+    top_props = analyzed_props[:TOP_PROPS]
 
-    print("\n" + "=" * 70)
-    print(f"OVERALL TOP {len(top_props)} PROPS (Ranked by ELG)")
     print("=" * 70)
-    print("ELG = Expected Log Growth | Higher is better")
+    print(f"TOP {len(top_props)} PROPS (Ranked by Composite Score)")
+    print("=" * 70)
+    print("Formula: Score = (WinProb×50%) + (Kelly×25%) + (EV×15%) + (RiskAdj×10%)")
     print("=" * 70)
     print()
 
@@ -1138,7 +1082,7 @@ def run_analysis():
     for idx, prop in enumerate(top_props, 1):
         confidence_indicator = "🟢" if prop['win_prob'] >= 65 else "🟡" if prop['win_prob'] >= 55 else "🟠"
 
-        print(f"{confidence_indicator} #{idx:2d} | {prop['player']:<25s} | {prop['prop_type'].upper():<8s} | ELG: {prop.get('elg', 0):.4f}")
+        print(f"{confidence_indicator} #{idx:2d} | {prop['player']:<25s} | {prop['prop_type'].upper():<8s} | Score: {prop['composite_score']:.2f}")
         print(f"     Game: {prop['game']}")
         print(f"     ⭐ WIN PROBABILITY: {prop['win_prob']:.1f}% | Confidence: {prop['confidence_mult']:.3f}x")
         print(f"     Line: {prop['line']:<6.1f} | Proj: {prop['projection']:<6.2f} | Disparity: {prop['disparity']:+.2f} | σ: {prop['std_dev']:.2f}")
@@ -1146,7 +1090,7 @@ def run_analysis():
         print(f"     🏀 Pace: {prop.get('pace_factor', 1.0):.3f}x | 🛡️ Defense: {prop.get('defense_factor', 1.0):.3f}x")
         print(f"     Edge: {prop['edge']:+.1f}% | Risk-Adj: {prop['risk_adjusted']:+.2f} | Trend: {prop['trend']:+.1f}%")
         print(f"     Kelly: {prop['kelly_pct']:.2f}% | Stake: ${prop['stake']:.2f} | Profit: ${prop['potential_profit']:.2f}")
-        print(f"     EV: {prop['ev']:+.2f}% | ROI: {prop['roi']:.1f}% | Composite: {prop.get('composite_score', 0):.2f}")
+        print(f"     EV: {prop['ev']:+.2f}% | ROI: {prop['roi']:.1f}%")
         print()
 
     print("=" * 70)
@@ -1171,33 +1115,23 @@ def run_analysis():
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = f"prop_analysis_{timestamp}.json"
-    
-    # Compute average ELG
-    avg_elg = sum(p.get("elg", 0) for p in top_props) / len(top_props) if top_props else 0
 
     with open(output_file, "w") as f:
         json.dump({
             "timestamp": timestamp,
             "bankroll": BANKROLL,
-            "kelly_config": {
-                "max_fraction": KELLY_CONFIG.max_kelly_fraction,
-                "conservative_quantile": KELLY_CONFIG.conservative_quantile,
-                "min_stake": KELLY_CONFIG.min_kelly_stake
-            },
+            "kelly_fraction": KELLY_FRACTION,
             "top_props": top_props,
-            "top_by_category": top_cats,
             "summary": {
                 "total_bets": len(top_props),
                 "total_stake": total_stake,
                 "total_potential": total_potential,
                 "avg_win_prob": avg_win_prob,
-                "avg_ev": avg_ev,
-                "avg_elg": avg_elg
+                "avg_ev": avg_ev
             }
         }, f, indent=2)
 
     print(f"\n✅ Results saved to: {output_file}")
-    print(f"   Including top_by_category for: {', '.join(top_cats.keys())}")
 
 
 if __name__ == "__main__":

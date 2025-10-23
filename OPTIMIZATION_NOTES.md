@@ -1,12 +1,316 @@
-# NBA Prop Analyzer - Optimization Report
+# NBA Prop Analyzer - Unified with ELG Scoring
 
 ## Executive Summary
 
-The optimized version delivers **5-10x faster execution** through parallel API calls, improved caching, and vectorized calculations. Expected runtime reduced from ~120s to ~15-25s for analyzing 100+ props.
+The analyzer has been unified into a single entry point (`nba_prop_analyzer_fixed.py`) with **Expected Log Growth (ELG)** scoring, replacing the composite-score heuristic. This provides:
+
+- **Theoretically sound Kelly betting** using conservative probability quantiles
+- **Prop-aware statistical models** with appropriate distributions (Normal for PTS/AST/REB, Poisson/NegBin for 3PM)
+- **No artificial probability caps** - the models give true estimates
+- **Top 5 per category** output (Points, Assists, Rebounds, 3PM, Moneyline, Spread)
+- **Exposure caps** for portfolio risk management
+- **Early-season blending** with continuity-aware priors
 
 ---
 
-## Key Performance Improvements
+## Why Expected Log Growth (ELG)?
+
+### The Kelly Criterion Problem
+
+Traditional Kelly betting assumes:
+1. We know the exact win probability `p`
+2. We size bets as `f* = (b·p - q) / b`
+
+In reality, we have uncertainty about `p`. Using a point estimate can lead to **overbetting** when our estimate is optimistic.
+
+### ELG Solution
+
+ELG maximizes long-term compound growth by accounting for uncertainty in win probability:
+
+```
+ELG = E_p[log(1 + f·(b·X - (1-X)))]
+```
+
+Where:
+- `p ~ Beta(α, β)` represents our posterior belief about win probability
+- `f` is the Kelly fraction
+- `X ~ Bernoulli(p)` is the outcome
+
+By using a **conservative quantile** (e.g., 25th percentile) of the posterior, we:
+1. Protect against overconfidence
+2. Reduce risk of ruin
+3. Still maximize long-term growth
+
+### Key Benefits
+
+1. **Risk Management**: Using p_25 instead of p_mean naturally reduces bet sizes
+2. **Positive ELG Gate**: Only bet when ELG > 0, ensuring positive expected growth
+3. **No Arbitrary Caps**: The framework naturally constrains extreme probabilities
+4. **Bayesian Learning**: Beta posterior incorporates market efficiency and historical accuracy
+
+---
+
+## Prop-Aware Probability Models
+
+### Why Prop-Specific Distributions?
+
+Different props have different statistical properties:
+
+| Prop Type | Distribution | Reason |
+|-----------|--------------|--------|
+| Points, Assists, Rebounds | Normal | Continuous-like, central limit theorem applies |
+| 3PM | Negative Binomial / Poisson | Count data, overdispersed |
+| Moneyline, Spread | Beta posterior | Market-implied probabilities |
+
+### Model Details
+
+**Projection (`project_stat`):**
+- EWMA with trend boost (recent 3 vs recent 7 games)
+- Robust variance using MAD (Median Absolute Deviation)
+- Prop-specific overdispersion factors
+- Matchup adjustments (pace, defense)
+
+**Probability (`prop_win_probability`):**
+- **Normal tail** for PTS/AST/REB: P(X > line) = 1 - Φ((line - μ) / σ)
+- **Poisson tail** for 3PM: P(X > line) = 1 - CDF_Poisson(line, λ)
+- **No artificial capping** - let the model decide
+
+---
+
+## Conservative Edge Gates
+
+### Player Props
+
+**NO MIN_CONFIDENCE gate.** Instead, require:
+1. **Conservative edge**: p_conservative (25th percentile) > p_break_even
+2. **Positive ELG**: ELG > 0
+3. **Minimum stake**: stake >= MIN_KELLY_STAKE
+
+This replaces the old 40% hard threshold with economically meaningful gates.
+
+### Game Bets (Moneyline/Spread)
+
+For single-side odds (no de-vigging):
+- Optional modest MIN_CONFIDENCE ≈ 0.51-0.52, OR
+- Rely solely on ELG gates
+
+---
+
+## Early-Season Blending
+
+### Continuity-Aware Priors
+
+When current season has few games, blend with last season:
+
+```python
+w_curr = n_curr / (n_curr + n0_eff)
+n0_eff = PRIOR_GAMES_STRENGTH * TEAM_CONTINUITY
+```
+
+**Parameters:**
+- `PRIOR_GAMES_STRENGTH = 5.0`: Strength of prior in "game equivalents"
+- `TEAM_CONTINUITY_DEFAULT = 0.8`: Roster continuity factor (0.0-1.0)
+
+**Strategy:**
+- Take all current season games
+- Supplement with recent last season games if needed
+- After ~10 current games, prioritize current season
+
+---
+
+## Exposure Caps and Portfolio Assembly
+
+### Risk Management Constraints
+
+```python
+max_per_game = 15%     # Max exposure per game
+max_per_player = 10%   # Max exposure per player
+max_per_team = 20%     # Max exposure per team
+max_total = 50%        # Max total bankroll exposure
+```
+
+**Selection Algorithm:**
+1. Sort candidates by ELG (or composite_score)
+2. Greedily add bets respecting all caps
+3. Stop when caps would be exceeded
+
+This prevents over-concentration and manages tail risk.
+
+---
+
+## Output Structure
+
+### Top 5 Per Category
+
+Primary output groups bets into categories:
+- **Points**: Player points over/under
+- **Assists**: Player assists over/under  
+- **Rebounds**: Player rebounds over/under
+- **3PM**: Player threes over/under
+- **Moneyline**: Game moneyline bets
+- **Spread**: Game spread bets
+
+Each category shows Top 5 by ELG score.
+
+### JSON Output
+
+```json
+{
+  "timestamp": "...",
+  "top_props": [...],
+  "top_by_category": {
+    "Points": [...],
+    "Assists": [...],
+    ...
+  },
+  "summary": {
+    "avg_elg": 0.0234,
+    ...
+  }
+}
+```
+
+---
+
+## Running the Analyzer
+
+### Basic Usage
+
+```bash
+python nba_prop_analyzer_fixed.py
+```
+
+### Configuration
+
+Key parameters in the file:
+```python
+KELLY_CONFIG = KellyConfig(
+    min_kelly_stake=0.01,
+    max_kelly_fraction=0.25,
+    conservative_quantile=0.25,  # Use p_25 for sizing
+    elg_samples=1000
+)
+
+EXPOSURE_CAPS = ExposureCaps(
+    max_per_game=0.15,
+    max_per_player=0.10,
+    max_per_team=0.20,
+    max_total=0.50
+)
+
+PRIOR_GAMES_STRENGTH = 5.0
+TEAM_CONTINUITY_DEFAULT = 0.8
+```
+
+### Reading Output
+
+1. **Top by Category**: Primary ranking by ELG within each category
+2. **Overall Top Props**: Top 15 across all categories for comparison
+3. **Portfolio Summary**: Total exposure, expected return, risk level
+4. **JSON**: Programmatic access to all results
+
+---
+
+## Module Structure
+
+### `riq_scoring.py`
+
+- Kelly criterion and ELG calculation
+- Beta posterior sampling
+- Portfolio selection with exposure caps
+- Odds/probability utilities
+
+### `riq_prop_models.py`
+
+- Prop-aware statistical projections
+- Probability models (Normal, Poisson/NegBin)
+- Early-season blending
+- Effective sample size computation
+
+### `nba_prop_analyzer_fixed.py`
+
+- Single unified analyzer entry point
+- API data fetching
+- Integration of scoring and modeling modules
+- Output formatting and JSON export
+
+---
+
+## Migration from Old System
+
+### What Changed?
+
+**Removed:**
+- Global `MIN_CONFIDENCE` gate for player props
+- Artificial probability caps (25%-90%)
+- Fixed composite-score formula
+- Duplicate analyzer files
+
+**Added:**
+- ELG scoring framework
+- Conservative probability gates
+- Prop-aware distributions
+- Top 5 per category output
+- Exposure caps
+- Early-season blending
+
+### Backwards Compatibility
+
+- JSON output includes both `elg` and `composite_score`
+- All previous fields (win_prob, kelly_pct, stake, ev, etc.) retained
+- Can still rank by composite_score if preferred
+
+---
+
+## Testing and Validation
+
+### Sanity Checks
+
+1. **ELG > 0**: All shown bets have positive expected log growth
+2. **Conservative edge**: p_conservative > p_break_even for all bets
+3. **Stake >= min**: All stakes meet minimum threshold
+4. **Exposure caps**: No category exceeds limits
+5. **Probability range**: No artificial capping; values can exceed 90% if model supports
+
+### Expected Behavior
+
+- Fewer bets shown (stricter gates)
+- More conservative sizing (p_25 < p_mean)
+- Better long-term growth (ELG maximization)
+- Lower risk of ruin (exposure caps)
+
+---
+
+## Future Enhancements
+
+### Potential Improvements
+
+1. **Correlation modeling**: Account for correlated outcomes (e.g., player props in same game)
+2. **Historical validation**: Backtest ELG vs composite-score on past data
+3. **Adaptive priors**: Learn PRIOR_GAMES_STRENGTH and TEAM_CONTINUITY from data
+4. **Multi-objective**: Balance ELG vs Sharpe ratio
+5. **Live betting**: Update posteriors as games progress
+6. **Odds shopping**: Incorporate multiple bookmakers for de-vigging
+
+---
+
+## References
+
+### Kelly Criterion and ELG
+
+- Kelly, J. L. (1956). "A New Interpretation of Information Rate"
+- Thorp, E. O. (2006). "The Kelly Criterion in Blackjack Sports Betting, and the Stock Market"
+- MacLean, L. C., Thorp, E. O., & Ziemba, W. T. (2011). "The Kelly Capital Growth Investment Criterion"
+
+### Statistical Modeling
+
+- Negative Binomial for count data overdispersion
+- Robust variance estimation via MAD
+- Beta-Binomial conjugacy for Bayesian updating
+
+---
+
+## Key Performance Improvements (from v1)
 
 ### 1. **Parallel API Calls (Biggest Impact: 8-10x speedup)**
 
