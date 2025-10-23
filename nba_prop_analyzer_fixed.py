@@ -43,6 +43,10 @@ MIN_KELLY_STAKE = 0.01  # Allow bets as small as 1 cent
 MIN_GAMES_REQUIRED = 1  # Only need 1 game of data
 DEBUG_MODE = True  # Enable debug logging
 
+# Odds filtering - only analyze reasonable odds
+MIN_ODDS = -500  # Don't analyze heavy favorites (e.g., -999999)
+MAX_ODDS = +500  # Don't analyze extreme longshots
+
 # Data persistence
 WEIGHTS_FILE = "prop_weights.pkl"
 RESULTS_FILE = "prop_results.pkl"
@@ -796,6 +800,14 @@ def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
 def analyze_prop(prop: dict, matchup_context: dict = None) -> Optional[dict]:
     ALLOWED_PROPS = ["points", "assists", "rebounds", "threes", "moneyline", "spread", "game_total"]
     if prop["prop_type"] not in ALLOWED_PROPS:
+        return None
+
+    # Filter unreasonable odds (e.g., -999999 or extreme longshots)
+    odds = prop.get("odds")
+    if odds is not None and (odds < MIN_ODDS or odds > MAX_ODDS):
+        if DEBUG_MODE:
+            player_name = prop.get("player", prop.get("prop_type", "Unknown"))
+            print(f"      ❌ {player_name} {prop['prop_type']} - Odds {odds:+d} outside profitable range [{MIN_ODDS}, {MAX_ODDS}]")
         return None
 
     if matchup_context is None:
