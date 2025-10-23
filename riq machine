@@ -1,12 +1,23 @@
-# RIQ MEEPING MACHINE - Fully Integrated Version (All-in-One)
+# RIQ MEEPING MACHINE — Fully Integrated, Fast-Mode, All-in-One
 from __future__ import annotations
 import requests, pandas as pd, numpy as np, datetime, json, time, os, pickle, random, math
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 
+# ========= RUNTIME / FAST MODE =========
+FAST_MODE = True
+REQUEST_TIMEOUT = 4 if FAST_MODE else 10
+RETRIES = 1 if FAST_MODE else 3
+DAYS_TO_FETCH = 1 if FAST_MODE else 3
+MAX_GAMES = 6 if FAST_MODE else 20
+MAX_PLAYER_PROPS_ANALYZE = 24 if FAST_MODE else 200
+SLEEP_SHORT = 0.05 if FAST_MODE else 0.2
+SLEEP_LONG = 0.1 if FAST_MODE else 0.3
+RUN_TIME_BUDGET_SEC = 50 if FAST_MODE else 300
+
 # ========= CONFIG =========
-API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or "4979ac5e1f7ae10b1d6b58f1bba01140"
+API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or "YOUR_API_KEY_HERE"
 BASE_URL = "https://v1.basketball.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 LEAGUE_ID = 12
@@ -15,7 +26,6 @@ STATS_SEASON = "2024-2025"
 BOOKMAKER_ID = 4
 BANKROLL = 100.0
 MIN_KELLY_STAKE = 0.01
-DAYS_TO_FETCH = 3
 DEBUG_MODE = False
 
 # Odds filter
@@ -47,10 +57,9 @@ CACHE_FILE = "player_cache.pkl"
 EQUITY_FILE = "equity_curve.pkl"
 
 stat_map = {"points": "points", "assists": "assists", "rebounds": "rebounds", "threes": "threepoint_goals"}
-NBA_TEAM_IDS = list(range(132, 162))
 MEEP_MESSAGES = ["Riq Machine Working", "Meeping...", "Crunching numbers", "Analyzing props", "Finding value"]
 
-# ========= ODDS UTILITIES (from riq_scoring.py) =========
+# ========= ODDS + POSTERIOR UTILITIES =========
 def american_to_decimal(american: int | float) -> float:
     if isinstance(american, str):
         american = float(american)
@@ -135,7 +144,7 @@ def drawdown_scale(equity_curve: List[float], floor: float = 0.6, window: int = 
     if dd >= 0.30: return floor
     return 1.0 - (1.0 - floor) * (dd / 0.30)
 
-# ========= PROP MODELS (from riq_prop_models.py) =========
+# ========= PROP MODELS (distributional tails) =========
 def _ewma(values: List[float], half_life: float = 5.0) -> float:
     if not values: return 0.0
     v = np.asarray(values, dtype=float); n = len(v); idx = np.arange(n, dtype=float)
@@ -210,7 +219,7 @@ def prop_win_probability(prop_type: str, values: List[float], line: float, pick:
         sigma = max(sigma, 1e-6); z = (mu - line) / sigma
         p = 1.0 - _normal_cdf((line - mu) / sigma) if pick == "over" else _normal_cdf((line - mu) / sigma)
         return min(1.0 - 1e-4, max(1e-4, p)), z
-    mean, r, p_like = _fit_nb_params(ints)
+    mean, r, _ = _fit_nb_params(ints)
     if r == float("inf"):
         lam = mean
         if pick == "over":
@@ -253,79 +262,58 @@ def save_equity(curve: List[float]):
 prop_weights = load_data(WEIGHTS_FILE, defaultdict(lambda: 1.0))
 prop_results = load_data(RESULTS_FILE, defaultdict(list))
 player_cache = load_data(CACHE_FILE, {})
+# In-memory PID cache (also persisted in player_cache)
+_pid_cache: Dict[str, int] = player_cache.get("__pid_cache__", {})
 
 # ========= API FUNCTIONS =========
-def fetch_json(endpoint: str, params: dict = None, retries: int = 3) -> Optional[dict]:
+def fetch_json(endpoint: str, params: dict = None, retries: int = RETRIES, timeout: int = REQUEST_TIMEOUT) -> Optional[dict]:
     url = f"{BASE_URL}{endpoint}"
     for attempt in range(retries):
         try:
-            resp = requests.get(url, headers=HEADERS, params=params, timeout=10)
+            resp = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
             if resp.status_code == 200: return resp.json()
             if resp.status_code == 429:
                 if DEBUG_MODE: print(f"   ⚠️ Rate limited. Waiting {2 ** attempt}s...")
                 time.sleep(2 ** attempt)
             else:
-                if DEBUG_MODE: print(f"   ❌ Error {resp.status_code}: {resp.text[:200]}")
+                if DEBUG_MODE: print(f"   ❌ Error {resp.status_code}: {resp.text[:160]}")
                 return None
         except Exception as e:
             if DEBUG_MODE: print(f"   ⚠️ Request failed: {e}")
-            if attempt < retries - 1: time.sleep(1)
+            if attempt < retries - 1: time.sleep(0.5)
     return None
 
-def fetch_all_nba_players(silent: bool = False) -> Dict[str, int]:
-    cache_key = f"nba_all_players_{SEASON}"
-    if cache_key in player_cache:
-        ts, data = player_cache[cache_key]
-        if (datetime.datetime.now() - ts).total_seconds() < 86400:
-            if not silent: print(f"   📦 Using cached roster: {len(data)} players")
-            return data
-    if not silent:
-        print(f"\n🏀 Building NBA player roster for {SEASON} season...")
-        print(f"   Fetching from {len(NBA_TEAM_IDS)} teams")
-    lookup = {}
-    for team_id in NBA_TEAM_IDS:
-        data = fetch_json("/players", params={"season": SEASON, "team": team_id})
-        if data and "response" in data:
-            for player in data["response"]:
-                name = player.get("name", ""); pid = player.get("id")
-                if name and pid:
-                    lookup[name.strip()] = pid
-                    parts = name.strip().split()
-                    if len(parts) >= 2: lookup[" ".join(parts[::-1]).strip()] = pid
-        time.sleep(0.25)
-    player_cache[cache_key] = (datetime.datetime.now(), lookup); save_data(CACHE_FILE, player_cache)
-    return lookup
-
-def get_upcoming_games() -> List[dict]:
-    today = datetime.date.today()
-    dates = [today + datetime.timedelta(days=i) for i in range(DAYS_TO_FETCH)]
-    print(f"📅 Fetching games for {DAYS_TO_FETCH} days:\n" + "\n".join([f"   - {d:%Y-%m-%d}" for d in dates]) + "\n")
-    games = []
-    for d in dates:
-        data = fetch_json("/games", params={"league": LEAGUE_ID, "season": SEASON, "date": d.strftime("%Y-%m-%d"), "timezone": "America/Chicago"})
-        if data and "response" in data: games.extend(data["response"])
-        time.sleep(0.2)
-    print(f"   Found {len(games)} total games\n"); return games
-
-def get_game_odds(game_id: int) -> Optional[dict]:
-    data = fetch_json("/odds", params={"game": game_id, "bookmaker": BOOKMAKER_ID})
-    if not data or "response" not in data or not data["response"]: return None
-    return data["response"][0]
-
 def _lookup_player_id(name: str) -> Optional[int]:
-    lookup = fetch_all_nba_players(silent=True)
-    pid = lookup.get(name.strip())
-    if pid: return pid
-    name_lower = name.strip().lower()
-    for n, p in lookup.items():
-        if n.lower() == name_lower: return p
+    # Fast path: local cache
+    if name in _pid_cache:
+        return _pid_cache[name]
+    # Strategy 1: reversed name
     parts = name.strip().split()
+    candidates = []
     if len(parts) >= 2:
-        last = parts[-1].lower()
-        for n, p in lookup.items():
-            if last in n.lower(): return p
-    data = fetch_json("/players", params={"search": name})
-    if data and "response" in data and data["response"]: return data["response"][0].get("id")
+        candidates.append(" ".join(parts[::-1]))
+    candidates.append(name.strip())
+    if len(parts) >= 2:
+        candidates.append(parts[-1])
+
+    for q in candidates:
+        data = fetch_json("/players", params={"search": q})
+        if data and "response" in data and data["response"]:
+            # Pick the best match that contains all tokens
+            toks = set(t.lower() for t in name.split())
+            best = None
+            for rec in data["response"]:
+                nm = rec.get("name","")
+                if nm and toks.issubset(set(nm.lower().split())):
+                    best = rec; break
+            if not best:
+                best = data["response"][0]
+            pid = best.get("id")
+            if pid:
+                _pid_cache[name] = pid
+                player_cache["__pid_cache__"] = _pid_cache
+                save_data(CACHE_FILE, player_cache)
+                return pid
     return None
 
 def _parse_game_row(row: dict) -> dict:
@@ -342,29 +330,57 @@ def get_player_stats_split(player_name: str, max_last: int = 25, max_curr: int =
     cache_key = f"split_{player_name}_{max_last}_{max_curr}"
     if cache_key in player_cache:
         ts, data = player_cache[cache_key]
-        if (datetime.datetime.now() - ts).total_seconds() < 3600:
+        if (datetime.datetime.now() - ts).total_seconds() < 1800:
             return data.get("last", pd.DataFrame()), data.get("curr", pd.DataFrame())
     pid = _lookup_player_id(player_name)
     if not pid: return pd.DataFrame(), pd.DataFrame()
+
     last, curr = [], []
     d_last = fetch_json("/games/statistics/players", params={"season": STATS_SEASON, "player": pid})
     if d_last and "response" in d_last:
-        for r in d_last["response"]:
+        for r in d_last["response"][:max_last]:
             g = _parse_game_row(r)
             if g: last.append(g)
+
     d_curr = fetch_json("/games/statistics/players", params={"season": SEASON, "player": pid})
     if d_curr and "response" in d_curr:
-        for r in d_curr["response"]:
+        for r in d_curr["response"][:max_curr]:
             g = _parse_game_row(r)
             if g: curr.append(g)
-    df_last = pd.DataFrame(last[:max_last]); df_curr = pd.DataFrame(curr[:max_curr])
-    player_cache[cache_key] = (datetime.datetime.now(), {"last": df_last, "curr": df_curr}); save_data(CACHE_FILE, player_cache)
+
+    df_last = pd.DataFrame(last); df_curr = pd.DataFrame(curr)
+    player_cache[cache_key] = (datetime.datetime.now(), {"last": df_last, "curr": df_curr})
+    save_data(CACHE_FILE, player_cache)
     return df_last, df_curr
 
-def blend_weight(n_current: float, n0: float = PRIOR_GAMES_STRENGTH, continuity: float = TEAM_CONTINUITY_DEFAULT) -> float:
-    continuity = max(0.25, min(1.0, continuity))
-    n0_eff = n0 / continuity
-    return n_current / (n_current + n0_eff + 1e-9)
+def get_upcoming_games() -> List[dict]:
+    today = datetime.date.today()
+    dates = [today + datetime.timedelta(days=i) for i in range(DAYS_TO_FETCH)]
+    print(f"📅 Fetching games for {DAYS_TO_FETCH} days:\n" + "\n".join([f"   - {d:%Y-%m-%d}" for d in dates]) + "\n")
+    games = []
+    for d in dates:
+        data = fetch_json("/games", params={"league": LEAGUE_ID, "season": SEASON, "date": d.strftime("%Y-%m-%d"), "timezone": "America/Chicago"})
+        if data and "response" in data:
+            games.extend(data["response"])
+        time.sleep(SLEEP_SHORT)
+        if len(games) >= MAX_GAMES:
+            break
+    print(f"   Found {len(games)} total games\n"); return games[:MAX_GAMES]
+
+def get_game_odds(game_id: int) -> Optional[dict]:
+    data = fetch_json("/odds", params={"game": game_id, "bookmaker": BOOKMAKER_ID})
+    if not data or "response" not in data or not data["response"]: return None
+    return data["response"][0]
+
+def get_matchup_context(game_info: dict) -> dict:
+    home_team_id = game_info.get("teams", {}).get("home", {}).get("id")
+    away_team_id = game_info.get("teams", {}).get("away", {}).get("id")
+    if not home_team_id or not away_team_id: return {"pace": 1.0, "home_defensive_factor": 1.0, "away_defensive_factor": 1.0}
+    # Lightweight team context (avoid heavy loops)
+    params = {"league": LEAGUE_ID, "season": STATS_SEASON}
+    pace = 1.0; h_def = 1.0; a_def = 1.0
+    # Optional: you can enrich with /statistics per team if needed
+    return {"pace": pace, "home_defensive_factor": h_def, "away_defensive_factor": a_def}
 
 def update_prop_weights(prop_id: str, actual_result: bool, predicted_prob: float):
     prop_results[prop_id].append({"result": actual_result, "predicted": predicted_prob, "timestamp": datetime.datetime.now()})
@@ -380,28 +396,36 @@ def get_prop_confidence_multiplier(prop_id: str) -> float:
 
 def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
     if not odds_data or "bookmakers" not in odds_data: return []
-    bookmakers = odds_data.get("bookmakers", []); 
+    bookmakers = odds_data.get("bookmakers", [])
     if not bookmakers: return []
     props = []; bookmaker = bookmakers[0]
+
     ALLOWED = {"moneyline","money line","match winner","spread","point spread","handicap","points","point","player points","assists","assist","player assists","rebounds","rebound","player rebounds","total rebounds","threes","three","3-point","3-pointers","player threes"}
+    PER_GAME_LIMIT = 20 if FAST_MODE else 200
+
     for bet in bookmaker.get("bets", []):
+        if len(props) >= PER_GAME_LIMIT:
+            break
         bet_name = bet.get("name", "").lower()
         if not any(a in bet_name for a in ALLOWED): continue
+
         is_game = any(x in bet_name for x in ["moneyline","money line","match winner","spread","point spread","handicap"])
         if is_game:
             bet_type = "moneyline" if any(x in bet_name for x in ["moneyline","money line","match winner"]) else ("spread" if any(x in bet_name for x in ["spread","point spread","handicap"]) else None)
             if not bet_type: continue
-            for value in bet.get("values", []):
+            for value in bet.get("values", [])[:6]:
                 prop_text = value.get("value", ""); odds_value = value.get("odd", -110)
-                if isinstance(odds_value, str):
-                    try: odds_value = float(odds_value)
-                    except: continue
-                if isinstance(odds_value, float) and 1.0 <= odds_value <= 100.0:
-                    odds = int((odds_value - 1) * 100) if odds_value >= 2.0 else int(-100 / (odds_value - 1))
-                else:
-                    odds = int(odds_value)
+                try:
+                    if isinstance(odds_value, str): odds_value = float(odds_value)
+                    if isinstance(odds_value, float) and 1.0 <= odds_value <= 100.0:
+                        odds = int((odds_value - 1) * 100) if odds_value >= 2.0 else int(-100 / (odds_value - 1))
+                    else:
+                        odds = int(odds_value)
+                except Exception:
+                    continue
                 prop_id = f"{game_info['id']}_{bet_type}_{prop_text}".replace(" ", "_")
                 props.append({"prop_id": prop_id, "game_id": game_info["id"], "game": f"{game_info['teams']['home']['name']} vs {game_info['teams']['away']['name']}", "game_date": game_info["date"], "player": prop_text, "prop_type": bet_type, "line": 0.0, "odds": odds, "bookmaker": "DraftKings"})
+                if len(props) >= PER_GAME_LIMIT: break
         else:
             prop_type = None
             if "point" in bet_name and "spread" not in bet_name: prop_type = "points"
@@ -409,22 +433,24 @@ def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
             elif "rebound" in bet_name: prop_type = "rebounds"
             elif "three" in bet_name or "3-point" in bet_name or "3-pointer" in bet_name: prop_type = "threes"
             if not prop_type: continue
-            for value in bet.get("values", []):
+            for value in bet.get("values", [])[:10]:
                 text = value.get("value", ""); parts = text.split()
                 if len(parts) < 2: continue
                 try:
                     line = float(parts[-1]); player_name = " ".join(parts[:-1])
                 except ValueError: continue
                 odds_value = value.get("odd", -110)
-                if isinstance(odds_value, str):
-                    try: odds_value = float(odds_value)
-                    except: continue
-                if isinstance(odds_value, float) and 1.0 <= odds_value <= 100.0:
-                    odds = int((odds_value - 1) * 100) if odds_value >= 2.0 else int(-100 / (odds_value - 1))
-                else:
-                    odds = int(odds_value)
+                try:
+                    if isinstance(odds_value, str): odds_value = float(odds_value)
+                    if isinstance(odds_value, float) and 1.0 <= odds_value <= 100.0:
+                        odds = int((odds_value - 1) * 100) if odds_value >= 2.0 else int(-100 / (odds_value - 1))
+                    else:
+                        odds = int(odds_value)
+                except Exception:
+                    continue
                 prop_id = f"{game_info['id']}_{player_name}_{prop_type}".replace(" ", "_")
                 props.append({"prop_id": prop_id, "game_id": game_info["id"], "game": f"{game_info['teams']['home']['name']} vs {game_info['teams']['away']['name']}", "game_date": game_info["date"], "player": player_name, "prop_type": prop_type, "line": line, "odds": odds, "bookmaker": "DraftKings"})
+                if len(props) >= PER_GAME_LIMIT: break
     return props
 
 def _market_key(prop_type: str) -> str:
@@ -439,37 +465,44 @@ def analyze_player_prop(prop: dict, matchup_context: dict) -> Optional[dict]:
     vl = df_last[stat_col].astype(float).tolist() if (stat_col and stat_col in df_last.columns) else []
     vc = df_curr[stat_col].astype(float).tolist() if (stat_col and stat_col in df_curr.columns) else []
     n_curr = float(len(vc)); w_cur = blend_weight(n_curr, n0=PRIOR_GAMES_STRENGTH, continuity=TEAM_CONTINUITY_DEFAULT)
+    # Replication-based blend (fast and simple)
     merged = []
     rep_last = max(1, int(round((1.0 - w_cur) * 10))); rep_curr = max(1, int(round(w_cur * 10)))
     for v in vl: merged.extend([v]*rep_last)
     for v in vc: merged.extend([v]*rep_curr)
     if not merged: merged = vl or vc
+
     pace = matchup_context.get("pace", 1.0)
     defense = (matchup_context.get("home_defensive_factor", 1.0) + matchup_context.get("away_defensive_factor", 1.0)) / 2.0
     projection, std_dev = project_stat(merged, prop["prop_type"], pace, defense)
     if projection == 0 or std_dev == 0: return None
+
     disparity = projection - prop["line"]; pick = "over" if disparity > 0 else "under"
     risk_adj = disparity / std_dev if std_dev > 0 else 0.0
     edge_pct = (disparity / prop["line"]) * 100 if prop["line"] != 0 else 0.0
-    p_hat, z_like = prop_win_probability(prop["prop_type"], merged, prop["line"], pick, projection, std_dev)
+
+    p_hat, _ = prop_win_probability(prop["prop_type"], merged, prop["line"], pick, projection, std_dev)
     conf_mult = get_prop_confidence_multiplier(prop["prop_id"])
     n_eff = N_EFF_BY_MARKET.get(_market_key(prop["prop_type"]), N_EFF_BY_MARKET["DEFAULT"])
     n_eff_scaled = max(10.0, min(200.0, n_eff * conf_mult))
-    p_samples = sample_beta_posterior(p_hat, n_eff_scaled, n_samples=600)
+    p_samples = sample_beta_posterior(p_hat, n_eff_scaled, n_samples=400 if FAST_MODE else 600)
+
     dec = american_to_decimal(prop["odds"]); b = dec - 1.0
     equity = load_equity(); dd_scale = drawdown_scale(equity, floor=0.6, window=14)
     kcfg = KellyConfig(q_conservative=0.30, fk_low=0.25, fk_high=0.50, dd_scale=dd_scale)
-    f, p_c, frac_k, p_mean = dynamic_fractional_kelly(p_samples, b, kcfg)
+    f, p_c, _, p_mean = dynamic_fractional_kelly(p_samples, b, kcfg)
     if f <= 0.0: return None
     p_be = 1.0 / (1.0 + b)
     if p_c <= p_be: return None
     elg = risk_adjusted_elg(p_samples, b, f)
     if elg <= 0.0: return None
+
     stake = BANKROLL * f
     if stake < MIN_KELLY_STAKE: return None
     potential_profit = stake * (dec - 1.0)
     ev_dollars = (p_mean * potential_profit) - ((1.0 - p_mean) * stake)
     ev_pct = (ev_dollars / max(1e-9, stake)) * 100.0
+
     prop.update({
         "projection": round(projection, 2), "std_dev": round(std_dev, 2), "disparity": round(disparity, 2),
         "pick": pick, "edge": round(edge_pct, 2), "risk_adjusted": round(risk_adj, 2), "trend": 0.0,
@@ -488,10 +521,10 @@ def analyze_game_bet(prop: dict) -> Optional[dict]:
     dec = american_to_decimal(prop["odds"]); b = dec - 1.0
     conf_mult = get_prop_confidence_multiplier(prop["prop_id"])
     n_eff = N_EFF_BY_MARKET.get(_market_key(prop["prop_type"]), 45.0)
-    p_samples = sample_beta_posterior(p_hat, max(10.0, min(120.0, n_eff * conf_mult)), n_samples=600)
+    p_samples = sample_beta_posterior(p_hat, max(10.0, min(120.0, n_eff * conf_mult)), n_samples=400 if FAST_MODE else 600)
     equity = load_equity(); dd_scale = drawdown_scale(equity, floor=0.6, window=14)
     kcfg = KellyConfig(q_conservative=0.30, fk_low=0.25, fk_high=0.50, dd_scale=dd_scale)
-    f, p_c, frac_k, p_mean = dynamic_fractional_kelly(p_samples, b, kcfg)
+    f, p_c, _, p_mean = dynamic_fractional_kelly(p_samples, b, kcfg)
     if f <= 0.0: return None
     p_be = 1.0 / (1.0 + b)
     if p_c <= p_be: return None
@@ -523,63 +556,82 @@ def top_by_category(analyzed_props: List[dict], k="elg") -> Dict[str, List[dict]
         groups[key] = items[:TOP_PER_CATEGORY]
     return groups
 
-def get_matchup_context(game_info: dict) -> dict:
-    home_team_id = game_info.get("teams", {}).get("home", {}).get("id")
-    away_team_id = game_info.get("teams", {}).get("away", {}).get("id")
-    if not home_team_id or not away_team_id: return {"pace": 1.0, "home_defensive_factor": 1.0, "away_defensive_factor": 1.0}
-    def team_stats(team_id: int) -> dict:
-        cache_key = f"team_{team_id}_{STATS_SEASON}"
-        if cache_key in player_cache:
-            ts, cd = player_cache[cache_key]
-            if (datetime.datetime.now() - ts).total_seconds() < 86400: return cd
-        params = {"league": LEAGUE_ID, "season": STATS_SEASON, "team": team_id}
-        data = fetch_json("/statistics", params=params)
-        stats = {"pace": 1.0, "defensive_rating": 110.0}
-        if data and "response" in data:
-            resp = data["response"]; first = resp[0] if isinstance(resp, list) and resp else resp
-            try:
-                if isinstance(first, dict) and "games" in first:
-                    pf = first.get("points", {}).get("for", {}).get("average", {}).get("all", 110.0)
-                    pa = first.get("points", {}).get("against", {}).get("average", {}).get("all", 110.0)
-                    pace = ((pf + pa) / 2) / 110.0; stats["pace"] = max(0.85, min(1.15, pace)); stats["defensive_rating"] = pa
-            except Exception: pass
-        player_cache[cache_key] = (datetime.datetime.now(), stats); save_data(CACHE_FILE, player_cache)
-        return stats
-    h = team_stats(home_team_id); a = team_stats(away_team_id)
-    combined_pace = (h["pace"] + a["pace"]) / 2.0; avg_def = 110.0
-    return {"pace": combined_pace, "home_defensive_factor": avg_def / max(h["defensive_rating"], 90), "away_defensive_factor": avg_def / max(a["defensive_rating"], 90)}
+def blend_weight(n_current: float, n0: float = PRIOR_GAMES_STRENGTH, continuity: float = TEAM_CONTINUITY_DEFAULT) -> float:
+    continuity = max(0.25, min(1.0, continuity))
+    n0_eff = n0 / continuity
+    return n_current / (n_current + n0_eff + 1e-9)
 
 def run_analysis():
-    print("=" * 72); print("RIQ MEEPING MACHINE 🚀 — Unified Analyzer"); print("=" * 72)
+    start = time.monotonic()
+    print("=" * 72)
+    print("RIQ MEEPING MACHINE 🚀 — Unified Analyzer")
+    print("=" * 72)
     print(f"Season: {SEASON} | Stats: prior={STATS_SEASON} | Bankroll: ${BANKROLL:.2f}")
     print(f"Odds Range: {MIN_ODDS} to {MAX_ODDS} | Ranking: ELG + dynamic Kelly")
-    print("=" * 72); print()
+    print(f"FAST_MODE: {'ON' if FAST_MODE else 'OFF'} | Time Budget: {RUN_TIME_BUDGET_SEC}s")
+    print("=" * 72)
+    print()
+
+    # Quick API ping to fail fast if key/network is bad
+    ping = fetch_json("/games", params={"league": LEAGUE_ID, "season": SEASON, "date": datetime.date.today().strftime("%Y-%m-%d")})
+    if ping is None:
+        print("❌ API unreachable or key invalid. Set API_SPORTS_KEY/APISPORTS_KEY and try again.")
+        return
+
     games = get_upcoming_games()
     if not games:
         print("❌ No upcoming games found"); return
-    print("🎲 Fetching odds and props...\n   ✅ Points, Assists, Rebounds, 3PM, Moneyline, Spread\n   ❌ Excluding: Totals, Blocks, Steals, TOs, Minutes")
+
+    print("🎲 Fetching odds and props...")
+    print("   ✅ Points, Assists, Rebounds, 3PM, Moneyline, Spread")
+    print("   ❌ Excluding: Totals, Blocks, Steals, TOs, Minutes")
     all_props = []; contexts = {}
-    for g in games:
+    for g in games[:MAX_GAMES]:
+        if time.monotonic() - start > RUN_TIME_BUDGET_SEC:
+            print("⏳ Time budget reached while reading odds.")
+            break
         ctx = get_matchup_context(g); contexts[g["id"]] = ctx
         od = get_game_odds(g["id"])
         if od:
-            props = extract_props_from_odds(od, g); all_props.extend(props)
+            props = extract_props_from_odds(od, g)
+            all_props.extend(props)
             info = f"Pace: {ctx['pace']:.2f}x" if ctx['pace'] != 1.0 else ""
             print(f"   ✓ {g['teams']['home']['name']} vs {g['teams']['away']['name']}: {len(props)} props {info}")
-        time.sleep(0.3)
-    players = [p for p in all_props if p["prop_type"] in ["points","assists","rebounds","threes"]]
-    games_bets = [p for p in all_props if p["prop_type"] in ["moneyline","spread"]]
-    print(f"\n   Total props: {len(all_props)} | Player: {len(players)} | Game: {len(games_bets)}\n")
+        time.sleep(SLEEP_LONG)
+
+    player_props = [p for p in all_props if p["prop_type"] in ["points","assists","rebounds","threes"]]
+    game_bets = [p for p in all_props if p["prop_type"] in ["moneyline","spread"]]
+
+    # Limit for speed
+    if len(player_props) > MAX_PLAYER_PROPS_ANALYZE:
+        print(f"⚡ Limiting player props to first {MAX_PLAYER_PROPS_ANALYZE} for speed.")
+        player_props = player_props[:MAX_PLAYER_PROPS_ANALYZE]
+
+    print(f"\n   Total props: {len(all_props)} | Player: {len(player_props)} | Game: {len(game_bets)}\n")
     print(f"🔍 {random.choice(MEEP_MESSAGES)}...")
+
     analyzed = []
-    for idx, prop in enumerate(players + games_bets, 1):
-        res = analyze_player_prop(prop, contexts.get(prop["game_id"], {})) if prop["prop_type"] in ["points","assists","rebounds","threes"] else analyze_game_bet(prop)
-        if res: analyzed.append(res)
-        if idx % 50 == 0: print(f"   {random.choice(MEEP_MESSAGES)}... {idx}/{len(players)+len(games_bets)} analyzed")
-        if prop["prop_type"] in ["points","assists","rebounds","threes"]: time.sleep(0.15)
+    for idx, prop in enumerate(player_props + game_bets, 1):
+        if time.monotonic() - start > RUN_TIME_BUDGET_SEC:
+            print("⏳ Time budget reached during analysis.")
+            break
+        try:
+            if prop["prop_type"] in ["points","assists","rebounds","threes"]:
+                res = analyze_player_prop(prop, contexts.get(prop["game_id"], {}))
+            else:
+                res = analyze_game_bet(prop)
+            if res: analyzed.append(res)
+        except Exception as e:
+            if DEBUG_MODE: print(f"   ⚠️ Analysis failed for {prop.get('player')} {prop.get('prop_type')}: {e}")
+        if idx % 25 == 0:
+            print(f"   {random.choice(MEEP_MESSAGES)}... {idx}/{len(player_props)+len(game_bets)} analyzed")
+        if prop["prop_type"] in ["points","assists","rebounds","threes"]:
+            time.sleep(SLEEP_SHORT)
+
     print(f"\n   ✅ {len(analyzed)} props meet ELG gates\n")
     if not analyzed:
         print("❌ No props passed ELG gates"); return
+
     groups = top_by_category(analyzed, k="elg")
     print("=" * 72); print(f"TOP {TOP_PER_CATEGORY} PER CATEGORY (by ELG)"); print("=" * 72)
     for key, label in CATEGORIES:
@@ -597,6 +649,7 @@ def run_analysis():
             print(f"     Pick: {p['pick'].upper() if key!='moneyline' else p['pick']:<6s} | Odds: {p['odds']:+d}")
             print(f"     Kelly: {p['kelly_pct']:.2f}% | Stake: ${p['stake']:.2f} | Profit: ${p['potential_profit']:.2f}")
             print(f"     EV: {p['ev']:+.2f}% | Win Prob: {p['win_prob']:.1f}%")
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S"); output_file = f"prop_analysis_{timestamp}.json"
     groups_json = {key: groups.get(key, []) for key,_ in CATEGORIES}
     with open(output_file, "w") as f:
