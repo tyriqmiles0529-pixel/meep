@@ -175,15 +175,60 @@ def get_player_recent_stats(player_name: str, num_games: int = LOOKBACK_GAMES) -
         print(f"      🔍 Searching API for: {player_name}")
 
     # Step 1: Search for player to get ID
+    # API stores names as "Last First" but odds use "First Last"
+    # Strategy: Search by last name only, then match
+
+    # Try full name first
     params = {"search": player_name}
     data = fetch_json("/players", params=params)
 
+    # If not found, try searching by last name only
     if not data or "response" not in data or len(data["response"]) == 0:
         if DEBUG_MODE:
-            print(f"      ❌ Player not found: {player_name}")
-        return pd.DataFrame()
+            print(f"      ⚠️  Full name '{player_name}' not found, trying last name...")
 
-    player = data["response"][0]
+        # Extract last name (last word)
+        name_parts = player_name.strip().split()
+        if len(name_parts) >= 2:
+            last_name = name_parts[-1]
+
+            if DEBUG_MODE:
+                print(f"      🔍 Searching by last name: {last_name}")
+
+            params = {"search": last_name}
+            data = fetch_json("/players", params=params)
+
+            if not data or "response" not in data or len(data["response"]) == 0:
+                if DEBUG_MODE:
+                    print(f"      ❌ Player not found even by last name: {last_name}")
+                return pd.DataFrame()
+
+            # Filter results to find best match
+            # Look for player where API name contains the last name
+            best_match = None
+            for result in data["response"]:
+                api_name = result.get("name", "").lower()
+                search_last = last_name.lower()
+
+                # Check if last name appears in API name
+                if search_last in api_name:
+                    best_match = result
+                    break
+
+            if not best_match:
+                # Just take first result if no good match
+                best_match = data["response"][0]
+
+            player = best_match
+
+            if DEBUG_MODE:
+                print(f"      ✓ Matched to: {player.get('name')} (ID: {player.get('id')})")
+        else:
+            if DEBUG_MODE:
+                print(f"      ❌ Player not found: {player_name}")
+            return pd.DataFrame()
+    else:
+        player = data["response"][0]
     player_id = player.get("id")
 
     if not player_id:
