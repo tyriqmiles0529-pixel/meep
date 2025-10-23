@@ -176,59 +176,71 @@ def get_player_recent_stats(player_name: str, num_games: int = LOOKBACK_GAMES) -
 
     # Step 1: Search for player to get ID
     # API stores names as "Last First" but odds use "First Last"
-    # Strategy: Search by last name only, then match
+    # OPTIMIZED: Try reversed name first (most efficient)
 
-    # Try full name first
-    params = {"search": player_name}
-    data = fetch_json("/players", params=params)
+    name_parts = player_name.strip().split()
+    player = None
+    data = None
 
-    # If not found, try searching by last name only
-    if not data or "response" not in data or len(data["response"]) == 0:
+    # Strategy 1: Try reversed name first (e.g., "LeBron James" → "James LeBron")
+    if len(name_parts) >= 2:
+        reversed_name = " ".join(name_parts[::-1])
         if DEBUG_MODE:
-            print(f"      ⚠️  Full name '{player_name}' not found, trying last name...")
+            print(f"      🔄 Trying reversed: {reversed_name}")
 
-        # Extract last name (last word)
-        name_parts = player_name.strip().split()
-        if len(name_parts) >= 2:
-            last_name = name_parts[-1]
+        params = {"search": reversed_name}
+        data = fetch_json("/players", params=params)
 
+        if data and "response" in data and len(data["response"]) > 0:
+            player = data["response"][0]
             if DEBUG_MODE:
-                print(f"      🔍 Searching by last name: {last_name}")
+                print(f"      ✅ Found with reversed name: {player.get('name')} (ID: {player.get('id')})")
 
-            params = {"search": last_name}
-            data = fetch_json("/players", params=params)
+    # Strategy 2: Try original name as fallback
+    if not player:
+        if DEBUG_MODE:
+            print(f"      🔄 Trying original: {player_name}")
 
-            if not data or "response" not in data or len(data["response"]) == 0:
-                if DEBUG_MODE:
-                    print(f"      ❌ Player not found even by last name: {last_name}")
-                return pd.DataFrame()
+        params = {"search": player_name}
+        data = fetch_json("/players", params=params)
 
+        if data and "response" in data and len(data["response"]) > 0:
+            player = data["response"][0]
+            if DEBUG_MODE:
+                print(f"      ✅ Found with original name: {player.get('name')} (ID: {player.get('id')})")
+
+    # Strategy 3: Final fallback - search by last name only
+    if not player and len(name_parts) >= 2:
+        last_name = name_parts[-1]
+        if DEBUG_MODE:
+            print(f"      🔄 Trying last name only: {last_name}")
+
+        params = {"search": last_name}
+        data = fetch_json("/players", params=params)
+
+        if data and "response" in data and len(data["response"]) > 0:
             # Filter results to find best match
-            # Look for player where API name contains the last name
             best_match = None
             for result in data["response"]:
                 api_name = result.get("name", "").lower()
                 search_last = last_name.lower()
 
-                # Check if last name appears in API name
                 if search_last in api_name:
                     best_match = result
                     break
 
             if not best_match:
-                # Just take first result if no good match
                 best_match = data["response"][0]
 
             player = best_match
+            if DEBUG_MODE:
+                print(f"      ✅ Matched by last name: {player.get('name')} (ID: {player.get('id')})")
 
-            if DEBUG_MODE:
-                print(f"      ✓ Matched to: {player.get('name')} (ID: {player.get('id')})")
-        else:
-            if DEBUG_MODE:
-                print(f"      ❌ Player not found: {player_name}")
-            return pd.DataFrame()
-    else:
-        player = data["response"][0]
+    # If still not found, give up
+    if not player:
+        if DEBUG_MODE:
+            print(f"      ❌ Player not found: {player_name}")
+        return pd.DataFrame()
     player_id = player.get("id")
 
     if not player_id:

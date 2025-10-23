@@ -12,11 +12,34 @@ STATS_SEASON = "2024-2025"
 
 def search_player_smart(player_name):
     """
-    Smart player search with last name fallback
+    Smart player search with reverse order (API stores as "Last First")
     """
     print(f"\n🔍 Searching for: {player_name}")
 
-    # Try full name first
+    # OPTIMIZATION: Try reversed name first (API format is "Last First")
+    name_parts = player_name.strip().split()
+    if len(name_parts) >= 2:
+        # Reverse the name: "LeBron James" → "James LeBron"
+        reversed_name = " ".join(name_parts[::-1])
+        print(f"   🔄 Trying reversed format: {reversed_name}")
+
+        response = requests.get(
+            f"{BASE_URL}/players",
+            headers=HEADERS,
+            params={"search": reversed_name},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+
+            if data.get("results", 0) > 0:
+                player = data["response"][0]
+                print(f"   ✅ Found with reversed name: {player.get('name')} (ID: {player.get('id')})")
+                return player.get('id')
+
+    # Fallback 1: Try original name
+    print(f"   🔄 Trying original format: {player_name}")
     response = requests.get(
         f"{BASE_URL}/players",
         headers=HEADERS,
@@ -29,12 +52,12 @@ def search_player_smart(player_name):
 
         if data.get("results", 0) > 0:
             player = data["response"][0]
-            print(f"   ✅ Found directly: {player.get('name')} (ID: {player.get('id')})")
+            print(f"   ✅ Found with original name: {player.get('name')} (ID: {player.get('id')})")
             return player.get('id')
         else:
-            print(f"   ⚠️  Full name not found, trying last name...")
+            # Fallback 2: Try last name only
+            print(f"   ⚠️  Not found, trying last name only...")
 
-            # Extract last name
             name_parts = player_name.strip().split()
             if len(name_parts) >= 2:
                 last_name = name_parts[-1]
