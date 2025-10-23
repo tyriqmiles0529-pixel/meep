@@ -5,7 +5,7 @@ Simple API test to diagnose authentication issues
 import requests
 import json
 
-API_KEY = "c47bd0c1e7c0d008a514ecba161b347f"
+API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"
 BASE_URL = "https://v1.basketball.api-sports.io"
 
 print("=" * 70)
