@@ -17,6 +17,7 @@ import threading
 # ============================================
 # Team Stats:       /statistics?league=12&season=2025-2026&team={team_id}
 # Players:          /players?search={name}
+# Team Players:     /players?team={team_id}&season={season}
 # Player Stats:     /players/statistics?season=2025-2026&player={player_id}
 # Odds:             /odds?game={game_id}&bookmaker={bookmaker_id}
 # Games:            /games?league={league_id}&season={season}
@@ -141,6 +142,11 @@ class ThreadSafeCache:
 api_cache = ThreadSafeCache()
 stats_cache = ThreadSafeCache()
 
+# Global player name-to-ID mapping (populated from team rosters)
+# Format: {"player_name": {"id": player_id, "team_id": team_id}}
+player_id_cache = {}
+player_cache_lock = threading.Lock()
+
 
 # ============================================
 # OPTIMIZED API FUNCTIONS
@@ -182,6 +188,200 @@ def fetch_json(endpoint: str, params: dict = None, retries: int = 3,
             if attempt < retries - 1:
                 time.sleep(1)
 
+    return None
+
+
+def get_team_players(team_id: int, season: str = STATS_SEASON) -> List[dict]:
+    """Fetch all players for a team"""
+    cache_key = f"team_players_{team_id}_{season}"
+    
+    # Check cache first
+    cached = api_cache.get(cache_key, 86400)  # 24hr cache
+    if cached is not None:
+        if DEBUG_MODE:
+            print(f"      📦 Cache hit: Team {team_id} players")
+        return cached
+    
+    if DEBUG_MODE:
+        print(f"      🔍 Fetching players for team {team_id}")
+    
+    params = {
+        "team": team_id,
+        "season": season
+    }
+    
+    data = fetch_json("/players", params=params, cache_ttl=86400)
+    
+    if not data or "response" not in data:
+        if DEBUG_MODE:
+            print(f"      ❌ No players found for team {team_id}")
+        return []
+    
+    players = data["response"]
+    api_cache.set(cache_key, players)
+    
+    if DEBUG_MODE:
+        print(f"      ✅ Found {len(players)} players for team {team_id}")
+    
+    return players
+
+
+def normalize_player_name(name: str) -> str:
+    """Normalize player name for matching"""
+    # Remove extra spaces, convert to lowercase
+    name = " ".join(name.strip().split()).lower()
+    # Remove common suffixes
+    name = name.replace(" jr.", "").replace(" jr", "")
+    name = name.replace(" sr.", "").replace(" sr", "")
+    name = name.replace(" ii", "").replace(" iii", "").replace(" iv", "")
+    return name
+
+
+def fuzzy_match_player_name(search_name: str, candidates: List[dict]) -> Optional[dict]:
+    """Find best matching player from candidates using fuzzy matching"""
+    search_normalized = normalize_player_name(search_name)
+    search_parts = search_normalized.split()
+    
+    best_match = None
+    best_score = 0
+    
+    for candidate in candidates:
+        candidate_name = candidate.get("name", "")
+        candidate_normalized = normalize_player_name(candidate_name)
+        
+        # Exact match
+        if search_normalized == candidate_normalized:
+            return candidate
+        
+        # Check if all search parts are in candidate name
+        candidate_parts = candidate_normalized.split()
+        matches = sum(1 for part in search_parts if part in candidate_parts)
+        score = matches / len(search_parts)
+        
+        # Also check reversed order (Last First vs First Last)
+        if len(search_parts) >= 2 and len(candidate_parts) >= 2:
+            reversed_search = " ".join(search_parts[::-1])
+            if reversed_search == candidate_normalized:
+                return candidate
+            
+            # Check if last name matches first word of candidate
+            if search_parts[-1] == candidate_parts[0]:
+                score += 0.5
+        
+        if score > best_score:
+            best_score = score
+            best_match = candidate
+    
+    # Only return if we have at least 50% match
+    if best_score >= 0.5:
+        return best_match
+    
+    return None
+
+
+def populate_player_cache_for_teams(team_ids: List[int]):
+    """Populate player ID cache for multiple teams in parallel"""
+    if DEBUG_MODE:
+        print(f"   🔍 Populating player cache for {len(team_ids)} teams...")
+    
+    def fetch_and_cache_team(team_id):
+        players = get_team_players(team_id)
+        cached_count = 0
+        
+        with player_cache_lock:
+            for player in players:
+                player_id = player.get("id")
+                player_name = player.get("name", "")
+                
+                if player_id and player_name:
+                    # Normalize and cache
+                    normalized_name = normalize_player_name(player_name)
+                    player_id_cache[normalized_name] = {
+                        "id": player_id,
+                        "team_id": team_id,
+                        "original_name": player_name
+                    }
+                    cached_count += 1
+        
+        if DEBUG_MODE:
+            print(f"      ✅ Team {team_id}: Cached {cached_count} players")
+        
+        return cached_count
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(fetch_and_cache_team, tid) for tid in team_ids]
+        total_cached = sum(future.result() for future in as_completed(futures))
+    
+    if DEBUG_MODE:
+        print(f"   ✅ Total players cached: {total_cached}")
+
+
+def find_player_id(player_name: str, team_id: Optional[int] = None) -> Optional[int]:
+    """
+    Find player ID using team-based lookup with fallback to name search.
+    
+    Args:
+        player_name: Name of player to find
+        team_id: Optional team ID to narrow search
+    
+    Returns:
+        Player ID if found, None otherwise
+    """
+    # First try the cache
+    normalized_name = normalize_player_name(player_name)
+    
+    with player_cache_lock:
+        if normalized_name in player_id_cache:
+            cached_data = player_id_cache[normalized_name]
+            if DEBUG_MODE:
+                print(f"      📦 Cache hit: {player_name} → ID {cached_data['id']}")
+            return cached_data["id"]
+    
+    # If team_id is provided, fetch that team's roster and search
+    if team_id:
+        players = get_team_players(team_id)
+        match = fuzzy_match_player_name(player_name, players)
+        
+        if match:
+            player_id = match.get("id")
+            if player_id:
+                # Cache for future use
+                with player_cache_lock:
+                    player_id_cache[normalized_name] = {
+                        "id": player_id,
+                        "team_id": team_id,
+                        "original_name": match.get("name", "")
+                    }
+                if DEBUG_MODE:
+                    print(f"      ✅ Found via team roster: {player_name} → ID {player_id}")
+                return player_id
+    
+    # Fallback to old name search method
+    if DEBUG_MODE:
+        print(f"      🔄 Fallback to name search: {player_name}")
+    
+    params = {"search": player_name}
+    data = fetch_json("/players", params=params, cache_ttl=86400)
+    
+    if data and "response" in data and len(data["response"]) > 0:
+        player_id = data["response"][0].get("id")
+        if player_id:
+            if DEBUG_MODE:
+                print(f"      ✅ Found via name search: {player_name} → ID {player_id}")
+            
+            # Cache it
+            with player_cache_lock:
+                player_id_cache[normalized_name] = {
+                    "id": player_id,
+                    "team_id": team_id,
+                    "original_name": data["response"][0].get("name", "")
+                }
+            
+            return player_id
+    
+    if DEBUG_MODE:
+        print(f"      ❌ Player not found: {player_name}")
+    
     return None
 
 
@@ -304,8 +504,8 @@ def batch_fetch_player_stats(player_names: List[str],
 # ============================================
 # OPTIMIZED PLAYER STATS
 # ============================================
-def get_player_recent_stats(player_name: str, num_games: int = LOOKBACK_GAMES) -> pd.DataFrame:
-    """Fetch player stats with improved caching"""
+def get_player_recent_stats(player_name: str, num_games: int = LOOKBACK_GAMES, team_id: Optional[int] = None) -> pd.DataFrame:
+    """Fetch player stats with improved caching and team-based lookup"""
     cache_key = f"{player_name}_{num_games}"
 
     # Check thread-safe cache
@@ -318,20 +518,12 @@ def get_player_recent_stats(player_name: str, num_games: int = LOOKBACK_GAMES) -
     if DEBUG_MODE:
         print(f"      🔍 Searching API for: {player_name}")
 
-    # Fetch player ID
-    params = {"search": player_name}
-    data = fetch_json("/players", params=params, cache_ttl=86400)  # 24hr cache for player IDs
-
-    if not data or "response" not in data or len(data["response"]) == 0:
-        if DEBUG_MODE:
-            print(f"      ❌ Player not found: {player_name}")
-        return pd.DataFrame()
-
-    player_id = data["response"][0].get("id")
+    # Use new team-based player lookup
+    player_id = find_player_id(player_name, team_id)
 
     if not player_id:
         if DEBUG_MODE:
-            print(f"      ❌ No player ID for: {player_name}")
+            print(f"      ❌ Player not found: {player_name}")
         return pd.DataFrame()
 
     if DEBUG_MODE:
@@ -685,6 +877,8 @@ def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
     game_id = game_info["id"]
     game_name = f"{game_info['teams']['home']['name']} vs {game_info['teams']['away']['name']}"
     game_date = game_info["date"]
+    home_team_id = game_info.get("teams", {}).get("home", {}).get("id")
+    away_team_id = game_info.get("teams", {}).get("away", {}).get("id")
 
     for bet in bookmaker.get("bets", []):
         bet_name = bet.get("name", "").lower()
@@ -730,7 +924,9 @@ def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
                         "prop_type": bet_type,
                         "line": 0,
                         "odds": odds,
-                        "bookmaker": "DraftKings"
+                        "bookmaker": "DraftKings",
+                        "home_team_id": home_team_id,
+                        "away_team_id": away_team_id
                     })
         else:
             prop_type = None
@@ -783,7 +979,9 @@ def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
                     "prop_type": prop_type,
                     "line": line,
                     "odds": odds,
-                    "bookmaker": "DraftKings"
+                    "bookmaker": "DraftKings",
+                    "home_team_id": home_team_id,
+                    "away_team_id": away_team_id
                 })
 
     return props
@@ -852,7 +1050,15 @@ def analyze_prop(prop: dict, matchup_context: dict = None, player_stats_cache: d
     if player_stats_cache and prop["player"] in player_stats_cache:
         player_stats = player_stats_cache[prop["player"]]
     else:
-        player_stats = get_player_recent_stats(prop["player"], LOOKBACK_GAMES)
+        # Try to determine which team the player is on
+        # We'll try both teams in the game
+        team_id = None
+        if "home_team_id" in prop:
+            team_id = prop["home_team_id"]
+        elif "away_team_id" in prop:
+            team_id = prop["away_team_id"]
+        
+        player_stats = get_player_recent_stats(prop["player"], LOOKBACK_GAMES, team_id)
 
     if player_stats.empty or len(player_stats) < MIN_GAMES_REQUIRED:
         return None
@@ -980,6 +1186,10 @@ def run_analysis():
 
     print(f"   📊 Fetching stats for {len(team_ids)} teams in parallel...")
     team_stats_map = batch_fetch_team_stats(list(team_ids))
+
+    # OPTIMIZATION: Pre-populate player ID cache from team rosters
+    print(f"   👥 Pre-loading player rosters for {len(team_ids)} teams...")
+    populate_player_cache_for_teams(list(team_ids))
 
     # Build matchup contexts and extract props
     all_props = []
