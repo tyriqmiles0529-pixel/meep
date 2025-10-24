@@ -181,7 +181,8 @@ GAME_FEATURES: List[str] = [
     "market_implied_home", "market_implied_away",
     "market_spread", "spread_move",
     "market_total", "total_move",
-    # team priors from Basketball Reference (optional - added when --priors-dataset provided)
+    # Basketball Reference prior-season stats (optional - requires teamTricode column + --priors-dataset)
+    # These columns hold actual prior-season stats when available, or baseline defaults when not
     "home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior",
     "away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior",
     "home_srs_prior", "away_srs_prior",
@@ -211,21 +212,23 @@ GAME_DEFAULTS: Dict[str, float] = {
     # era defaults (will be filled from actual dates when present)
     "season_end_year": 2002.0,
     "season_decade": 2000.0,
-    # betting market defaults (neutral priors)
+    # betting market defaults (neutral uninformed priors)
     "market_implied_home": 0.5,
     "market_implied_away": 0.5,
     "market_spread": 0.0,
     "spread_move": 0.0,
     "market_total": 210.0,  # typical NBA total
     "total_move": 0.0,
-    # team priors defaults (league-average baseline)
-    "home_o_rtg_prior": 110.0,
-    "home_d_rtg_prior": 110.0,
-    "home_pace_prior": 100.0,
+    # Basketball Reference prior-season stats: baseline defaults used when actual priors unavailable
+    # These fields are populated with real prior-season stats when Basketball Reference data merges successfully
+    # When priors dataset is missing or merge fails (e.g., no team abbreviations), these baseline defaults are used
+    "home_o_rtg_prior": 110.0,  # league-average offensive rating baseline
+    "home_d_rtg_prior": 110.0,  # league-average defensive rating baseline
+    "home_pace_prior": 100.0,   # league-average pace baseline
     "away_o_rtg_prior": 110.0,
     "away_d_rtg_prior": 110.0,
     "away_pace_prior": 100.0,
-    "home_srs_prior": 0.0,
+    "home_srs_prior": 0.0,      # Simple Rating System baseline (0 = league average)
     "away_srs_prior": 0.0,
 }
 
@@ -494,6 +497,9 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
             lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0]
         ).to_dict()
         log(f"Built team ID → abbreviation mapping for {len(team_id_to_abbrev)} teams", verbose)
+    else:
+        log("Warning: teamTricode column not found in TeamStatistics - team priors integration will not be possible", verbose)
+        log("  To enable priors: ensure your TeamStatistics.csv has a 'teamTricode' column with 3-letter team abbreviations", verbose)
 
     log(f"Built TeamStatistics games frame: {len(games_df):,} rows", verbose)
     return games_df, context_map, team_id_to_abbrev
@@ -1283,45 +1289,56 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
         if "playoffs" in ts.columns:
             ts = ts[ts["playoffs"] == False]
 
-        # Keep key columns
-        team_cols = ["season", "abbreviation", "w", "l", "mov", "sos", "srs",
-                     "o_rtg", "d_rtg", "n_rtg", "pace", "f_tr", "x3p_ar", "ts_percent",
-                     "e_fg_percent", "tov_percent", "orb_percent", "ft_fga",
-                     "opp_e_fg_percent", "opp_tov_percent", "drb_percent", "opp_ft_fga"]
-        team_cols = ["season", "abbreviation"] + [c for c in team_cols if c in ts.columns]
-        priors_teams = ts[team_cols].copy()
-
-        # Normalize percents (0-100 -> 0-1)
-        for col in priors_teams.columns:
-            if "percent" in col.lower() or col in ["f_tr", "x3p_ar", "ft_fga", "opp_ft_fga"]:
-                vals = pd.to_numeric(priors_teams[col], errors="coerce")
-                # If max > 1.5, assume 0-100 scale
-                if vals.max() > 1.5:
-                    priors_teams[col] = vals / 100.0
-
-        # Check for duplicate columns before shifting season
-        if priors_teams.columns.duplicated().any():
-            dup_cols = priors_teams.columns[priors_teams.columns.duplicated()].tolist()
-            log(f"Warning: Duplicate columns found in team priors: {dup_cols}. Removing duplicates.", verbose)
-            priors_teams = priors_teams.loc[:, ~priors_teams.columns.duplicated()]
-
-        # Shift: season S priors are used in season S+1
-        if "season" in priors_teams.columns:
-            try:
-                season_series = priors_teams["season"]
-                # Ensure it's a Series, not DataFrame
-                if isinstance(season_series, pd.DataFrame):
-                    season_series = season_series.iloc[:, 0]
-                priors_teams["season_for_game"] = pd.to_numeric(season_series, errors="coerce") + 1
-                priors_teams = priors_teams.drop(columns=["season"])
-            except Exception as e:
-                log(f"Error creating season_for_game for teams: {e}", verbose)
-                log(f"season column type: {type(priors_teams['season'])}", verbose)
-                raise
+        # Validate required columns
+        required_cols = ["season", "abbreviation", "o_rtg", "d_rtg", "pace", "srs"]
+        missing_cols = [c for c in required_cols if c not in ts.columns]
+        if missing_cols:
+            log(f"Warning: Team Summaries.csv is missing required columns: {missing_cols}", verbose)
+            log(f"  Available columns: {list(ts.columns)}", verbose)
+            log(f"  Team priors will not be loaded.", verbose)
+            priors_teams = pd.DataFrame()
         else:
-            log("Warning: No 'season' column found in Team Summaries", verbose)
+            # Keep key columns
+            team_cols = ["season", "abbreviation", "w", "l", "mov", "sos", "srs",
+                         "o_rtg", "d_rtg", "n_rtg", "pace", "f_tr", "x3p_ar", "ts_percent",
+                         "e_fg_percent", "tov_percent", "orb_percent", "ft_fga",
+                         "opp_e_fg_percent", "opp_tov_percent", "drb_percent", "opp_ft_fga"]
+            team_cols = ["season", "abbreviation"] + [c for c in team_cols if c in ts.columns]
+            priors_teams = ts[team_cols].copy()
 
-        log(f"Loaded {len(priors_teams):,} team-season priors from Team Summaries", verbose)
+            # Normalize percents (0-100 -> 0-1)
+            for col in priors_teams.columns:
+                if "percent" in col.lower() or col in ["f_tr", "x3p_ar", "ft_fga", "opp_ft_fga"]:
+                    vals = pd.to_numeric(priors_teams[col], errors="coerce")
+                    # If max > 1.5, assume 0-100 scale
+                    if vals.max() > 1.5:
+                        priors_teams[col] = vals / 100.0
+
+            # Check for duplicate columns before shifting season
+            if priors_teams.columns.duplicated().any():
+                dup_cols = priors_teams.columns[priors_teams.columns.duplicated()].tolist()
+                log(f"Warning: Duplicate columns found in team priors: {dup_cols}. Removing duplicates.", verbose)
+                priors_teams = priors_teams.loc[:, ~priors_teams.columns.duplicated()]
+
+            # Shift: season S priors are used in season S+1
+            if "season" in priors_teams.columns:
+                try:
+                    season_series = priors_teams["season"]
+                    # Ensure it's a Series, not DataFrame
+                    if isinstance(season_series, pd.DataFrame):
+                        season_series = season_series.iloc[:, 0]
+                    priors_teams["season_for_game"] = pd.to_numeric(season_series, errors="coerce") + 1
+                    priors_teams = priors_teams.drop(columns=["season"])
+                except Exception as e:
+                    log(f"Error creating season_for_game for teams: {e}", verbose)
+                    log(f"season column type: {type(priors_teams['season'])}", verbose)
+                    raise
+            else:
+                log("Warning: No 'season' column found in Team Summaries", verbose)
+
+            log(f"Loaded {len(priors_teams):,} team-season priors from Team Summaries", verbose)
+    else:
+        log(f"Team Summaries.csv not found at {team_summaries_path}", verbose)
 
     # Player priors - comprehensive integration of multiple CSVs
     def load_and_filter_player_csv(path: Path, csv_name: str) -> Optional[pd.DataFrame]:
@@ -1353,16 +1370,25 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
     per100_path = priors_root / "Per 100 Poss.csv"
     per100 = load_and_filter_player_csv(per100_path, "Per 100 Poss.csv")
     if per100 is not None:
-        cols = ["season", "player_id", "player", "age", "pos", "g", "mp",
-                "pts_per_100_poss", "trb_per_100_poss", "ast_per_100_poss",
-                "stl_per_100_poss", "blk_per_100_poss", "tov_per_100_poss",
-                "fg_per_100_poss", "fga_per_100_poss", "fg_percent",
-                "x3p_per_100_poss", "x3pa_per_100_poss", "x3p_percent",
-                "ft_per_100_poss", "fta_per_100_poss", "ft_percent",
-                "orb_per_100_poss", "drb_per_100_poss",
-                "o_rtg", "d_rtg"]
-        cols = [c for c in cols if c in per100.columns]
-        priors_players = per100[cols].copy()
+        # Validate required columns
+        required_cols = ["season", "player_id"]
+        missing_cols = [c for c in required_cols if c not in per100.columns]
+        if missing_cols:
+            log(f"Warning: Per 100 Poss.csv is missing required columns: {missing_cols}", verbose)
+            log(f"  Available columns: {list(per100.columns)}", verbose)
+            log(f"  Player priors will not be loaded.", verbose)
+            per100 = None
+        else:
+            cols = ["season", "player_id", "player", "age", "pos", "g", "mp",
+                    "pts_per_100_poss", "trb_per_100_poss", "ast_per_100_poss",
+                    "stl_per_100_poss", "blk_per_100_poss", "tov_per_100_poss",
+                    "fg_per_100_poss", "fga_per_100_poss", "fg_percent",
+                    "x3p_per_100_poss", "x3pa_per_100_poss", "x3p_percent",
+                    "ft_per_100_poss", "fta_per_100_poss", "ft_percent",
+                    "orb_per_100_poss", "drb_per_100_poss",
+                    "o_rtg", "d_rtg"]
+            cols = [c for c in cols if c in per100.columns]
+            priors_players = per100[cols].copy()
 
     # 2. Advanced - PER, WS, BPM, TS%, USG%
     advanced_path = priors_root / "Advanced.csv"
@@ -1544,6 +1570,9 @@ def main():
         games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
         matched = games_df["home_abbrev"].notna().sum()
         log(f"- Mapped {matched:,} / {len(games_df):,} games to team abbreviations ({matched/len(games_df)*100:.1f}%)", verbose)
+    else:
+        log("- No team ID → abbreviation mapping available (teamTricode column not found in TeamStatistics)", verbose)
+        log("  Team priors from Basketball Reference will use baseline defaults instead of actual prior-season stats", verbose)
 
     # Era filter for games
     game_cut = _parse_season_cutoff(args.game_season_cutoff, kind="game")
@@ -1712,24 +1741,31 @@ def main():
 
         # Check team priors
         priors_cols = ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior"]
-        print("\n🏀 TEAM PRIORS:")
+        print("\n🏀 TEAM PRIORS (Basketball Reference prior-season stats):")
+        print("   Note: These columns hold actual prior-season stats when available,")
+        print("   or baseline defaults (110.0 o/d_rtg, 100.0 pace, 0.0 srs) when not.")
         for col in priors_cols:
             if col in games_df.columns:
                 default_val = GAME_DEFAULTS.get(col, 0.0)
                 non_default = (games_df[col] != default_val).sum()
-                print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
+                print(f"  {col}: {non_default:,} with actual priors ({non_default/len(games_df)*100:.1f}%)")
 
         # Summary
         if "home_o_rtg_prior" in games_df.columns:
             with_priors = (games_df["home_o_rtg_prior"] != GAME_DEFAULTS.get("home_o_rtg_prior", 0.0)).sum()
             if with_priors == 0:
-                print("\n⚠️  WARNING: NO games have real team priors - all using defaults!")
-                print("   This means priors are NOT being used in training.")
+                print("\n⚠️  WARNING: NO games have actual team priors - all using baseline defaults!")
+                print("   This means Basketball Reference prior-season stats are NOT being used.")
                 print("   Possible causes:")
-                print("   • Season mismatch between games and priors")
-                print("   • Missing home_abbrev/away_abbrev from odds dataset")
+                print("   • Missing 'teamTricode' column in TeamStatistics.csv")
+                print("   • Season mismatch between games and priors dataset")
+                print("   • No priors dataset provided (--priors-dataset)")
+                print("   • Team abbreviations don't match between datasets")
+                if "home_abbrev" not in games_df.columns or games_df["home_abbrev"].isna().all():
+                    print("\n   🔍 Root cause: No team abbreviations available!")
+                    print("      Solution: Ensure TeamStatistics.csv has a 'teamTricode' column")
             else:
-                print(f"\n✓ {with_priors:,} games ({with_priors/len(games_df)*100:.1f}%) have real team priors")
+                print(f"\n✓ {with_priors:,} games ({with_priors/len(games_df)*100:.1f}%) have actual team priors")
 
     # Train game models + OOF
     print(_sec("Training game models"))
