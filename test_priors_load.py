@@ -1,28 +1,16 @@
 #!/usr/bin/env python3
 """
 Standalone test script to debug Basketball Reference priors loading.
+Loads CSVs from local folder: C:/Users/tmiles11/nba_predictor/priors_data
+
 Run: python test_priors_load.py
 """
 
-import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# Hardcoded Kaggle credentials
-KAGGLE_KEY = "bcb440122af5ae76181e68d48ca728e6"
-KAGGLE_USERNAME = "tyriqmiles"
-
-if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":
-    os.environ['KAGGLE_KEY'] = KAGGLE_KEY
-    if KAGGLE_USERNAME:
-        os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
-
-try:
-    import kagglehub
-except ImportError:
-    print("ERROR: kagglehub not installed. Run: pip install kagglehub")
-    exit(1)
+# No Kaggle credentials needed - loading from local path!
 
 def log(msg):
     print(msg, flush=True)
@@ -247,11 +235,28 @@ def load_basketball_reference_priors(priors_root: Path):
 def main():
     print("\n🏀 Basketball Reference Priors Loader Test\n")
 
-    # Download priors dataset
-    priors_dataset = "sumitrodatta/nba-aba-baa-stats"
-    print(f"Downloading {priors_dataset}...")
-    priors_root = Path(kagglehub.dataset_download(priors_dataset))
-    print(f"✓ Downloaded to: {priors_root}\n")
+    # Use local priors path
+    priors_root = Path("C:/Users/tmiles11/nba_predictor/priors_data")
+
+    if not priors_root.exists():
+        print(f"✗ ERROR: Priors folder not found at {priors_root}")
+        print("\nPlease ensure you have downloaded the CSVs to:")
+        print("  C:/Users/tmiles11/nba_predictor/priors_data/")
+        print("\nRequired files:")
+        print("  - Team Summaries.csv")
+        print("  - Team Abbrev.csv")
+        print("  - Per 100 Poss.csv")
+        print("  - Advanced.csv")
+        print("  - Player Shooting.csv")
+        print("  - Player Play By Play.csv")
+        return
+
+    print(f"Loading from local path: {priors_root}")
+    csv_files = list(priors_root.glob("*.csv"))
+    print(f"Found {len(csv_files)} CSV files:")
+    for f in csv_files:
+        print(f"  - {f.name}")
+    print()
 
     # Load priors
     priors_players = load_basketball_reference_priors(priors_root)
