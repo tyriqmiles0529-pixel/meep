@@ -1415,15 +1415,28 @@ def main():
     verbose = args.verbose
     seed = args.seed
 
-    print(_sec("Training configuration"))
-    print(f"- dataset: {args.dataset}")
-    print(f"- models_dir: {args.models_dir}")
-    print(f"- seed: {seed}")
-    print(f"- skip_rest: {args.skip_rest}")
-    print(f"- fresh_run_copy: {args.fresh}")
-    print(f"- lgb_log_period: {args.lgb_log_period}")
-    print(f"- game_season_cutoff: {args.game_season_cutoff}  player_season_cutoff: {args.player_season_cutoff}")
-    print(f"- decay: {args.decay}  min_weight: {args.min_weight}  lockout_weight: {args.lockout_weight}")
+    print(_sec("🏀 NBA Training Pipeline Configuration"))
+    print("\n📊 DATASETS (auto-cached):")
+    print(f"  1. Main:   {args.dataset}")
+    print(f"  2. Odds:   {args.odds_dataset}")
+    print(f"  3. Priors: {args.priors_dataset}")
+
+    print("\n🎯 FEATURES INCLUDED:")
+    print("  • Betting market odds → Implied probabilities, spreads, totals, line movement")
+    print("  • Team priors → O/D ratings, pace, SRS, four factors (Basketball Reference)")
+    print("  • Player priors → ~60 features from 4 CSVs:")
+    print("    - Per 100 Poss: rate stats (pts/reb/ast/stl/blk/tov per 100)")
+    print("    - Advanced: PER, BPM, TS%, USG%, Win Shares, VORP")
+    print("    - Shooting: zones, corner 3%, dunks, assisted rates")
+    print("    - Play-by-Play: position %, on-court +/-, fouls")
+
+    print("\n⚙️  TRAINING SETTINGS:")
+    print(f"  • Output directory: {args.models_dir}")
+    print(f"  • Random seed: {seed}")
+    print(f"  • Season cutoffs: Games ≥{args.game_season_cutoff}, Players ≥{args.player_season_cutoff}")
+    print(f"  • Time-decay weights: {args.decay} decay, {args.min_weight} min, {args.lockout_weight}x lockout penalty")
+    print(f"  • Rest/B2B features: {'Disabled' if args.skip_rest else 'Enabled'}")
+    print(f"  • LightGBM logging: {'Silent' if args.lgb_log_period == 0 else f'Every {args.lgb_log_period} iterations'}")
 
     if kagglehub is None:
         raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
