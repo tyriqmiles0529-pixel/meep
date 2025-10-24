@@ -1264,9 +1264,8 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
 
         # Shift: season S priors are used in season S+1
         if "season" in priors_teams.columns:
-            season_vals = pd.to_numeric(priors_teams["season"], errors="coerce")
+            priors_teams["season_for_game"] = pd.to_numeric(priors_teams["season"], errors="coerce") + 1
             priors_teams = priors_teams.drop(columns=["season"])
-            priors_teams.insert(0, "season_for_game", season_vals + 1)
         else:
             log("Warning: No 'season' column found in Team Summaries", verbose)
 
@@ -1311,9 +1310,8 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
 
         # Shift to next season
         if "season" in priors_players.columns:
-            season_vals = pd.to_numeric(priors_players["season"], errors="coerce")
+            priors_players["season_for_game"] = pd.to_numeric(priors_players["season"], errors="coerce") + 1
             priors_players = priors_players.drop(columns=["season"])
-            priors_players.insert(0, "season_for_game", season_vals + 1)
         else:
             log("Warning: No 'season' column found in Per 100 Poss", verbose)
 
