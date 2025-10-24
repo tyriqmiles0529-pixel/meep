@@ -1,3 +1,4 @@
+import os
 """
 Test various API endpoint combinations to find the correct format
 """
@@ -5,7 +6,7 @@ Test various API endpoint combinations to find the correct format
 import requests
 import json
 
-API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"
+API_KEY = os.getenv("API_SPORTS_KEY", "")
 
 # Different possible base URLs
 base_urls = [

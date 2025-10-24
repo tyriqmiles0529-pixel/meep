@@ -36,7 +36,7 @@ All returned: 403 Forbidden - Access denied
 This definitively proves:
 - ✅ My code is using the **CORRECT endpoints**
 - ✅ My code is using the **CORRECT authentication format**
-- ❌ Your API key `4979ac5e1f7ae10b1d6b58f1bba01140` is **NOT VALID**
+- ❌ Your API key `YOUR_API_KEY_HERE` is **NOT VALID**
 
 ---
 

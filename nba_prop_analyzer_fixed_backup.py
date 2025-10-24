@@ -23,7 +23,7 @@ from typing import Dict, List, Tuple, Optional
 # ============================================
 # CONFIGURATION
 # ============================================
-API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"  # ✅ Updated key
+API_KEY = os.getenv("API_SPORTS_KEY", "")  # ✅ Updated key
 BASE_URL = "https://v1.basketball.api-sports.io"
 HEADERS = {
     "x-apisports-key": API_KEY  # ✅ Corrected header format
