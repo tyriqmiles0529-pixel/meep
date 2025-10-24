@@ -27,7 +27,7 @@ Practical era handling
 
 Run (PowerShell)
 - pip install kagglehub
-- python .\train_auto.py --dataset "eoinamoore/historical-nba-data-and-player-box-scores" --verbose --skip-rest --fresh --lgb-log-period 50
+- python .\\train_auto.py --dataset "eoinamoore/historical-nba-data-and-player-box-scores" --verbose --skip-rest --fresh --lgb-log-period 50
 """
 
 from __future__ import annotations
@@ -46,53 +46,9 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-try:
-    # Hardcoded Kaggle credentials (for venv compatibility - can't import from other files)
-    KAGGLE_KEY = "f005fb2c580e2cbfd2b6b4b931e10dfc"  # Your Kaggle key
-    KAGGLE_USERNAME = ""  # Optional - leave empty if not needed
-
-    if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":
-        os.environ['KAGGLE_KEY'] = KAGGLE_KEY
-        if KAGGLE_USERNAME:
-            os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
-        print("✅ Kaggle credentials loaded (hardcoded)")
-    else:
-        # Fall back to kaggle.json
-        kaggle_dir = Path.home() / ".kaggle" / "kaggle.json"
-        if not kaggle_dir.exists():
-            print("❌ Kaggle credentials not found!")
-            print("\nEdit this file (train_auto.py) around line 62 and add your Kaggle key")
-            print("Or use: python setup_kaggle.py")
-            sys.exit(1)
-        print("✅ Kaggle credentials found in ~/.kaggle/kaggle.json")
-
-    # Download dataset
-    print(f"📦 Downloading: {DATASET_NAME}")
-    print("   (This may take a few minutes on first run...)")
-
-    dataset_path = kagglehub.dataset_download(DATASET_NAME)
-    print(f"✅ Dataset downloaded to: {dataset_path}")
-
-    # List available files
-    csv_files = list(Path(dataset_path).glob("*.csv"))
-    print(f"\n📁 Found {len(csv_files)} CSV file(s):")
-    for f in csv_files:
-        size_mb = f.stat().st_size / (1024 * 1024)
-        print(f"   - {f.name:<50s} ({size_mb:.1f} MB)")
-
-except Exception as e:
-    print(f"❌ Error downloading dataset: {e}")
-    print("\nTroubleshooting:")
-    print("   1. Check your internet connection")
-    print("   2. Verify Kaggle credentials: python setup_kaggle.py")
-    print("   3. Make sure you have Kaggle account and accepted dataset terms")
-    sys.exit(1)
-
-print()
-
-# ========== STEP 2: LOAD AND PROCESS DATA ==========
-print("📊 STEP 2: Loading and processing data...")
-print("-" * 80)
+from sklearn.metrics import mean_absolute_error, mean_squared_error, log_loss, brier_score_loss
+from sklearn.dummy import DummyClassifier, DummyRegressor
+from sklearn.calibration import CalibratedClassifierCV
 
 # Prefer LightGBM; fallback to sklearn HistGBM
 _HAS_LGB = False
@@ -125,13 +81,22 @@ warnings.filterwarnings(
     category=FutureWarning,
 )
 
+# ---------------- Kaggle credentials (hardcoded for venv compatibility) ----------------
+KAGGLE_KEY = "bcb440122af5ae76181e68d48ca728e6"
+KAGGLE_USERNAME = "tyriqmiles"
+
+if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":
+    os.environ['KAGGLE_KEY'] = KAGGLE_KEY
+    if KAGGLE_USERNAME:
+        os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
+
 # ---------------- Pretty printing helpers ----------------
 
 def _line(char: str = "─", n: int = 60) -> str:
     return char * n
 
 def _sec(title: str) -> str:
-    return f"\n{_line()} \n{title}\n{_line()}"
+    return f"\\n{_line()} \\n{title}\\n{_line()}"
 
 def _fmt(n: float, nd: int = 3) -> str:
     try:
@@ -274,7 +239,7 @@ def _find_dataset_files(ds_root: Path) -> Tuple[Optional[Path], Optional[Path]]:
     return teams_path, players_path
 
 def _fresh_run_dir(base: Path) -> Path:
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = base / ts
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -382,7 +347,6 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
     )
 
     # per-season medians for normalization (era-aware)
-    # guard division by zero by using global fallback medians if needed
     def _per_season_median(col: str, fallback: float) -> pd.Series:
         s = teams_long.groupby("season_end_year")[col].transform("median")
         s = s.fillna(fallback)
@@ -479,7 +443,11 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
     g["home_advantage"] = np.float32(1.0)
     g["neutral_site"]   = np.float32(0.0)
 
-    games_df = g[["gid", "date", "season_end_year", "season_decade", "home_tid", "away_tid", "home_score", "away_score"] + GAME_FEATURES].copy()
+    # FIX: Don't duplicate season_end_year/season_decade when building games_df
+    base_cols = ["gid", "date", "season_end_year", "season_decade", "home_tid", "away_tid", "home_score", "away_score"]
+    feature_cols = [f for f in GAME_FEATURES if f not in base_cols]
+    games_df = g[base_cols + feature_cols].copy()
+
     games_df["date"] = pd.to_datetime(games_df["date"], errors="coerce", utc=True).dt.tz_convert(None)
     games_df = games_df.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
 
