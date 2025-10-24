@@ -17,7 +17,9 @@ SLEEP_LONG = 0.1 if FAST_MODE else 0.3
 RUN_TIME_BUDGET_SEC = 50 if FAST_MODE else 300
 
 # ========= CONFIG =========
-API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or "YOUR_API_KEY_HERE"
+API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY")
+if not API_KEY:
+    raise ValueError("❌ API key not found. Set API_SPORTS_KEY or APISPORTS_KEY environment variable.")
 BASE_URL = "https://v1.basketball.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 LEAGUE_ID = 12
