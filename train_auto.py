@@ -1372,10 +1372,26 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
             if vals.notna().any() and vals.max() > 1.5:
                 priors_players[col] = vals / 100.0
 
+    # Check for duplicate columns before shifting season
+    if priors_players.columns.duplicated().any():
+        dup_cols = priors_players.columns[priors_players.columns.duplicated()].tolist()
+        log(f"Warning: Duplicate columns found: {dup_cols}. Removing duplicates.", verbose)
+        priors_players = priors_players.loc[:, ~priors_players.columns.duplicated()]
+
     # Shift to next season
     if "season" in priors_players.columns:
-        priors_players["season_for_game"] = pd.to_numeric(priors_players["season"], errors="coerce") + 1
-        priors_players = priors_players.drop(columns=["season"])
+        try:
+            season_series = priors_players["season"]
+            # Ensure it's a Series, not DataFrame
+            if isinstance(season_series, pd.DataFrame):
+                season_series = season_series.iloc[:, 0]
+            priors_players["season_for_game"] = pd.to_numeric(season_series, errors="coerce") + 1
+            priors_players = priors_players.drop(columns=["season"])
+        except Exception as e:
+            log(f"Error creating season_for_game: {e}", verbose)
+            log(f"season column type: {type(priors_players['season'])}", verbose)
+            log(f"season column shape: {priors_players['season'].shape if hasattr(priors_players['season'], 'shape') else 'N/A'}", verbose)
+            raise
     else:
         log("Warning: No 'season' column found in player priors", verbose)
 
