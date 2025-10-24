@@ -1337,8 +1337,8 @@ def main():
     # Additional datasets (now enabled by default with caching)
     ap.add_argument("--odds-dataset", type=str, default="cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024",
                     help="Path or Kaggle dataset ref for betting odds (default: cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024)")
-    ap.add_argument("--priors-dataset", type=str, default=None,
-                    help="Path or Kaggle dataset ref for Basketball Reference priors bundle (optional - provide dataset ref)")
+    ap.add_argument("--priors-dataset", type=str, default="sumitrodatta/nba-aba-baa-stats",
+                    help="Path or Kaggle dataset ref for Basketball Reference priors bundle (default: sumitrodatta/nba-aba-baa-stats)")
 
     args = ap.parse_args()
 
