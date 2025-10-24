@@ -1334,9 +1334,11 @@ def main():
     ap.add_argument("--min-weight", type=float, default=0.30, help="Minimum sample weight after decay.")
     ap.add_argument("--lockout-weight", type=float, default=0.90, help="Extra multiplier applied to lockout seasons (1999, 2012).")
 
-    # Additional datasets
-    ap.add_argument("--odds-dataset", type=str, default=None, help="Path or Kaggle dataset ref for betting odds (optional)")
-    ap.add_argument("--priors-dataset", type=str, default=None, help="Path or Kaggle dataset ref for Basketball Reference priors bundle (optional)")
+    # Additional datasets (now enabled by default with caching)
+    ap.add_argument("--odds-dataset", type=str, default="cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024",
+                    help="Path or Kaggle dataset ref for betting odds (default: cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024)")
+    ap.add_argument("--priors-dataset", type=str, default=None,
+                    help="Path or Kaggle dataset ref for Basketball Reference priors bundle (optional - provide dataset ref)")
 
     args = ap.parse_args()
 
