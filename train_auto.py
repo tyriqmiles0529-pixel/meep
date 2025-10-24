@@ -277,11 +277,11 @@ def _copy_if_exists(src: Optional[Path], dst_dir: Path) -> Optional[Path]:
 
 # ---------------- Build games from TeamStatistics ----------------
 
-def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str]]:
     header_cols = list(pd.read_csv(teams_path, nrows=0).columns)
     usecols = [c for c in [
         "gameId", "gameDate", "teamId", "opponentTeamId",
-        "home", "teamScore", "opponentScore",
+        "home", "teamScore", "opponentScore", "teamTricode",
     ] if c in header_cols]
     ts = pd.read_csv(teams_path, low_memory=False, usecols=usecols)
 
@@ -484,8 +484,19 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
     ]
     context_map = g[context_cols].drop_duplicates(["gid", "home_tid", "away_tid"]).copy()
 
+    # Build team ID → abbreviation mapping for priors integration
+    team_id_to_abbrev: Dict[str, str] = {}
+    if "teamTricode" in ts.columns and "teamId" in ts.columns:
+        ts_clean = ts[["teamId", "teamTricode"]].drop_duplicates()
+        ts_clean["teamTricode"] = ts_clean["teamTricode"].astype(str).str.strip().str.upper()
+        # For each team ID, take the most common abbreviation (handles rebrands)
+        team_id_to_abbrev = ts_clean.groupby("teamId")["teamTricode"].agg(
+            lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0]
+        ).to_dict()
+        log(f"Built team ID → abbreviation mapping for {len(team_id_to_abbrev)} teams", verbose)
+
     log(f"Built TeamStatistics games frame: {len(games_df):,} rows", verbose)
-    return games_df, context_map
+    return games_df, context_map, team_id_to_abbrev
 
 # ---------------- Train game models + OOF ----------------
 
@@ -675,12 +686,14 @@ def build_players_from_playerstats(
     player_path: Path,
     games_context: pd.DataFrame,
     oof_games: pd.DataFrame,
-    verbose: bool
+    verbose: bool,
+    priors_players: Optional[pd.DataFrame] = None
 ) -> Dict[str, pd.DataFrame]:
     """
     Build training frames for player models from PlayerStatistics.csv.
     Supports files without teamId/opponentTeamId by using the 'home' flag to select side context.
     Includes opponent context columns (opp_*).
+    Merges Basketball Reference player priors if provided.
     """
     # Read header first (no usecols) so we can detect what exists
     hdr = list(pd.read_csv(player_path, nrows=0).columns)
@@ -882,6 +895,30 @@ def build_players_from_playerstats(
     # Add OOF game predictions
     oof = oof_games.copy()
     ps_join = ps_join.merge(oof[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
+
+    # Merge Basketball Reference player priors (if provided)
+    if priors_players is not None and not priors_players.empty:
+        log(f"Merging Basketball Reference player priors ({len(priors_players):,} player-seasons, {len(priors_players.columns)} features)", verbose)
+
+        # Merge on (player_id, season_end_year)
+        # priors_players has: player_id, season_for_game (the season these priors apply to)
+        # ps_join has: pid_col (player ID), season_end_year (the season of the game)
+        merge_cols = [c for c in priors_players.columns if c not in ["player_id", "season_for_game", "player"]]
+
+        ps_join = ps_join.merge(
+            priors_players[["player_id", "season_for_game"] + merge_cols],
+            left_on=[pid_col, "season_end_year"],
+            right_on=["player_id", "season_for_game"],
+            how="left",
+            suffixes=("", "_prior")
+        )
+
+        # Drop duplicate ID columns from merge
+        ps_join = ps_join.drop(columns=["player_id", "season_for_game"], errors="ignore")
+
+        # Count how many rows have priors
+        non_null_priors = ps_join["per"].notna().sum() if "per" in ps_join.columns else 0
+        log(f"  Matched {non_null_priors:,} / {len(ps_join):,} player-game rows ({non_null_priors/len(ps_join)*100:.1f}%)", verbose)
 
     # Build frames
     frames: Dict[str, pd.DataFrame] = {}
@@ -1499,7 +1536,14 @@ def main():
 
     # Build games and team context
     print(_sec("Building game dataset"))
-    games_df, context_map = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
+    games_df, context_map, team_id_to_abbrev = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
+
+    # Add team abbreviations for ALL games (needed for team priors merge)
+    if team_id_to_abbrev:
+        games_df["home_abbrev"] = games_df["home_tid"].map(team_id_to_abbrev)
+        games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
+        matched = games_df["home_abbrev"].notna().sum()
+        log(f"- Mapped {matched:,} / {len(games_df):,} games to team abbreviations ({matched/len(games_df)*100:.1f}%)", verbose)
 
     # Era filter for games
     game_cut = _parse_season_cutoff(args.game_season_cutoff, kind="game")
@@ -1585,6 +1629,9 @@ def main():
                 games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
     # Load and merge Basketball Reference priors (if provided)
+    priors_players = pd.DataFrame()
+    priors_teams = pd.DataFrame()
+
     if args.priors_dataset:
         priors_path_str = args.priors_dataset
         # Check if Kaggle dataset or local path
@@ -1606,9 +1653,7 @@ def main():
 
         # Merge team priors into games_df
         if not priors_teams.empty and "abbreviation" in priors_teams.columns and "season_end_year" in games_df.columns:
-            # TODO: Need to map home_tid/away_tid to abbreviations
-            # For now, if games_df already has home_abbrev/away_abbrev from odds, use those
-            # Otherwise, we'd need a tid -> abbrev map from Team Abbrev.csv
+            # home_abbrev/away_abbrev are now available for ALL games (from team ID mapping)
             if "home_abbrev" in games_df.columns and "away_abbrev" in games_df.columns:
                 # Merge home team priors
                 home_priors = priors_teams.rename(columns={
@@ -1647,6 +1692,45 @@ def main():
             else:
                 games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
+    # Diagnostic: Check priors data availability
+    if verbose:
+        print(_sec("Data Availability Diagnostic"))
+        print(f"Total games: {len(games_df):,}")
+
+        # Check betting odds
+        odds_cols = ["market_implied_home", "market_spread", "market_total", "home_abbrev", "away_abbrev"]
+        print("\n📊 BETTING ODDS:")
+        for col in odds_cols:
+            if col in games_df.columns:
+                if col in ["home_abbrev", "away_abbrev"]:
+                    non_null = games_df[col].notna().sum()
+                    print(f"  {col}: {non_null:,} games ({non_null/len(games_df)*100:.1f}%)")
+                else:
+                    default_val = GAME_DEFAULTS.get(col, 0.0)
+                    non_default = (games_df[col] != default_val).sum()
+                    print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
+
+        # Check team priors
+        priors_cols = ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior"]
+        print("\n🏀 TEAM PRIORS:")
+        for col in priors_cols:
+            if col in games_df.columns:
+                default_val = GAME_DEFAULTS.get(col, 0.0)
+                non_default = (games_df[col] != default_val).sum()
+                print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
+
+        # Summary
+        if "home_o_rtg_prior" in games_df.columns:
+            with_priors = (games_df["home_o_rtg_prior"] != GAME_DEFAULTS.get("home_o_rtg_prior", 0.0)).sum()
+            if with_priors == 0:
+                print("\n⚠️  WARNING: NO games have real team priors - all using defaults!")
+                print("   This means priors are NOT being used in training.")
+                print("   Possible causes:")
+                print("   • Season mismatch between games and priors")
+                print("   • Missing home_abbrev/away_abbrev from odds dataset")
+            else:
+                print(f"\n✓ {with_priors:,} games ({with_priors/len(games_df)*100:.1f}%) have real team priors")
+
     # Train game models + OOF
     print(_sec("Training game models"))
     clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
@@ -1669,7 +1753,7 @@ def main():
     player_metrics: Dict[str, Dict[str, float]] = {}
     if players_path and players_path.exists():
         print(_sec("Building player datasets"))
-        frames = build_players_from_playerstats(players_path, context_map, oof_games, verbose=verbose)
+        frames = build_players_from_playerstats(players_path, context_map, oof_games, verbose=verbose, priors_players=priors_players)
 
         # Era filter + weights per frame
         player_cut = _parse_season_cutoff(args.player_season_cutoff, kind="player")
