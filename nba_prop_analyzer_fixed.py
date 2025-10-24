@@ -17,9 +17,14 @@ SLEEP_LONG = 0.1 if FAST_MODE else 0.3
 RUN_TIME_BUDGET_SEC = 50 if FAST_MODE else 300
 
 # ========= CONFIG =========
-API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY")
-if not API_KEY:
-    raise ValueError("❌ API key not found. Set API_SPORTS_KEY or APISPORTS_KEY environment variable.")
+# Try to import from api_keys.py first (convenient), then fall back to env vars
+try:
+    from api_keys import API_SPORTS_KEY
+    API_KEY = API_SPORTS_KEY
+except ImportError:
+    API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY")
+    if not API_KEY:
+        raise ValueError("❌ API key not found. Either:\n   1. Create api_keys.py (see SETUP_KEYS.md)\n   2. Set API_SPORTS_KEY environment variable")
 BASE_URL = "https://v1.basketball.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 LEAGUE_ID = 12

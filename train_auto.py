@@ -57,19 +57,29 @@ print("📥 STEP 1: Downloading dataset from Kaggle...")
 print("-" * 80)
 
 try:
-    # Check Kaggle credentials
-    kaggle_dir = Path.home() / ".kaggle" / "kaggle.json"
-    if not kaggle_dir.exists():
-        print("❌ Kaggle credentials not found!")
-        print("\nPlease run first:")
-        print("   python setup_kaggle.py")
-        print("\nOr manually:")
-        print("   1. Download kaggle.json from https://www.kaggle.com/settings")
-        print("   2. Save to ~/.kaggle/kaggle.json")
-        print("   3. Run: chmod 600 ~/.kaggle/kaggle.json")
-        sys.exit(1)
-
-    print("✅ Kaggle credentials found")
+    # Try to use api_keys.py first (convenient)
+    try:
+        from api_keys import KAGGLE_USERNAME, KAGGLE_KEY
+        if KAGGLE_KEY and KAGGLE_KEY != "":
+            os.environ['KAGGLE_KEY'] = KAGGLE_KEY
+            if KAGGLE_USERNAME and KAGGLE_USERNAME != "":
+                os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
+            print("✅ Kaggle credentials loaded from api_keys.py")
+        else:
+            raise ImportError("Keys not set in api_keys.py")
+    except ImportError:
+        # Fall back to kaggle.json
+        kaggle_dir = Path.home() / ".kaggle" / "kaggle.json"
+        if not kaggle_dir.exists():
+            print("❌ Kaggle credentials not found!")
+            print("\nOption 1 (Recommended): Edit api_keys.py")
+            print("   1. Open api_keys.py")
+            print("   2. Add your Kaggle key")
+            print("   3. Run this script again")
+            print("\nOption 2: Use kaggle.json")
+            print("   python setup_kaggle.py")
+            sys.exit(1)
+        print("✅ Kaggle credentials found in ~/.kaggle/kaggle.json")
 
     # Download dataset
     print(f"📦 Downloading: {DATASET_NAME}")
