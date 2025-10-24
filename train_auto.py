@@ -1692,27 +1692,31 @@ def main():
             else:
                 games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
-    # Diagnostic: Check priors data availability
+    # Diagnostic: Check data availability from all sources
     if verbose:
         print(_sec("Data Availability Diagnostic"))
         print(f"Total games: {len(games_df):,}")
 
-        # Check betting odds
-        odds_cols = ["market_implied_home", "market_spread", "market_total", "home_abbrev", "away_abbrev"]
-        print("\n📊 BETTING ODDS:")
+        # Check team abbreviations (from TeamStatistics teamTricode)
+        abbrev_cols = ["home_abbrev", "away_abbrev"]
+        print("\n📋 TEAM ABBREVIATIONS (from TeamStatistics):")
+        for col in abbrev_cols:
+            if col in games_df.columns:
+                non_null = games_df[col].notna().sum()
+                print(f"  {col}: {non_null:,} games ({non_null/len(games_df)*100:.1f}%)")
+
+        # Check betting odds (from odds dataset)
+        odds_cols = ["market_implied_home", "market_spread", "market_total"]
+        print("\n📊 BETTING ODDS (from odds dataset):")
         for col in odds_cols:
             if col in games_df.columns:
-                if col in ["home_abbrev", "away_abbrev"]:
-                    non_null = games_df[col].notna().sum()
-                    print(f"  {col}: {non_null:,} games ({non_null/len(games_df)*100:.1f}%)")
-                else:
-                    default_val = GAME_DEFAULTS.get(col, 0.0)
-                    non_default = (games_df[col] != default_val).sum()
-                    print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
+                default_val = GAME_DEFAULTS.get(col, 0.0)
+                non_default = (games_df[col] != default_val).sum()
+                print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
 
-        # Check team priors
+        # Check team priors (from Basketball Reference priors dataset)
         priors_cols = ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior"]
-        print("\n🏀 TEAM PRIORS:")
+        print("\n🏀 TEAM PRIORS (from Basketball Reference):")
         for col in priors_cols:
             if col in games_df.columns:
                 default_val = GAME_DEFAULTS.get(col, 0.0)
@@ -1724,10 +1728,11 @@ def main():
             with_priors = (games_df["home_o_rtg_prior"] != GAME_DEFAULTS.get("home_o_rtg_prior", 0.0)).sum()
             if with_priors == 0:
                 print("\n⚠️  WARNING: NO games have real team priors - all using defaults!")
-                print("   This means priors are NOT being used in training.")
+                print("   This means Basketball Reference priors are NOT being merged into training data.")
                 print("   Possible causes:")
-                print("   • Season mismatch between games and priors")
-                print("   • Missing home_abbrev/away_abbrev from odds dataset")
+                print("   • Season mismatch between games and priors dataset")
+                print("   • Missing teamTricode column in TeamStatistics (needed for abbreviations)")
+                print("   • Priors dataset not provided or not found")
             else:
                 print(f"\n✓ {with_priors:,} games ({with_priors/len(games_df)*100:.1f}%) have real team priors")
 
