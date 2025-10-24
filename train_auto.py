@@ -1577,10 +1577,12 @@ def main():
                     # For now, just log that we couldn't match
                     log("Warning: Could not match odds to games (no gid overlap, need team abbrev mapping)", verbose)
 
-            # Fill NaN odds with defaults
-            for col in ["market_implied_home", "market_implied_away", "market_spread", "spread_move", "market_total", "total_move"]:
-                if col in games_df.columns:
-                    games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
+        # Ensure betting odds columns always exist (fill with defaults if not merged)
+        for col in ["market_implied_home", "market_implied_away", "market_spread", "spread_move", "market_total", "total_move"]:
+            if col not in games_df.columns:
+                games_df[col] = GAME_DEFAULTS.get(col, 0.0)
+            else:
+                games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
     # Load and merge Basketball Reference priors (if provided)
     if args.priors_dataset:
@@ -1637,11 +1639,13 @@ def main():
                 )
                 log(f"- Merged team priors for {len(priors_teams):,} team-seasons", verbose)
 
-            # Fill NaN priors with defaults
-            for col in ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior",
-                       "away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior", "away_srs_prior"]:
-                if col in games_df.columns:
-                    games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
+        # Ensure team priors columns always exist (fill with defaults if not merged)
+        for col in ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior",
+                   "away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior", "away_srs_prior"]:
+            if col not in games_df.columns:
+                games_df[col] = GAME_DEFAULTS.get(col, 0.0)
+            else:
+                games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
     # Train game models + OOF
     print(_sec("Training game models"))
