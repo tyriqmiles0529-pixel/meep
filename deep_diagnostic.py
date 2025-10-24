@@ -1,3 +1,4 @@
+import os
 """
 Deep diagnostic for active API key returning 403
 """
@@ -6,7 +7,7 @@ import requests
 import json
 from pprint import pprint
 
-API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"
+API_KEY = os.getenv("API_SPORTS_KEY", "")
 
 print("=" * 80)
 print("DEEP DIAGNOSTIC - ACTIVE API KEY RETURNING 403")

@@ -1,10 +1,11 @@
+import os
 """
 Test API key against different API-Sports services
 """
 
 import requests
 
-API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"
+API_KEY = os.getenv("API_SPORTS_KEY", "")
 
 services = {
     "Basketball v1": "https://v1.basketball.api-sports.io",

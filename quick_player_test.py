@@ -1,3 +1,4 @@
+import os
 """
 Quick test of player name matching logic - Finds players and shows last 7 games stats
 """
@@ -5,7 +6,7 @@ Quick test of player name matching logic - Finds players and shows last 7 games 
 import requests
 import pandas as pd
 
-API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"
+API_KEY = os.getenv("API_SPORTS_KEY", "")
 BASE_URL = "https://v1.basketball.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 STATS_SEASON = "2024-2025"
