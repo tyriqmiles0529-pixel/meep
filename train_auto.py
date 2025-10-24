@@ -57,27 +57,22 @@ print("📥 STEP 1: Downloading dataset from Kaggle...")
 print("-" * 80)
 
 try:
-    # Try to use api_keys.py first (convenient)
-    try:
-        from api_keys import KAGGLE_USERNAME, KAGGLE_KEY
-        if KAGGLE_KEY and KAGGLE_KEY != "":
-            os.environ['KAGGLE_KEY'] = KAGGLE_KEY
-            if KAGGLE_USERNAME and KAGGLE_USERNAME != "":
-                os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
-            print("✅ Kaggle credentials loaded from api_keys.py")
-        else:
-            raise ImportError("Keys not set in api_keys.py")
-    except ImportError:
+    # Hardcoded Kaggle credentials (for venv compatibility - can't import from other files)
+    KAGGLE_KEY = "YOUR_KEY_HERE"  # Your Kaggle key - run ./setup_once.sh to inject
+    KAGGLE_USERNAME = ""  # Optional - leave empty if not needed
+
+    if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":
+        os.environ['KAGGLE_KEY'] = KAGGLE_KEY
+        if KAGGLE_USERNAME:
+            os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
+        print("✅ Kaggle credentials loaded (hardcoded)")
+    else:
         # Fall back to kaggle.json
         kaggle_dir = Path.home() / ".kaggle" / "kaggle.json"
         if not kaggle_dir.exists():
             print("❌ Kaggle credentials not found!")
-            print("\nOption 1 (Recommended): Edit api_keys.py")
-            print("   1. Open api_keys.py")
-            print("   2. Add your Kaggle key")
-            print("   3. Run this script again")
-            print("\nOption 2: Use kaggle.json")
-            print("   python setup_kaggle.py")
+            print("\nEdit this file (train_auto.py) around line 62 and add your Kaggle key")
+            print("Or use: python setup_kaggle.py")
             sys.exit(1)
         print("✅ Kaggle credentials found in ~/.kaggle/kaggle.json")
 
