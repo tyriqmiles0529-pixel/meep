@@ -17,13 +17,7 @@ SLEEP_LONG = 0.1 if FAST_MODE else 0.3
 RUN_TIME_BUDGET_SEC = 50 if FAST_MODE else 300
 
 # ========= CONFIG =========
-# Hardcoded API key (for venv compatibility - can't import from other files)
-API_KEY = "YOUR_KEY_HERE"  # Your API-Sports.io key - run ./setup_once.sh to inject
-# Fallback to env var if key is placeholder
-if not API_KEY or API_KEY == "YOUR_KEY_HERE":
-    API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY")
-    if not API_KEY:
-        raise ValueError("❌ API key not found. Edit line 20 in this file and add your key.")
+API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or "YOUR_API_KEY_HERE"
 BASE_URL = "https://v1.basketball.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 LEAGUE_ID = 12
@@ -467,7 +461,7 @@ def analyze_player_prop(prop: dict, matchup_context: dict) -> Optional[dict]:
     if prop.get("odds") is not None and (prop["odds"] < MIN_ODDS or prop["odds"] > MAX_ODDS): return None
     df_last, df_curr = get_player_stats_split(prop["player"], 25, 5)
     if (df_last.empty and df_curr.empty) or (len(df_last) + len(df_curr) < 3): return None
-    stat_col = stat_map.get(prop["prop_type"]);
+    stat_col = stat_map.get(prop["prop_type"]); 
     vl = df_last[stat_col].astype(float).tolist() if (stat_col and stat_col in df_last.columns) else []
     vc = df_curr[stat_col].astype(float).tolist() if (stat_col and stat_col in df_curr.columns) else []
     n_curr = float(len(vc)); w_cur = blend_weight(n_curr, n0=PRIOR_GAMES_STRENGTH, continuity=TEAM_CONTINUITY_DEFAULT)

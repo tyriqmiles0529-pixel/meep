@@ -2,7 +2,7 @@
 
 ## 🔴 Current Status
 
-Your API key `4979ac5e1f7ae10b1d6b58f1bba01140` is being rejected (403 Forbidden) by all services.
+Your API key `YOUR_API_KEY_HERE` is being rejected (403 Forbidden) by all services.
 
 **This could mean:**
 1. The key is from the wrong API service (Football instead of Basketball)
