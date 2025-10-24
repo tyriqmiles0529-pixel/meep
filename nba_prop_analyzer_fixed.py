@@ -9,16 +9,16 @@ from dataclasses import dataclass
 FAST_MODE = True
 REQUEST_TIMEOUT = 4 if FAST_MODE else 10
 RETRIES = 1 if FAST_MODE else 3
-DAYS_TO_FETCH = 1 if FAST_MODE else 3
-MAX_GAMES = 6 if FAST_MODE else 20
-MAX_PLAYER_PROPS_ANALYZE = 24 if FAST_MODE else 200
+DAYS_TO_FETCH = 3  # Always scan 3 days ahead
+MAX_GAMES = 12 if FAST_MODE else 20  # Increased from 6 to see more games
+MAX_PLAYER_PROPS_ANALYZE = 50 if FAST_MODE else 200  # Increased from 24
 SLEEP_SHORT = 0.05 if FAST_MODE else 0.2
 SLEEP_LONG = 0.1 if FAST_MODE else 0.3
 RUN_TIME_BUDGET_SEC = 50 if FAST_MODE else 300
 
 # ========= CONFIG =========
 # Hardcoded API key (for venv compatibility - can't import from other files)
-API_KEY = "YOUR_KEY_HERE"  # Your API-Sports.io key - run ./setup_once.sh to inject
+API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"  # Your API-Sports.io key
 # Fallback to env var if key is placeholder
 if not API_KEY or API_KEY == "YOUR_KEY_HERE":
     API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY")
@@ -104,7 +104,7 @@ def kelly_fraction(p: float, b: float) -> float:
 
 @dataclass
 class KellyConfig:
-    q_conservative: float = 0.30
+    q_conservative: float = 0.25  # Slightly less conservative (was 0.30)
     fk_low: float = 0.25
     fk_high: float = 0.50
     dd_scale: float = 1.0

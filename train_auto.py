@@ -46,9 +46,53 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from sklearn.metrics import mean_absolute_error, mean_squared_error, log_loss, brier_score_loss
-from sklearn.dummy import DummyClassifier, DummyRegressor
-from sklearn.calibration import CalibratedClassifierCV
+try:
+    # Hardcoded Kaggle credentials (for venv compatibility - can't import from other files)
+    KAGGLE_KEY = "f005fb2c580e2cbfd2b6b4b931e10dfc"  # Your Kaggle key
+    KAGGLE_USERNAME = ""  # Optional - leave empty if not needed
+
+    if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":
+        os.environ['KAGGLE_KEY'] = KAGGLE_KEY
+        if KAGGLE_USERNAME:
+            os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
+        print("✅ Kaggle credentials loaded (hardcoded)")
+    else:
+        # Fall back to kaggle.json
+        kaggle_dir = Path.home() / ".kaggle" / "kaggle.json"
+        if not kaggle_dir.exists():
+            print("❌ Kaggle credentials not found!")
+            print("\nEdit this file (train_auto.py) around line 62 and add your Kaggle key")
+            print("Or use: python setup_kaggle.py")
+            sys.exit(1)
+        print("✅ Kaggle credentials found in ~/.kaggle/kaggle.json")
+
+    # Download dataset
+    print(f"📦 Downloading: {DATASET_NAME}")
+    print("   (This may take a few minutes on first run...)")
+
+    dataset_path = kagglehub.dataset_download(DATASET_NAME)
+    print(f"✅ Dataset downloaded to: {dataset_path}")
+
+    # List available files
+    csv_files = list(Path(dataset_path).glob("*.csv"))
+    print(f"\n📁 Found {len(csv_files)} CSV file(s):")
+    for f in csv_files:
+        size_mb = f.stat().st_size / (1024 * 1024)
+        print(f"   - {f.name:<50s} ({size_mb:.1f} MB)")
+
+except Exception as e:
+    print(f"❌ Error downloading dataset: {e}")
+    print("\nTroubleshooting:")
+    print("   1. Check your internet connection")
+    print("   2. Verify Kaggle credentials: python setup_kaggle.py")
+    print("   3. Make sure you have Kaggle account and accepted dataset terms")
+    sys.exit(1)
+
+print()
+
+# ========== STEP 2: LOAD AND PROCESS DATA ==========
+print("📊 STEP 2: Loading and processing data...")
+print("-" * 80)
 
 # Prefer LightGBM; fallback to sklearn HistGBM
 _HAS_LGB = False
