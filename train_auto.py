@@ -277,11 +277,11 @@ def _copy_if_exists(src: Optional[Path], dst_dir: Path) -> Optional[Path]:
 
 # ---------------- Build games from TeamStatistics ----------------
 
-def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str]]:
     header_cols = list(pd.read_csv(teams_path, nrows=0).columns)
     usecols = [c for c in [
         "gameId", "gameDate", "teamId", "opponentTeamId",
-        "home", "teamScore", "opponentScore",
+        "home", "teamScore", "opponentScore", "teamTricode",
     ] if c in header_cols]
     ts = pd.read_csv(teams_path, low_memory=False, usecols=usecols)
 
@@ -484,8 +484,19 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
     ]
     context_map = g[context_cols].drop_duplicates(["gid", "home_tid", "away_tid"]).copy()
 
+    # Build team ID → abbreviation mapping for priors integration
+    team_id_to_abbrev: Dict[str, str] = {}
+    if "teamTricode" in ts.columns and "teamId" in ts.columns:
+        ts_clean = ts[["teamId", "teamTricode"]].drop_duplicates()
+        ts_clean["teamTricode"] = ts_clean["teamTricode"].astype(str).str.strip().str.upper()
+        # For each team ID, take the most common abbreviation (handles rebrands)
+        team_id_to_abbrev = ts_clean.groupby("teamId")["teamTricode"].agg(
+            lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0]
+        ).to_dict()
+        log(f"Built team ID → abbreviation mapping for {len(team_id_to_abbrev)} teams", verbose)
+
     log(f"Built TeamStatistics games frame: {len(games_df):,} rows", verbose)
-    return games_df, context_map
+    return games_df, context_map, team_id_to_abbrev
 
 # ---------------- Train game models + OOF ----------------
 
@@ -1525,7 +1536,14 @@ def main():
 
     # Build games and team context
     print(_sec("Building game dataset"))
-    games_df, context_map = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
+    games_df, context_map, team_id_to_abbrev = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
+
+    # Add team abbreviations for ALL games (needed for team priors merge)
+    if team_id_to_abbrev:
+        games_df["home_abbrev"] = games_df["home_tid"].map(team_id_to_abbrev)
+        games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
+        matched = games_df["home_abbrev"].notna().sum()
+        log(f"- Mapped {matched:,} / {len(games_df):,} games to team abbreviations ({matched/len(games_df)*100:.1f}%)", verbose)
 
     # Era filter for games
     game_cut = _parse_season_cutoff(args.game_season_cutoff, kind="game")
@@ -1635,9 +1653,7 @@ def main():
 
         # Merge team priors into games_df
         if not priors_teams.empty and "abbreviation" in priors_teams.columns and "season_end_year" in games_df.columns:
-            # TODO: Need to map home_tid/away_tid to abbreviations
-            # For now, if games_df already has home_abbrev/away_abbrev from odds, use those
-            # Otherwise, we'd need a tid -> abbrev map from Team Abbrev.csv
+            # home_abbrev/away_abbrev are now available for ALL games (from team ID mapping)
             if "home_abbrev" in games_df.columns and "away_abbrev" in games_df.columns:
                 # Merge home team priors
                 home_priors = priors_teams.rename(columns={
