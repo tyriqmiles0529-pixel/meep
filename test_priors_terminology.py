@@ -143,7 +143,7 @@ def main():
     print("="*70)
     print("\nThis test validates the fix for:")
     print("  'why are you calling them priors?'")
-    print("  'do you have the appropiate columns for all csv being used?'")
+    print("  'do you have the appropriate columns for all csv being used?'")
     print()
     
     tests = [

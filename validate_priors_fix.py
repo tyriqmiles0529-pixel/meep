@@ -135,7 +135,7 @@ def main():
     print("="*70)
     print("\nThis validates the fix for the issue:")
     print("  'why are you calling them priors?'")
-    print("  'do you have the appropiate columns for all csv being used?'")
+    print("  'do you have the appropriate columns for all csv being used?'")
     print()
     
     results = []
