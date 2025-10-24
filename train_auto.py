@@ -1262,10 +1262,25 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
                 if vals.max() > 1.5:
                     priors_teams[col] = vals / 100.0
 
+        # Check for duplicate columns before shifting season
+        if priors_teams.columns.duplicated().any():
+            dup_cols = priors_teams.columns[priors_teams.columns.duplicated()].tolist()
+            log(f"Warning: Duplicate columns found in team priors: {dup_cols}. Removing duplicates.", verbose)
+            priors_teams = priors_teams.loc[:, ~priors_teams.columns.duplicated()]
+
         # Shift: season S priors are used in season S+1
         if "season" in priors_teams.columns:
-            priors_teams["season_for_game"] = pd.to_numeric(priors_teams["season"], errors="coerce") + 1
-            priors_teams = priors_teams.drop(columns=["season"])
+            try:
+                season_series = priors_teams["season"]
+                # Ensure it's a Series, not DataFrame
+                if isinstance(season_series, pd.DataFrame):
+                    season_series = season_series.iloc[:, 0]
+                priors_teams["season_for_game"] = pd.to_numeric(season_series, errors="coerce") + 1
+                priors_teams = priors_teams.drop(columns=["season"])
+            except Exception as e:
+                log(f"Error creating season_for_game for teams: {e}", verbose)
+                log(f"season column type: {type(priors_teams['season'])}", verbose)
+                raise
         else:
             log("Warning: No 'season' column found in Team Summaries", verbose)
 
