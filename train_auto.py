@@ -1361,30 +1361,6 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
                 pbp[pbp_cols], on=["season", "player_id"], how="left"
             )
 
-    # 5. Player Award Shares - MVP, All-NBA, All-Star
-    awards_path = priors_root / "Player Award Shares.csv"
-    awards = load_and_filter_player_csv(awards_path, "Player Award Shares.csv")
-    if awards is not None and not priors_players.empty:
-        # Pivot awards to wide format (one row per player-season with all awards)
-        if all(c in awards.columns for c in ["season", "player_id", "award", "share"]):
-            awards_pivot = awards.pivot_table(
-                index=["season", "player_id"],
-                columns="award",
-                values="share",
-                aggfunc="first"
-            ).reset_index()
-            # Rename columns to avoid spaces
-            awards_pivot.columns = [c.lower().replace(" ", "_").replace("-", "_") for c in awards_pivot.columns]
-            # Keep only relevant awards
-            award_cols = ["season", "player_id"]
-            for col in awards_pivot.columns:
-                if any(x in col for x in ["mvp", "all_nba", "all_star", "dpoy", "mip", "smoy", "roy"]):
-                    award_cols.append(col)
-            if len(award_cols) > 2:
-                priors_players = priors_players.merge(
-                    awards_pivot[award_cols], on=["season", "player_id"], how="left"
-                )
-
     if priors_players.empty:
         log("Warning: No player priors loaded", verbose)
         return priors_players, priors_teams
