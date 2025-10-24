@@ -1,1145 +1,663 @@
-import requests
-import pandas as pd
-import numpy as np
-import datetime
-import json
-import time
-import os
-import pickle
+# RIQ MEEPING MACHINE — Fully Integrated, Fast-Mode, All-in-One
+from __future__ import annotations
+import requests, pandas as pd, numpy as np, datetime, json, time, os, pickle, random, math
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
 
-# ============================================
-# API ENDPOINT STRUCTURE - CORRECTED FOR PRO PLAN
-# ============================================
-# Team Stats:       /statistics?league=12&season=2024-2025&team={team_id}
-# Players Search:   /players?search={name}
-# Player Stats:     /games/statistics/players?player={player_id}&season={season}  ← CORRECTED!
-# Odds:             /odds?game={game_id}&bookmaker={bookmaker_id}
-# Games:            /games?league={league_id}&season={season}
-# NBA Team IDs: 132-161 (alphabetical)
-# ============================================
+# ========= RUNTIME / FAST MODE =========
+FAST_MODE = True
+REQUEST_TIMEOUT = 4 if FAST_MODE else 10
+RETRIES = 1 if FAST_MODE else 3
+DAYS_TO_FETCH = 1 if FAST_MODE else 3
+MAX_GAMES = 6 if FAST_MODE else 20
+MAX_PLAYER_PROPS_ANALYZE = 24 if FAST_MODE else 200
+SLEEP_SHORT = 0.05 if FAST_MODE else 0.2
+SLEEP_LONG = 0.1 if FAST_MODE else 0.3
+RUN_TIME_BUDGET_SEC = 50 if FAST_MODE else 300
 
-# ============================================
-# CONFIGURATION
-# ============================================
-API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"  # ✅ Updated key
+# ========= CONFIG =========
+API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or "YOUR_API_KEY_HERE"
 BASE_URL = "https://v1.basketball.api-sports.io"
-HEADERS = {
-    "x-apisports-key": API_KEY  # ✅ Corrected header format
-}
-
-# Settings
+HEADERS = {"x-apisports-key": API_KEY}
 LEAGUE_ID = 12
-SEASON = "2025-2026"  # Current season for games/odds
-STATS_SEASON = "2024-2025"  # Last season for player/team stats
+SEASON = "2025-2026"
+STATS_SEASON = "2024-2025"
 BOOKMAKER_ID = 4
-TOP_PROPS = 15
-LOOKBACK_GAMES = 10
-KELLY_FRACTION = 0.25
 BANKROLL = 100.0
-MIN_CONFIDENCE = 0.40  # Lowered to 40%
-MIN_KELLY_STAKE = 0.01  # Allow bets as small as 1 cent
-MIN_GAMES_REQUIRED = 1  # Only need 1 game of data
-DEBUG_MODE = True  # Enable debug logging
+MIN_KELLY_STAKE = 0.01
+DEBUG_MODE = False
 
-# Odds filtering - only analyze reasonable odds
-MIN_ODDS = -500  # Don't analyze heavy favorites (e.g., -999999)
-MAX_ODDS = +500  # Don't analyze extreme longshots
+# Odds filter
+MIN_ODDS = -500
+MAX_ODDS = +500
 
-# Data persistence
+# Early-season blending
+PRIOR_GAMES_STRENGTH = 12.0
+TEAM_CONTINUITY_DEFAULT = 0.7
+
+# Posterior tightness by market
+N_EFF_BY_MARKET = {"PTS": 90.0, "AST": 80.0, "REB": 85.0, "3PM": 70.0, "Moneyline": 45.0, "Spread": 45.0, "DEFAULT": 80.0}
+
+# Category view (Top 5 per)
+TOP_PER_CATEGORY = 5
+CATEGORIES = [
+    ("points", "Points"),
+    ("assists", "Assists"),
+    ("rebounds", "Rebounds"),
+    ("threes", "3PM"),
+    ("moneyline", "Moneyline"),
+    ("spread", "Spread"),
+]
+
+# Data files
 WEIGHTS_FILE = "prop_weights.pkl"
 RESULTS_FILE = "prop_results.pkl"
 CACHE_FILE = "player_cache.pkl"
+EQUITY_FILE = "equity_curve.pkl"
 
-# Stat mapping - UPDATED for correct API response structure
-stat_map = {
-    "points": "points",
-    "assists": "assists",
-    "rebounds": "rebounds",  # Changed from totReb to rebounds
-    "threes": "threepoint_goals"  # Changed from fgm to threepoint_goals
-}
+stat_map = {"points": "points", "assists": "assists", "rebounds": "rebounds", "threes": "threepoint_goals"}
+MEEP_MESSAGES = ["Riq Machine Working", "Meeping...", "Crunching numbers", "Analyzing props", "Finding value"]
 
-# ============================================
-# DATA PERSISTENCE
-# ============================================
+# ========= ODDS + POSTERIOR UTILITIES =========
+def american_to_decimal(american: int | float) -> float:
+    if isinstance(american, str):
+        american = float(american)
+    if american >= 100:
+        return 1.0 + (american / 100.0)
+    elif american <= -100:
+        return 1.0 + (100.0 / abs(american))
+    return 2.0
+
+def break_even_p(american: int | float) -> Tuple[float, float]:
+    dec = american_to_decimal(american)
+    b = dec - 1.0
+    return 1.0 / (1.0 + b), b
+
+def implied_prob_from_american(american: int | float) -> float:
+    if isinstance(american, str):
+        american = float(american)
+    return 100.0 / (american + 100.0) if american >= 100 else abs(american) / (abs(american) + 100.0)
+
+def sample_beta_posterior(p_hat: float, n_eff: float, n_samples: int = 600, seed: int = 42) -> List[float]:
+    p_hat = min(max(1e-4, p_hat), 1.0 - 1e-4)
+    alpha = 1.0 + p_hat * max(1e-6, n_eff)
+    beta = 1.0 + (1.0 - p_hat) * max(1e-6, n_eff)
+    rng = random.Random(seed)
+    out = []
+    for _ in range(n_samples):
+        x = rng.gammavariate(alpha, 1.0)
+        y = rng.gammavariate(beta, 1.0)
+        out.append(x / (x + y + 1e-12))
+    return out
+
+def kelly_fraction(p: float, b: float) -> float:
+    q = 1.0 - p
+    f = (b * p - q) / max(1e-9, b)
+    return max(0.0, f)
+
+@dataclass
+class KellyConfig:
+    q_conservative: float = 0.30
+    fk_low: float = 0.25
+    fk_high: float = 0.50
+    dd_scale: float = 1.0
+
+def dynamic_fractional_kelly(p_samples: List[float], b: float, cfg: KellyConfig) -> Tuple[float, float, float, float]:
+    if not p_samples:
+        return 0.0, 0.0, 0.0, 0.0
+    arr = np.array(p_samples)
+    p_c = float(np.quantile(arr, cfg.q_conservative))
+    p_mean = float(arr.mean())
+    p_be = 1.0 / (1.0 + b)
+    if p_c <= p_be:
+        return 0.0, p_c, 0.0, p_mean
+    denom = max(1e-9, p_mean - p_c)
+    conf = (p_mean - p_be) / denom
+    conf = max(0.0, min(2.0, conf)) / 2.0
+    frac_k = (cfg.fk_low + (cfg.fk_high - cfg.fk_low) * conf) * cfg.dd_scale
+    f_star = kelly_fraction(p_c, b)
+    f = frac_k * f_star
+    return f, p_c, frac_k, p_mean
+
+def risk_adjusted_elg(p_samples: List[float], b: float, f: float) -> float:
+    if not p_samples or f <= 0.0:
+        return -1e9
+    ps = np.clip(np.array(p_samples), 1e-6, 1.0 - 1e-6)
+    return float(np.mean(ps * np.log1p(f * b) + (1.0 - ps) * np.log1p(-f)))
+
+@dataclass
+class ExposureCaps:
+    max_per_game: float = 0.20
+    max_per_player: float = 0.12
+    max_per_team: float = 0.20
+    max_props_per_player: int = 2
+
+def drawdown_scale(equity_curve: List[float], floor: float = 0.6, window: int = 14) -> float:
+    if not equity_curve or len(equity_curve) < 2:
+        return 1.0
+    recent = equity_curve[-window:] if len(equity_curve) >= window else equity_curve
+    peak = max(recent); curr = recent[-1]
+    if peak <= 0: return 1.0
+    dd = (peak - curr) / peak
+    if dd <= 0: return 1.0
+    if dd >= 0.30: return floor
+    return 1.0 - (1.0 - floor) * (dd / 0.30)
+
+# ========= PROP MODELS (distributional tails) =========
+def _ewma(values: List[float], half_life: float = 5.0) -> float:
+    if not values: return 0.0
+    v = np.asarray(values, dtype=float); n = len(v); idx = np.arange(n, dtype=float)
+    lam = 0.5 ** (1.0 / max(1.0, half_life)); w = lam ** (n - 1 - idx); w /= w.sum()
+    return float((v * w).sum())
+
+def _robust_sigma(values: List[float], mu_ref: float) -> float:
+    if not values: return 0.0
+    v = np.asarray(values, dtype=float); mad = float(np.median(np.abs(v - mu_ref)))
+    return max(1e-6, mad / 0.6745)
+
+def _normal_cdf(x: float) -> float:
+    a1,a2,a3,a4,a5,p = 0.254829592,-0.284496736,1.421413741,-1.453152027,1.061405429,0.3275911
+    sign = 1 if x >= 0 else -1; x = abs(x) / math.sqrt(2.0)
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x)
+    return 0.5 * (1.0 + sign * y)
+
+def _poisson_cdf(k: int, lam: float) -> float:
+    total = 0.0; term = math.exp(-lam); total += term
+    for i in range(1, max(1, k + 1)):
+        term *= lam / i; total += term
+        if i >= k: break
+    return min(1.0, max(0.0, total))
+
+def _fit_nb_params(values: List[float]) -> Tuple[float, float, float]:
+    v = np.array(values, dtype=float)
+    m = float(np.mean(v)); var = float(np.var(v, ddof=1)) if len(v) > 1 else max(1e-6, m)
+    if var <= m + 1e-9: return m, float("inf"), 0.0
+    r = (m * m) / (var - m + 1e-9); p = m / (m + r)
+    return max(1e-6, r), min(max(1e-9, p), 1 - 1e-9), m
+
+def _nb_cdf(k: int, r: float, p: float) -> float:
+    if r == float("inf"): return 0.0
+    total = 0.0; prob = (1 - p) ** r; total += prob
+    for i in range(1, max(1, k + 1)):
+        prob *= ((i - 1 + r) / i) * p; total += prob
+        if i >= k: break
+    return min(1.0, max(0.0, total))
+
+def project_stat(values: List[float], prop_type: str, pace_multiplier: float, defense_factor: float) -> Tuple[float, float]:
+    vals = np.array(values, dtype=float)
+    if len(vals) == 0: return 0.0, 0.0
+    mu_base = _ewma(list(vals), half_life=5.0)
+    m3 = float(np.mean(vals[:3])) if len(vals) >= 3 else float(np.mean(vals))
+    m8 = float(np.mean(vals[:8])) if len(vals) >= 8 else float(np.mean(vals))
+    trend = 0.0 if m8 <= 1e-9 else (m3 - m8) / m8
+    trend_boost = max(-0.05, min(0.05, 0.25 * trend))
+    mu = mu_base * (1.0 + trend_boost)
+    mu *= pace_multiplier
+    if prop_type == "assists":
+        mu *= (0.7 + 0.3 * defense_factor)
+    elif prop_type in ("points", "threes"):
+        mu *= defense_factor
+    elif prop_type == "rebounds":
+        mu *= (0.8 * pace_multiplier + 0.2)
+    raw_sigma = _robust_sigma(list(vals), mu_base)
+    if prop_type == "points": sigma = max(0.8, raw_sigma * 1.10)
+    elif prop_type == "assists": sigma = max(0.6, raw_sigma * 1.20)
+    elif prop_type == "rebounds": sigma = max(0.8, raw_sigma * 1.15)
+    elif prop_type == "threes": sigma = max(0.5, raw_sigma * 1.30)
+    else: sigma = max(0.8, raw_sigma * 1.10)
+    return float(mu), float(sigma)
+
+def prop_win_probability(prop_type: str, values: List[float], line: float, pick: str, mu: float, sigma: float) -> Tuple[float, float]:
+    if prop_type != "threes":
+        sigma = max(sigma, 1e-6); z = (mu - line) / sigma
+        p = 1.0 - _normal_cdf((line - mu) / sigma) if pick == "over" else _normal_cdf((line - mu) / sigma)
+        return min(1.0 - 1e-4, max(1e-4, p)), z
+    ints = [max(0, int(round(v))) for v in values if v is not None]
+    if len(ints) == 0:
+        sigma = max(sigma, 1e-6); z = (mu - line) / sigma
+        p = 1.0 - _normal_cdf((line - mu) / sigma) if pick == "over" else _normal_cdf((line - mu) / sigma)
+        return min(1.0 - 1e-4, max(1e-4, p)), z
+    mean, r, _ = _fit_nb_params(ints)
+    if r == float("inf"):
+        lam = mean
+        if pick == "over":
+            k = math.ceil(line); p = 1.0 - _poisson_cdf(k - 1, lam)
+        else:
+            k = math.floor(line); p = _poisson_cdf(k, lam)
+        z_like = (mu - line) / max(1e-6, sigma)
+        return min(1.0 - 1e-4, max(1e-4, p)), z_like
+    p_nb = mean / (mean + r)
+    if pick == "over":
+        k = math.ceil(line); p = 1.0 - _nb_cdf(k - 1, r, p_nb)
+    else:
+        k = math.floor(line); p = _nb_cdf(k, r, p_nb)
+    z_like = (mu - line) / max(1e-6, sigma)
+    return min(1.0 - 1e-4, max(1e-4, p)), z_like
+
+# ========= DATA PERSISTENCE =========
 def load_data(filename, default=None):
     if os.path.exists(filename):
         try:
-            with open(filename, "rb") as f:
-                return pickle.load(f)
-        except:
-            return default if default is not None else {}
+            with open(filename, "rb") as f: return pickle.load(f)
+        except Exception: return default if default is not None else {}
     return default if default is not None else {}
 
-
 def save_data(filename, data):
-    with open(filename, "wb") as f:
-        pickle.dump(data, f)
+    with open(filename, "wb") as f: pickle.dump(data, f)
 
+def load_equity():
+    if os.path.exists(EQUITY_FILE):
+        try:
+            with open(EQUITY_FILE, "rb") as f: return pickle.load(f)
+        except Exception: return [BANKROLL]
+    return [BANKROLL]
+
+def save_equity(curve: List[float]):
+    try:
+        with open(EQUITY_FILE, "wb") as f: pickle.dump(curve, f)
+    except Exception: pass
 
 prop_weights = load_data(WEIGHTS_FILE, defaultdict(lambda: 1.0))
 prop_results = load_data(RESULTS_FILE, defaultdict(list))
 player_cache = load_data(CACHE_FILE, {})
+# In-memory PID cache (also persisted in player_cache)
+_pid_cache: Dict[str, int] = player_cache.get("__pid_cache__", {})
 
-
-# ============================================
-# API FUNCTIONS
-# ============================================
-def fetch_json(endpoint: str, params: dict = None, retries: int = 3) -> Optional[dict]:
+# ========= API FUNCTIONS =========
+def fetch_json(endpoint: str, params: dict = None, retries: int = RETRIES, timeout: int = REQUEST_TIMEOUT) -> Optional[dict]:
     url = f"{BASE_URL}{endpoint}"
-
     for attempt in range(retries):
         try:
-            response = requests.get(url, headers=HEADERS, params=params, timeout=10)
-
-            if response.status_code == 200:
-                return response.json()
-            elif response.status_code == 429:
-                wait_time = 2 ** attempt
-                if DEBUG_MODE:
-                    print(f"   ⚠️ Rate limited. Waiting {wait_time}s...")
-                time.sleep(wait_time)
+            resp = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
+            if resp.status_code == 200: return resp.json()
+            if resp.status_code == 429:
+                if DEBUG_MODE: print(f"   ⚠️ Rate limited. Waiting {2 ** attempt}s...")
+                time.sleep(2 ** attempt)
             else:
-                if DEBUG_MODE:
-                    print(f"   ❌ Error {response.status_code}: {response.text[:200]}")
+                if DEBUG_MODE: print(f"   ❌ Error {resp.status_code}: {resp.text[:160]}")
                 return None
-
         except Exception as e:
-            if DEBUG_MODE:
-                print(f"   ⚠️ Request failed (attempt {attempt+1}/{retries}): {e}")
-            if attempt < retries - 1:
-                time.sleep(1)
-
+            if DEBUG_MODE: print(f"   ⚠️ Request failed: {e}")
+            if attempt < retries - 1: time.sleep(0.5)
     return None
 
+def _lookup_player_id(name: str) -> Optional[int]:
+    # Fast path: local cache
+    if name in _pid_cache:
+        return _pid_cache[name]
+    # Strategy 1: reversed name
+    parts = name.strip().split()
+    candidates = []
+    if len(parts) >= 2:
+        candidates.append(" ".join(parts[::-1]))
+    candidates.append(name.strip())
+    if len(parts) >= 2:
+        candidates.append(parts[-1])
 
-def get_upcoming_games(days_ahead: int = 3) -> List[dict]:
-    params = {
-        "league": LEAGUE_ID,
-        "season": SEASON,
-        "timezone": "America/Chicago"
-    }
+    for q in candidates:
+        data = fetch_json("/players", params={"search": q})
+        if data and "response" in data and data["response"]:
+            # Pick the best match that contains all tokens
+            toks = set(t.lower() for t in name.split())
+            best = None
+            for rec in data["response"]:
+                nm = rec.get("name","")
+                if nm and toks.issubset(set(nm.lower().split())):
+                    best = rec; break
+            if not best:
+                best = data["response"][0]
+            pid = best.get("id")
+            if pid:
+                _pid_cache[name] = pid
+                player_cache["__pid_cache__"] = _pid_cache
+                save_data(CACHE_FILE, player_cache)
+                return pid
+    return None
 
-    data = fetch_json("/games", params=params)
-    if not data or "response" not in data:
-        return []
+def _parse_game_row(row: dict) -> dict:
+    try:
+        points = row.get("points", 0) or 0
+        assists = row.get("assists", 0) or 0
+        rbd = row.get("rebounds", {}); rebounds = (rbd.get("total", 0) if isinstance(rbd, dict) else rbd) or 0
+        threes_data = row.get("threepoint_goals", {}); threes = threes_data.get("total", 0) if isinstance(threes_data, dict) else 0
+        return {"points": float(points), "assists": float(assists), "rebounds": float(rebounds), "threes": float(threes)}
+    except Exception:
+        return {}
 
-    from datetime import timezone
-    now = datetime.datetime.now(timezone.utc)
-    future_cutoff = now + datetime.timedelta(days=days_ahead)
+def get_player_stats_split(player_name: str, max_last: int = 25, max_curr: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    cache_key = f"split_{player_name}_{max_last}_{max_curr}"
+    if cache_key in player_cache:
+        ts, data = player_cache[cache_key]
+        if (datetime.datetime.now() - ts).total_seconds() < 1800:
+            return data.get("last", pd.DataFrame()), data.get("curr", pd.DataFrame())
+    pid = _lookup_player_id(player_name)
+    if not pid: return pd.DataFrame(), pd.DataFrame()
 
-    upcoming = []
-    for game in data["response"]:
-        try:
-            game_date_str = game["date"].replace("Z", "+00:00")
-            game_date = datetime.datetime.fromisoformat(game_date_str)
+    last, curr = [], []
+    d_last = fetch_json("/games/statistics/players", params={"season": STATS_SEASON, "player": pid})
+    if d_last and "response" in d_last:
+        for r in d_last["response"][:max_last]:
+            g = _parse_game_row(r)
+            if g: last.append(g)
 
-            if game_date.tzinfo is None:
-                game_date = game_date.replace(tzinfo=timezone.utc)
+    d_curr = fetch_json("/games/statistics/players", params={"season": SEASON, "player": pid})
+    if d_curr and "response" in d_curr:
+        for r in d_curr["response"][:max_curr]:
+            g = _parse_game_row(r)
+            if g: curr.append(g)
 
-            if now <= game_date <= future_cutoff:
-                upcoming.append(game)
-        except (ValueError, KeyError) as e:
-            if DEBUG_MODE:
-                print(f"   ⚠️ Could not parse game date: {e}")
-            continue
+    df_last = pd.DataFrame(last); df_curr = pd.DataFrame(curr)
+    player_cache[cache_key] = (datetime.datetime.now(), {"last": df_last, "curr": df_curr})
+    save_data(CACHE_FILE, player_cache)
+    return df_last, df_curr
 
-    return upcoming
-
+def get_upcoming_games() -> List[dict]:
+    today = datetime.date.today()
+    dates = [today + datetime.timedelta(days=i) for i in range(DAYS_TO_FETCH)]
+    print(f"📅 Fetching games for {DAYS_TO_FETCH} days:\n" + "\n".join([f"   - {d:%Y-%m-%d}" for d in dates]) + "\n")
+    games = []
+    for d in dates:
+        data = fetch_json("/games", params={"league": LEAGUE_ID, "season": SEASON, "date": d.strftime("%Y-%m-%d"), "timezone": "America/Chicago"})
+        if data and "response" in data:
+            games.extend(data["response"])
+        time.sleep(SLEEP_SHORT)
+        if len(games) >= MAX_GAMES:
+            break
+    print(f"   Found {len(games)} total games\n"); return games[:MAX_GAMES]
 
 def get_game_odds(game_id: int) -> Optional[dict]:
-    params = {
-        "game": game_id,
-        "bookmaker": BOOKMAKER_ID
-    }
-
-    data = fetch_json("/odds", params=params)
-    if not data or "response" not in data or len(data["response"]) == 0:
-        return None
-
+    data = fetch_json("/odds", params={"game": game_id, "bookmaker": BOOKMAKER_ID})
+    if not data or "response" not in data or not data["response"]: return None
     return data["response"][0]
-
-
-def get_player_recent_stats(player_name: str, num_games: int = LOOKBACK_GAMES) -> pd.DataFrame:
-    """
-    Fetch player stats using the CORRECT PRO plan endpoint:
-    /games/statistics/players?player={player_id}&season={season}
-    """
-    cache_key = f"{player_name}_{num_games}"
-
-    if cache_key in player_cache:
-        cached_time, cached_data = player_cache[cache_key]
-        if (datetime.datetime.now() - cached_time).seconds < 3600:
-            if DEBUG_MODE:
-                print(f"      📦 Cache hit: {player_name} ({len(cached_data)} games)")
-            return cached_data
-
-    if DEBUG_MODE:
-        print(f"      🔍 Searching API for: {player_name}")
-
-    # Step 1: Search for player to get ID
-    # API stores names as "Last First" but odds use "First Last"
-    # OPTIMIZED: Try reversed name first (most efficient)
-
-    name_parts = player_name.strip().split()
-    player = None
-    data = None
-
-    # Strategy 1: Try reversed name first (e.g., "LeBron James" → "James LeBron")
-    if len(name_parts) >= 2:
-        reversed_name = " ".join(name_parts[::-1])
-        if DEBUG_MODE:
-            print(f"      🔄 Trying reversed: {reversed_name}")
-
-        params = {"search": reversed_name}
-        data = fetch_json("/players", params=params)
-
-        if data and "response" in data and len(data["response"]) > 0:
-            player = data["response"][0]
-            if DEBUG_MODE:
-                print(f"      ✅ Found with reversed name: {player.get('name')} (ID: {player.get('id')})")
-
-    # Strategy 2: Try original name as fallback
-    if not player:
-        if DEBUG_MODE:
-            print(f"      🔄 Trying original: {player_name}")
-
-        params = {"search": player_name}
-        data = fetch_json("/players", params=params)
-
-        if data and "response" in data and len(data["response"]) > 0:
-            player = data["response"][0]
-            if DEBUG_MODE:
-                print(f"      ✅ Found with original name: {player.get('name')} (ID: {player.get('id')})")
-
-    # Strategy 3: Final fallback - search by last name only
-    if not player and len(name_parts) >= 2:
-        last_name = name_parts[-1]
-        if DEBUG_MODE:
-            print(f"      🔄 Trying last name only: {last_name}")
-
-        params = {"search": last_name}
-        data = fetch_json("/players", params=params)
-
-        if data and "response" in data and len(data["response"]) > 0:
-            # Filter results to find best match
-            best_match = None
-            for result in data["response"]:
-                api_name = result.get("name", "").lower()
-                search_last = last_name.lower()
-
-                if search_last in api_name:
-                    best_match = result
-                    break
-
-            if not best_match:
-                best_match = data["response"][0]
-
-            player = best_match
-            if DEBUG_MODE:
-                print(f"      ✅ Matched by last name: {player.get('name')} (ID: {player.get('id')})")
-
-    # If still not found, give up
-    if not player:
-        if DEBUG_MODE:
-            print(f"      ❌ Player not found: {player_name}")
-        return pd.DataFrame()
-    player_id = player.get("id")
-
-    if not player_id:
-        if DEBUG_MODE:
-            print(f"      ❌ No player ID for: {player_name}")
-        return pd.DataFrame()
-
-    if DEBUG_MODE:
-        print(f"      ✓ Found player ID: {player_id}")
-
-    # Step 2: Fetch player game stats using CORRECT endpoint
-    all_games_stats = []
-
-    # OPTIMIZED: Try LAST season first (2024-2025) since current season just started
-    # This ensures we get recent, complete game data instead of sparse early-season games
-    if DEBUG_MODE:
-        print(f"      📅 Fetching stats from {STATS_SEASON} season (last/most data)")
-
-    params_last = {
-        "season": STATS_SEASON,
-        "player": player_id
-    }
-
-    stats_data_last = fetch_json("/games/statistics/players", params=params_last)
-
-    if stats_data_last and "response" in stats_data_last:
-        if DEBUG_MODE:
-            print(f"      📊 Last season response: {len(stats_data_last['response'])} games")
-
-        for game_entry in stats_data_last["response"]:
-            if isinstance(game_entry, dict):
-                try:
-                    # Parse the new API response structure
-                    points = game_entry.get("points", 0) or 0
-                    assists = game_entry.get("assists", 0) or 0
-
-                    # Rebounds - check if it's a dict or int
-                    rebounds_data = game_entry.get("rebounds", {})
-                    if isinstance(rebounds_data, dict):
-                        rebounds = rebounds_data.get("total", 0) or 0
-                    else:
-                        rebounds = rebounds_data or 0
-
-                    # Three-pointers - get total made
-                    threes_data = game_entry.get("threepoint_goals", {})
-                    if isinstance(threes_data, dict):
-                        threes = threes_data.get("total", 0) or 0
-                    else:
-                        threes = 0
-
-                    all_games_stats.append({
-                        "points": float(points),
-                        "assists": float(assists),
-                        "rebounds": float(rebounds),
-                        "threes": float(threes),
-                        "season": STATS_SEASON
-                    })
-                except (ValueError, TypeError) as e:
-                    if DEBUG_MODE:
-                        print(f"      ⚠️ Error parsing last season stat: {e}")
-                    continue
-
-    # If we need more games, try current season (2025-2026) to supplement
-    if len(all_games_stats) < num_games:
-        needed = num_games - len(all_games_stats)
-        if DEBUG_MODE:
-            print(f"      📅 Need {needed} more games, fetching from {SEASON} season (current)")
-
-        params_current = {
-            "season": SEASON,
-            "player": player_id
-        }
-
-        stats_data_current = fetch_json("/games/statistics/players", params=params_current)
-
-    if stats_data_current and "response" in stats_data_current:
-        if DEBUG_MODE:
-            print(f"      📊 Current season response: {len(stats_data_current['response'])} games")
-
-        for game_entry in stats_data_current["response"]:
-            if isinstance(game_entry, dict):
-                try:
-                    # Parse the new API response structure
-                    points = game_entry.get("points", 0) or 0
-                    assists = game_entry.get("assists", 0) or 0
-
-                    # Rebounds - check if it's a dict or int
-                    rebounds_data = game_entry.get("rebounds", {})
-                    if isinstance(rebounds_data, dict):
-                        rebounds = rebounds_data.get("total", 0) or 0
-                    else:
-                        rebounds = rebounds_data or 0
-
-                    # Three-pointers - get total made
-                    threes_data = game_entry.get("threepoint_goals", {})
-                    if isinstance(threes_data, dict):
-                        threes = threes_data.get("total", 0) or 0
-                    else:
-                        threes = 0
-
-                    all_games_stats.append({
-                        "points": float(points),
-                        "assists": float(assists),
-                        "rebounds": float(rebounds),
-                        "threes": float(threes),
-                        "season": SEASON
-                    })
-                except (ValueError, TypeError) as e:
-                    if DEBUG_MODE:
-                        print(f"      ⚠️ Error parsing current season stat: {e}")
-                    continue
-
-    # If we don't have enough games, fetch from last season (2024-2025)
-    if len(all_games_stats) < num_games:
-        needed = num_games - len(all_games_stats)
-        if DEBUG_MODE:
-            print(f"      📅 Need {needed} more games, fetching from {STATS_SEASON} season (last year)")
-
-        params_last = {
-            "season": STATS_SEASON,
-            "player": player_id
-        }
-
-        stats_data_last = fetch_json("/games/statistics/players", params=params_last)
-
-        if stats_data_last and "response" in stats_data_last:
-            if DEBUG_MODE:
-                print(f"      📊 Last season response: {len(stats_data_last['response'])} games")
-
-            for game_entry in stats_data_last["response"][:needed]:
-                if isinstance(game_entry, dict):
-                    try:
-                        points = game_entry.get("points", 0) or 0
-                        assists = game_entry.get("assists", 0) or 0
-
-                        rebounds_data = game_entry.get("rebounds", {})
-                        if isinstance(rebounds_data, dict):
-                            rebounds = rebounds_data.get("total", 0) or 0
-                        else:
-                            rebounds = rebounds_data or 0
-
-                        threes_data = game_entry.get("threepoint_goals", {})
-                        if isinstance(threes_data, dict):
-                            threes = threes_data.get("total", 0) or 0
-                        else:
-                            threes = 0
-
-                        all_games_stats.append({
-                            "points": float(points),
-                            "assists": float(assists),
-                            "rebounds": float(rebounds),
-                            "threes": float(threes),
-                            "season": STATS_SEASON
-                        })
-                    except (ValueError, TypeError) as e:
-                        if DEBUG_MODE:
-                            print(f"      ⚠️ Error parsing last season stat: {e}")
-                        continue
-
-    # Take only the number of games we need
-    all_games_stats = all_games_stats[:num_games]
-
-    df = pd.DataFrame(all_games_stats)
-
-    if DEBUG_MODE:
-        print(f"      ✅ Parsed {len(df)} total games for {player_name}")
-        if len(df) > 0:
-            current_season_games = sum(1 for _, row in df.iterrows() if row.get('season') == SEASON)
-            last_season_games = len(df) - current_season_games
-            print(f"         {current_season_games} from {SEASON}, {last_season_games} from {STATS_SEASON}")
-            print(f"         Avg: PTS={df['points'].mean():.1f}, AST={df['assists'].mean():.1f}, REB={df['rebounds'].mean():.1f}")
-
-    # Remove season column before returning (not needed in calculations)
-    if 'season' in df.columns:
-        df = df.drop('season', axis=1)
-
-    player_cache[cache_key] = (datetime.datetime.now(), df)
-    save_data(CACHE_FILE, player_cache)
-
-    return df
-
-
-def get_team_stats(team_id: int) -> dict:
-    cache_key = f"team_{team_id}"
-
-    if cache_key in player_cache:
-        cached_time, cached_data = player_cache[cache_key]
-        if (datetime.datetime.now() - cached_time).seconds < 86400:
-            return cached_data
-
-    # Use last season's stats since current season just started
-    params = {
-        "league": LEAGUE_ID,
-        "season": STATS_SEASON,  # 2024-2025
-        "team": team_id
-    }
-
-    if DEBUG_MODE:
-        print(f"      📅 Fetching team {team_id} stats from {STATS_SEASON}")
-
-    data = fetch_json("/statistics", params=params)
-
-    team_stats = {
-        "pace": 1.0,
-        "offensive_rating": 110.0,
-        "defensive_rating": 110.0,
-        "points_per_game": 110.0,
-        "opp_points_per_game": 110.0,
-        "games_played": 0
-    }
-
-    if data and "response" in data and len(data["response"]) > 0:
-        response = data["response"]
-
-        total_points_for = 0
-        total_points_against = 0
-        games_count = 0
-
-        for game_stat in response:
-            try:
-                team_points = float(game_stat.get("points", 0) or 0)
-
-                opp_points = 0
-                if "opponent" in game_stat:
-                    opp_points = float(game_stat["opponent"].get("points", 0) or 0)
-
-                total_points_for += team_points
-                total_points_against += opp_points
-                games_count += 1
-            except (ValueError, TypeError, KeyError):
-                continue
-
-        if games_count > 0:
-            ppg = total_points_for / games_count
-            opp_ppg = total_points_against / games_count if total_points_against > 0 else 110.0
-
-            estimated_pace = ((ppg + opp_ppg) / 2) / 110.0
-
-            team_stats = {
-                "pace": max(0.85, min(1.15, estimated_pace)),
-                "offensive_rating": ppg,
-                "defensive_rating": opp_ppg,
-                "points_per_game": ppg,
-                "opp_points_per_game": opp_ppg,
-                "games_played": games_count
-            }
-
-    player_cache[cache_key] = (datetime.datetime.now(), team_stats)
-    save_data(CACHE_FILE, player_cache)
-
-    return team_stats
-
 
 def get_matchup_context(game_info: dict) -> dict:
     home_team_id = game_info.get("teams", {}).get("home", {}).get("id")
     away_team_id = game_info.get("teams", {}).get("away", {}).get("id")
+    if not home_team_id or not away_team_id: return {"pace": 1.0, "home_defensive_factor": 1.0, "away_defensive_factor": 1.0}
+    # Lightweight team context (avoid heavy loops)
+    params = {"league": LEAGUE_ID, "season": STATS_SEASON}
+    pace = 1.0; h_def = 1.0; a_def = 1.0
+    # Optional: you can enrich with /statistics per team if needed
+    return {"pace": pace, "home_defensive_factor": h_def, "away_defensive_factor": a_def}
 
-    if not home_team_id or not away_team_id:
-        return {"pace": 1.0, "offensive_adjustment": 1.0, "defensive_adjustment": 1.0}
-
-    home_stats = get_team_stats(home_team_id)
-    away_stats = get_team_stats(away_team_id)
-
-    combined_pace = (home_stats["pace"] + away_stats["pace"]) / 2
-
-    avg_def_rating = 110.0
-
-    home_def_factor = avg_def_rating / max(home_stats["defensive_rating"], 90)
-    away_def_factor = avg_def_rating / max(away_stats["defensive_rating"], 90)
-
-    return {
-        "pace": combined_pace,
-        "offensive_adjustment": 1.0,
-        "home_defensive_factor": home_def_factor,
-        "away_defensive_factor": away_def_factor,
-        "home_pace": home_stats["pace"],
-        "away_pace": away_stats["pace"],
-        "home_ppg": home_stats["points_per_game"],
-        "away_ppg": away_stats["points_per_game"],
-        "home_opp_ppg": home_stats["opp_points_per_game"],
-        "away_opp_ppg": away_stats["opp_points_per_game"]
-    }
-
-
-# ============================================
-# STATISTICAL CALCULATIONS
-# ============================================
-def calculate_player_projection(player_stats: pd.DataFrame, prop_type: str,
-                                team_context: dict, opponent_defense: float = 1.0) -> Tuple[float, float]:
-    if player_stats.empty:
-        return 0.0, 0.0
-
-    stat_col = stat_map.get(prop_type)
-    if not stat_col or stat_col not in player_stats.columns:
-        return 0.0, 0.0
-
-    values = player_stats[stat_col].astype(float).values
-    n = len(values)
-
-    weights = np.exp(np.linspace(0, 1, n))
-    base_projection = np.average(values, weights=weights)
-
-    std_dev = np.std(values, ddof=1) if n > 1 else base_projection * 0.20
-
-    pace_multiplier = team_context.get("pace", 1.0)
-    defense_multiplier = opponent_defense
-
-    if prop_type == "points":
-        adjustment = pace_multiplier * defense_multiplier
-    elif prop_type == "assists":
-        adjustment = pace_multiplier * (0.7 + 0.3 * defense_multiplier)
-    elif prop_type == "rebounds":
-        adjustment = (0.8 * pace_multiplier + 0.2)
-    elif prop_type == "threes":
-        adjustment = pace_multiplier * defense_multiplier
-    else:
-        adjustment = 1.0
-
-    adjusted_projection = base_projection * adjustment
-    adjusted_std_dev = std_dev * (0.9 + 0.1 * pace_multiplier)
-
-    return adjusted_projection, adjusted_std_dev
-
-
-def american_to_decimal(odds) -> float:
-    if isinstance(odds, str):
-        odds = float(odds)
-
-    if isinstance(odds, float):
-        if 1.0 <= odds <= 100.0:
-            return odds
-
-    odds = int(odds)
-    if odds > 0:
-        return (odds / 100) + 1
-    else:
-        return (100 / abs(odds)) + 1
-
-
-def calculate_win_probability(projection: float, line: float, std_dev: float,
-                              pick: str = "over") -> float:
-    if std_dev == 0:
-        std_dev = projection * 0.20
-
-    z_score = (projection - line) / std_dev
-
-    def norm_cdf(x):
-        a1 =  0.254829592
-        a2 = -0.284496736
-        a3 =  1.421413741
-        a4 = -1.453152027
-        a5 =  1.061405429
-        p  =  0.3275911
-
-        sign = 1 if x >= 0 else -1
-        x = abs(x) / np.sqrt(2.0)
-
-        t = 1.0 / (1.0 + p * x)
-        y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * np.exp(-x * x)
-
-        return 0.5 * (1.0 + sign * y)
-
-    if pick == "over":
-        win_prob = 1 - norm_cdf(z_score)
-    else:
-        win_prob = norm_cdf(z_score)
-
-    # Wider bounds: 25% to 90%
-    return max(0.25, min(0.90, win_prob))
-
-
-def calculate_kelly_stake(win_prob: float, odds: int, bankroll: float,
-                         fraction: float = KELLY_FRACTION) -> Tuple[float, float]:
-    decimal_odds = american_to_decimal(odds)
-    b = decimal_odds - 1
-    p = win_prob
-    q = 1 - p
-
-    kelly = (b * p - q) / b
-
-    fractional_kelly = max(0, kelly * fraction)
-
-    stake = bankroll * fractional_kelly
-
-    return fractional_kelly * 100, stake
-
-
-def calculate_expected_value(win_prob: float, odds: int, stake: float) -> float:
-    decimal_odds = american_to_decimal(odds)
-    profit = stake * (decimal_odds - 1)
-    loss_prob = 1 - win_prob
-
-    ev = (win_prob * profit) - (loss_prob * stake)
-
-    return (ev / stake) * 100 if stake > 0 else 0
-
-
-# ============================================
-# ADAPTIVE LEARNING
-# ============================================
 def update_prop_weights(prop_id: str, actual_result: bool, predicted_prob: float):
-    prop_results[prop_id].append({
-        "result": actual_result,
-        "predicted": predicted_prob,
-        "timestamp": datetime.datetime.now()
-    })
-
+    prop_results[prop_id].append({"result": actual_result, "predicted": predicted_prob, "timestamp": datetime.datetime.now()})
     results = prop_results[prop_id]
     if len(results) >= 5:
-        correct = sum(1 for r in results[-20:] if r["result"])
-        accuracy = correct / len(results[-20:])
-
-        if accuracy > 0.60:
-            prop_weights[prop_id] *= 1.05
-        elif accuracy < 0.45:
-            prop_weights[prop_id] *= 0.95
-
-    save_data(WEIGHTS_FILE, dict(prop_weights))
-    save_data(RESULTS_FILE, dict(prop_results))
-
+        correct = sum(1 for r in results[-20:] if r["result"]); acc = correct / len(results[-20:])
+        if acc > 0.60: prop_weights[prop_id] *= 1.05
+        elif acc < 0.45: prop_weights[prop_id] *= 0.95
+    save_data(WEIGHTS_FILE, dict(prop_weights)); save_data(RESULTS_FILE, dict(prop_results))
 
 def get_prop_confidence_multiplier(prop_id: str) -> float:
-    return prop_weights.get(prop_id, 1.0)
+    return float(prop_weights.get(prop_id, 1.0))
 
-
-# ============================================
-# PROP ANALYSIS
-# ============================================
 def extract_props_from_odds(odds_data: dict, game_info: dict) -> List[dict]:
-    if not odds_data or "bookmakers" not in odds_data:
-        return []
-
+    if not odds_data or "bookmakers" not in odds_data: return []
     bookmakers = odds_data.get("bookmakers", [])
-    if not bookmakers:
-        return []
+    if not bookmakers: return []
+    props = []; bookmaker = bookmakers[0]
 
-    props = []
-    bookmaker = bookmakers[0]
-
-    ALLOWED_BET_TYPES = {
-        "moneyline", "money line", "match winner",
-        "spread", "point spread", "handicap",
-        "totals", "total", "over/under",
-        "points", "point", "player points",
-        "assists", "assist", "player assists",
-        "rebounds", "rebound", "player rebounds", "total rebounds",
-        "threes", "three", "3-point", "3-pointers", "player threes"
-    }
+    ALLOWED = {"moneyline","money line","match winner","spread","point spread","handicap","points","point","player points","assists","assist","player assists","rebounds","rebound","player rebounds","total rebounds","threes","three","3-point","3-pointers","player threes"}
+    PER_GAME_LIMIT = 20 if FAST_MODE else 200
 
     for bet in bookmaker.get("bets", []):
+        if len(props) >= PER_GAME_LIMIT:
+            break
         bet_name = bet.get("name", "").lower()
+        if not any(a in bet_name for a in ALLOWED): continue
 
-        if not any(allowed in bet_name for allowed in ALLOWED_BET_TYPES):
-            continue
-
-        is_game_bet = any(x in bet_name for x in ["moneyline", "money line", "match winner", "spread", "point spread", "handicap", "totals", "total", "over/under"])
-
-        if is_game_bet:
-            bet_type = None
-            if any(x in bet_name for x in ["moneyline", "money line", "match winner"]):
-                bet_type = "moneyline"
-            elif any(x in bet_name for x in ["spread", "point spread", "handicap"]):
-                bet_type = "spread"
-            elif any(x in bet_name for x in ["totals", "total", "over/under"]):
-                bet_type = "game_total"
-
-            if bet_type:
-                for value in bet.get("values", []):
-                    prop_text = value.get("value", "")
-                    odds_value = value.get("odd", -110)
-
-                    if isinstance(odds_value, str):
-                        odds_value = float(odds_value)
-
+        is_game = any(x in bet_name for x in ["moneyline","money line","match winner","spread","point spread","handicap"])
+        if is_game:
+            bet_type = "moneyline" if any(x in bet_name for x in ["moneyline","money line","match winner"]) else ("spread" if any(x in bet_name for x in ["spread","point spread","handicap"]) else None)
+            if not bet_type: continue
+            for value in bet.get("values", [])[:6]:
+                prop_text = value.get("value", ""); odds_value = value.get("odd", -110)
+                try:
+                    if isinstance(odds_value, str): odds_value = float(odds_value)
                     if isinstance(odds_value, float) and 1.0 <= odds_value <= 100.0:
-                        if odds_value >= 2.0:
-                            odds = int((odds_value - 1) * 100)
-                        else:
-                            odds = int(-100 / (odds_value - 1))
+                        odds = int((odds_value - 1) * 100) if odds_value >= 2.0 else int(-100 / (odds_value - 1))
                     else:
                         odds = int(odds_value)
-
-                    prop_id = f"{game_info['id']}_{bet_type}_{prop_text}".replace(" ", "_")
-
-                    props.append({
-                        "prop_id": prop_id,
-                        "game_id": game_info["id"],
-                        "game": f"{game_info['teams']['home']['name']} vs {game_info['teams']['away']['name']}",
-                        "game_date": game_info["date"],
-                        "player": prop_text,
-                        "prop_type": bet_type,
-                        "line": 0,
-                        "odds": odds,
-                        "bookmaker": "DraftKings"
-                    })
+                except Exception:
+                    continue
+                prop_id = f"{game_info['id']}_{bet_type}_{prop_text}".replace(" ", "_")
+                props.append({"prop_id": prop_id, "game_id": game_info["id"], "game": f"{game_info['teams']['home']['name']} vs {game_info['teams']['away']['name']}", "game_date": game_info["date"], "player": prop_text, "prop_type": bet_type, "line": 0.0, "odds": odds, "bookmaker": "DraftKings"})
+                if len(props) >= PER_GAME_LIMIT: break
         else:
             prop_type = None
-            if "point" in bet_name and "spread" not in bet_name:
-                prop_type = "points"
-            elif "assist" in bet_name:
-                prop_type = "assists"
-            elif "rebound" in bet_name:
-                prop_type = "rebounds"
-            elif "three" in bet_name or "3-point" in bet_name or "3-pointer" in bet_name:
-                prop_type = "threes"
-
-            if not prop_type:
-                continue
-
-            for value in bet.get("values", []):
-                prop_text = value.get("value", "")
-
-                parts = prop_text.split()
-                if len(parts) < 2:
-                    continue
-
+            if "point" in bet_name and "spread" not in bet_name: prop_type = "points"
+            elif "assist" in bet_name: prop_type = "assists"
+            elif "rebound" in bet_name: prop_type = "rebounds"
+            elif "three" in bet_name or "3-point" in bet_name or "3-pointer" in bet_name: prop_type = "threes"
+            if not prop_type: continue
+            for value in bet.get("values", [])[:10]:
+                text = value.get("value", ""); parts = text.split()
+                if len(parts) < 2: continue
                 try:
-                    line = float(parts[-1])
-                    player_name = " ".join(parts[:-1])
-                except ValueError:
-                    continue
-
+                    line = float(parts[-1]); player_name = " ".join(parts[:-1])
+                except ValueError: continue
                 odds_value = value.get("odd", -110)
-
-                if isinstance(odds_value, str):
-                    odds_value = float(odds_value)
-
-                if isinstance(odds_value, float) and 1.0 <= odds_value <= 100.0:
-                    if odds_value >= 2.0:
-                        odds = int((odds_value - 1) * 100)
+                try:
+                    if isinstance(odds_value, str): odds_value = float(odds_value)
+                    if isinstance(odds_value, float) and 1.0 <= odds_value <= 100.0:
+                        odds = int((odds_value - 1) * 100) if odds_value >= 2.0 else int(-100 / (odds_value - 1))
                     else:
-                        odds = int(-100 / (odds_value - 1))
-                else:
-                    odds = int(odds_value)
-
+                        odds = int(odds_value)
+                except Exception:
+                    continue
                 prop_id = f"{game_info['id']}_{player_name}_{prop_type}".replace(" ", "_")
-
-                props.append({
-                    "prop_id": prop_id,
-                    "game_id": game_info["id"],
-                    "game": f"{game_info['teams']['home']['name']} vs {game_info['teams']['away']['name']}",
-                    "game_date": game_info["date"],
-                    "player": player_name,
-                    "prop_type": prop_type,
-                    "line": line,
-                    "odds": odds,
-                    "bookmaker": "DraftKings"
-                })
-
+                props.append({"prop_id": prop_id, "game_id": game_info["id"], "game": f"{game_info['teams']['home']['name']} vs {game_info['teams']['away']['name']}", "game_date": game_info["date"], "player": player_name, "prop_type": prop_type, "line": line, "odds": odds, "bookmaker": "DraftKings"})
+                if len(props) >= PER_GAME_LIMIT: break
     return props
 
+def _market_key(prop_type: str) -> str:
+    m = prop_type.lower()
+    return {"points":"PTS","assists":"AST","rebounds":"REB","threes":"3PM","moneyline":"Moneyline","spread":"Spread"}.get(m, "DEFAULT")
 
-def analyze_prop(prop: dict, matchup_context: dict = None) -> Optional[dict]:
-    ALLOWED_PROPS = ["points", "assists", "rebounds", "threes", "moneyline", "spread", "game_total"]
-    if prop["prop_type"] not in ALLOWED_PROPS:
-        return None
+def analyze_player_prop(prop: dict, matchup_context: dict) -> Optional[dict]:
+    if prop.get("odds") is not None and (prop["odds"] < MIN_ODDS or prop["odds"] > MAX_ODDS): return None
+    df_last, df_curr = get_player_stats_split(prop["player"], 25, 5)
+    if (df_last.empty and df_curr.empty) or (len(df_last) + len(df_curr) < 3): return None
+    stat_col = stat_map.get(prop["prop_type"]);
+    vl = df_last[stat_col].astype(float).tolist() if (stat_col and stat_col in df_last.columns) else []
+    vc = df_curr[stat_col].astype(float).tolist() if (stat_col and stat_col in df_curr.columns) else []
+    n_curr = float(len(vc)); w_cur = blend_weight(n_curr, n0=PRIOR_GAMES_STRENGTH, continuity=TEAM_CONTINUITY_DEFAULT)
+    # Replication-based blend (fast and simple)
+    merged = []
+    rep_last = max(1, int(round((1.0 - w_cur) * 10))); rep_curr = max(1, int(round(w_cur * 10)))
+    for v in vl: merged.extend([v]*rep_last)
+    for v in vc: merged.extend([v]*rep_curr)
+    if not merged: merged = vl or vc
 
-    # Filter unreasonable odds (e.g., -999999 or extreme longshots)
-    odds = prop.get("odds")
-    if odds is not None and (odds < MIN_ODDS or odds > MAX_ODDS):
-        if DEBUG_MODE:
-            player_name = prop.get("player", prop.get("prop_type", "Unknown"))
-            print(f"      ❌ {player_name} {prop['prop_type']} - Odds {odds:+d} outside profitable range [{MIN_ODDS}, {MAX_ODDS}]")
-        return None
+    pace = matchup_context.get("pace", 1.0)
+    defense = (matchup_context.get("home_defensive_factor", 1.0) + matchup_context.get("away_defensive_factor", 1.0)) / 2.0
+    projection, std_dev = project_stat(merged, prop["prop_type"], pace, defense)
+    if projection == 0 or std_dev == 0: return None
 
-    if matchup_context is None:
-        matchup_context = {"pace": 1.0, "home_defensive_factor": 1.0, "away_defensive_factor": 1.0}
+    disparity = projection - prop["line"]; pick = "over" if disparity > 0 else "under"
+    risk_adj = disparity / std_dev if std_dev > 0 else 0.0
+    edge_pct = (disparity / prop["line"]) * 100 if prop["line"] != 0 else 0.0
 
-    # Handle game-level bets
-    if prop["prop_type"] in ["moneyline", "spread", "game_total"]:
-        odds = prop["odds"]
-        if odds < 0:
-            implied_prob = abs(odds) / (abs(odds) + 100)
-        else:
-            implied_prob = 100 / (odds + 100)
+    p_hat, _ = prop_win_probability(prop["prop_type"], merged, prop["line"], pick, projection, std_dev)
+    conf_mult = get_prop_confidence_multiplier(prop["prop_id"])
+    n_eff = N_EFF_BY_MARKET.get(_market_key(prop["prop_type"]), N_EFF_BY_MARKET["DEFAULT"])
+    n_eff_scaled = max(10.0, min(200.0, n_eff * conf_mult))
+    p_samples = sample_beta_posterior(p_hat, n_eff_scaled, n_samples=400 if FAST_MODE else 600)
 
-        adjusted_prob = implied_prob * 1.02
+    dec = american_to_decimal(prop["odds"]); b = dec - 1.0
+    equity = load_equity(); dd_scale = drawdown_scale(equity, floor=0.6, window=14)
+    kcfg = KellyConfig(q_conservative=0.30, fk_low=0.25, fk_high=0.50, dd_scale=dd_scale)
+    f, p_c, _, p_mean = dynamic_fractional_kelly(p_samples, b, kcfg)
+    if f <= 0.0: return None
+    p_be = 1.0 / (1.0 + b)
+    if p_c <= p_be: return None
+    elg = risk_adjusted_elg(p_samples, b, f)
+    if elg <= 0.0: return None
 
-        if adjusted_prob < MIN_CONFIDENCE:
-            if DEBUG_MODE:
-                print(f"      ❌ {prop['prop_type']} - Win prob {adjusted_prob*100:.1f}% < {MIN_CONFIDENCE*100:.1f}%")
-            return None
-
-        kelly_pct, stake = calculate_kelly_stake(adjusted_prob, odds, BANKROLL)
-
-        if stake < MIN_KELLY_STAKE:
-            if DEBUG_MODE:
-                print(f"      ❌ {prop['prop_type']} - Stake ${stake:.2f} < ${MIN_KELLY_STAKE}")
-            return None
-
-        ev = calculate_expected_value(adjusted_prob, odds, stake)
-
-        decimal_odds = american_to_decimal(odds)
-        potential_profit = stake * (decimal_odds - 1)
-
-        composite_score = (
-            (adjusted_prob * 100 * 0.60) +
-            (kelly_pct * 0.40)
-        )
-
-        if DEBUG_MODE:
-            print(f"      ✅ {prop['prop_type']} PASSED - Win: {adjusted_prob*100:.1f}%, Stake: ${stake:.2f}")
-
-        prop.update({
-            "projection": prop["line"],
-            "std_dev": 0,
-            "disparity": 0,
-            "pick": prop.get("player", "N/A"),
-            "edge": 0,
-            "risk_adjusted": 0,
-            "trend": 0,
-            "win_prob": round(adjusted_prob * 100, 2),
-            "kelly_pct": round(kelly_pct, 2),
-            "stake": round(stake, 2),
-            "potential_profit": round(potential_profit, 2),
-            "ev": round(ev, 2),
-            "confidence_mult": 1.0,
-            "roi": round((potential_profit / stake) * 100, 2) if stake > 0 else 0,
-            "composite_score": round(composite_score, 2),
-            "games_analyzed": 0,
-            "pace_factor": round(matchup_context.get("pace", 1.0), 3),
-            "defense_factor": 1.0
-        })
-
-        return prop
-
-    # Handle player props
-    if DEBUG_MODE:
-        print(f"   🏀 Analyzing: {prop['player']} {prop['prop_type']} {prop['line']}")
-
-    player_stats = get_player_recent_stats(prop["player"], LOOKBACK_GAMES)
-
-    if player_stats.empty or len(player_stats) < MIN_GAMES_REQUIRED:
-        if DEBUG_MODE:
-            print(f"      ❌ Insufficient data: {len(player_stats)} games < {MIN_GAMES_REQUIRED} required")
-        return None
-
-    opponent_defense = (matchup_context.get("home_defensive_factor", 1.0) +
-                       matchup_context.get("away_defensive_factor", 1.0)) / 2
-
-    projection, std_dev = calculate_player_projection(
-        player_stats,
-        prop["prop_type"],
-        matchup_context,
-        opponent_defense
-    )
-
-    if projection == 0 or std_dev == 0:
-        if DEBUG_MODE:
-            print(f"      ❌ Invalid projection: proj={projection}, std={std_dev}")
-        return None
-
-    disparity = projection - prop["line"]
-    edge = (disparity / prop["line"]) * 100
-
-    pick = "over" if disparity > 0 else "under"
-
-    risk_adjusted = disparity / std_dev if std_dev > 0 else 0
-
-    win_prob = calculate_win_probability(projection, prop["line"], std_dev, pick)
-
-    confidence_mult = get_prop_confidence_multiplier(prop["prop_id"])
-    adjusted_prob = min(0.90, win_prob * confidence_mult)
-
-    if adjusted_prob < MIN_CONFIDENCE:
-        if DEBUG_MODE:
-            print(f"      ❌ Low confidence: {adjusted_prob*100:.1f}% < {MIN_CONFIDENCE*100:.1f}%")
-        return None
-
-    kelly_pct, stake = calculate_kelly_stake(adjusted_prob, prop["odds"], BANKROLL)
-
-    if stake < MIN_KELLY_STAKE:
-        if DEBUG_MODE:
-            print(f"      ❌ Small stake: ${stake:.2f} < ${MIN_KELLY_STAKE}")
-        return None
-
-    ev = calculate_expected_value(adjusted_prob, prop["odds"], stake)
-
-    decimal_odds = american_to_decimal(prop["odds"])
-    potential_profit = stake * (decimal_odds - 1)
-
-    stat_col = stat_map.get(prop["prop_type"])
-    if stat_col and stat_col in player_stats.columns:
-        values = player_stats[stat_col].astype(float).values
-        if len(values) >= 7:
-            avg_last3 = np.mean(values[:3])
-            avg_last7 = np.mean(values[:7])
-            trend = ((avg_last3 - avg_last7) / avg_last7) * 100 if avg_last7 > 0 else 0
-        else:
-            trend = 0
-    else:
-        trend = 0
-
-    composite_score = (
-        (adjusted_prob * 100 * 0.50) +
-        (kelly_pct * 0.25) +
-        (max(0, ev) * 0.15) +
-        (max(0, risk_adjusted * 5) * 0.10)
-    )
-
-    if DEBUG_MODE:
-        print(f"      ✅ PASSED - Proj: {projection:.1f}, Line: {prop['line']}, Win: {adjusted_prob*100:.1f}%, Stake: ${stake:.2f}")
+    stake = BANKROLL * f
+    if stake < MIN_KELLY_STAKE: return None
+    potential_profit = stake * (dec - 1.0)
+    ev_dollars = (p_mean * potential_profit) - ((1.0 - p_mean) * stake)
+    ev_pct = (ev_dollars / max(1e-9, stake)) * 100.0
 
     prop.update({
-        "projection": round(projection, 2),
-        "std_dev": round(std_dev, 2),
-        "disparity": round(disparity, 2),
-        "pick": pick,
-        "edge": round(edge, 2),
-        "risk_adjusted": round(risk_adjusted, 2),
-        "trend": round(trend, 2),
-        "win_prob": round(adjusted_prob * 100, 2),
-        "kelly_pct": round(kelly_pct, 2),
-        "stake": round(stake, 2),
-        "potential_profit": round(potential_profit, 2),
-        "ev": round(ev, 2),
-        "confidence_mult": round(confidence_mult, 3),
-        "roi": round((potential_profit / stake) * 100, 2) if stake > 0 else 0,
-        "composite_score": round(composite_score, 2),
-        "games_analyzed": len(player_stats),
-        "pace_factor": round(matchup_context.get("pace", 1.0), 3),
-        "defense_factor": round(opponent_defense, 3)
+        "projection": round(projection, 2), "std_dev": round(std_dev, 2), "disparity": round(disparity, 2),
+        "pick": pick, "edge": round(edge_pct, 2), "risk_adjusted": round(risk_adj, 2), "trend": 0.0,
+        "win_prob": round(p_mean * 100, 2), "p_conservative": round(p_c, 4), "p_break_even": round(p_be, 4),
+        "kelly_pct": round(f * 100, 2), "stake": round(stake, 2), "potential_profit": round(potential_profit, 2),
+        "ev": round(ev_pct, 2), "confidence_mult": round(conf_mult, 3),
+        "roi": round((potential_profit / max(1e-9, stake)) * 100.0, 2),
+        "elg": round(elg, 8), "composite_score": round(elg, 8),
+        "games_analyzed": int(len(vl) + len(vc)), "pace_factor": round(pace, 3), "defense_factor": round(defense, 3)
     })
-
     return prop
 
+def analyze_game_bet(prop: dict) -> Optional[dict]:
+    if prop.get("odds") is not None and (prop["odds"] < MIN_ODDS or prop["odds"] > MAX_ODDS): return None
+    p_hat = implied_prob_from_american(prop["odds"])
+    dec = american_to_decimal(prop["odds"]); b = dec - 1.0
+    conf_mult = get_prop_confidence_multiplier(prop["prop_id"])
+    n_eff = N_EFF_BY_MARKET.get(_market_key(prop["prop_type"]), 45.0)
+    p_samples = sample_beta_posterior(p_hat, max(10.0, min(120.0, n_eff * conf_mult)), n_samples=400 if FAST_MODE else 600)
+    equity = load_equity(); dd_scale = drawdown_scale(equity, floor=0.6, window=14)
+    kcfg = KellyConfig(q_conservative=0.30, fk_low=0.25, fk_high=0.50, dd_scale=dd_scale)
+    f, p_c, _, p_mean = dynamic_fractional_kelly(p_samples, b, kcfg)
+    if f <= 0.0: return None
+    p_be = 1.0 / (1.0 + b)
+    if p_c <= p_be: return None
+    elg = risk_adjusted_elg(p_samples, b, f)
+    if elg <= 0.0: return None
+    stake = BANKROLL * f
+    if stake < MIN_KELLY_STAKE: return None
+    potential_profit = stake * (dec - 1.0)
+    ev_dollars = (p_mean * potential_profit) - ((1.0 - p_mean) * stake)
+    ev_pct = (ev_dollars / max(1e-9, stake)) * 100.0
+    prop.update({
+        "projection": 0.0, "std_dev": 0.0, "disparity": 0.0, "pick": prop.get("player","N/A"),
+        "edge": 0.0, "risk_adjusted": 0.0, "trend": 0.0,
+        "win_prob": round(p_mean * 100, 2), "p_conservative": round(p_c, 4), "p_break_even": round(p_be, 4),
+        "kelly_pct": round(f * 100, 2), "stake": round(stake, 2), "potential_profit": round(potential_profit, 2),
+        "ev": round(ev_pct, 2), "confidence_mult": round(conf_mult, 3),
+        "roi": round((potential_profit / max(1e-9, stake)) * 100.0, 2),
+        "elg": round(elg, 8), "composite_score": round(elg, 8), "games_analyzed": 0,
+        "pace_factor": 1.0, "defense_factor": 1.0
+    })
+    return prop
 
-# ============================================
-# MAIN EXECUTION
-# ============================================
+def top_by_category(analyzed_props: List[dict], k="elg") -> Dict[str, List[dict]]:
+    def score(p): return p.get(k, p.get("composite_score", 0.0))
+    groups = {}
+    for key, _label in CATEGORIES:
+        items = [p for p in analyzed_props if p.get("prop_type") == key]
+        items.sort(key=lambda x: score(x), reverse=True)
+        groups[key] = items[:TOP_PER_CATEGORY]
+    return groups
+
+def blend_weight(n_current: float, n0: float = PRIOR_GAMES_STRENGTH, continuity: float = TEAM_CONTINUITY_DEFAULT) -> float:
+    continuity = max(0.25, min(1.0, continuity))
+    n0_eff = n0 / continuity
+    return n_current / (n_current + n0_eff + 1e-9)
+
 def run_analysis():
-    print("=" * 70)
-    print("NBA PROP ANALYZER - FIXED FOR PRO PLAN ✅")
-    print("=" * 70)
-    print(f"API Plan: PRO (Player Stats Enabled)")
-    print(f"Games/Odds Season: {SEASON}")
-    print(f"Player Stats Season: {STATS_SEASON} (most recent + current)")
-    print(f"Bankroll: ${BANKROLL:,.2f}")
-    print(f"Kelly Fraction: {KELLY_FRACTION:.2%}")
-    print(f"Min Confidence: {MIN_CONFIDENCE:.1%}")
-    print(f"Min Kelly Stake: ${MIN_KELLY_STAKE}")
-    print(f"Min Games Required: {MIN_GAMES_REQUIRED}")
-    print(f"Debug Mode: {'ON' if DEBUG_MODE else 'OFF'}")
-    print("=" * 70)
+    start = time.monotonic()
+    print("=" * 72)
+    print("RIQ MEEPING MACHINE 🚀 — Unified Analyzer")
+    print("=" * 72)
+    print(f"Season: {SEASON} | Stats: prior={STATS_SEASON} | Bankroll: ${BANKROLL:.2f}")
+    print(f"Odds Range: {MIN_ODDS} to {MAX_ODDS} | Ranking: ELG + dynamic Kelly")
+    print(f"FAST_MODE: {'ON' if FAST_MODE else 'OFF'} | Time Budget: {RUN_TIME_BUDGET_SEC}s")
+    print("=" * 72)
     print()
 
-    print("📅 Fetching upcoming games (next 3 days)...")
-    games = get_upcoming_games(days_ahead=3)
-    print(f"   Found {len(games)} games in next 3 days\n")
-
-    if not games:
-        print("❌ No upcoming games found")
+    # Quick API ping to fail fast if key/network is bad
+    ping = fetch_json("/games", params={"league": LEAGUE_ID, "season": SEASON, "date": datetime.date.today().strftime("%Y-%m-%d")})
+    if ping is None:
+        print("❌ API unreachable or key invalid. Set API_SPORTS_KEY/APISPORTS_KEY and try again.")
         return
+
+    games = get_upcoming_games()
+    if not games:
+        print("❌ No upcoming games found"); return
 
     print("🎲 Fetching odds and props...")
-    print("   ✅ ANALYZING: Points, Assists, Rebounds, 3PM, Moneyline, Spread, Totals")
-    print("   ❌ EXCLUDING: Blocks, Steals, Turnovers, Minutes, etc.")
-    all_props = []
-    game_contexts = {}
-
-    for game in games[:10]:
-        matchup_context = get_matchup_context(game)
-        game_contexts[game["id"]] = matchup_context
-
-        game_odds = get_game_odds(game["id"])
-        if game_odds:
-            props = extract_props_from_odds(game_odds, game)
+    print("   ✅ Points, Assists, Rebounds, 3PM, Moneyline, Spread")
+    print("   ❌ Excluding: Totals, Blocks, Steals, TOs, Minutes")
+    all_props = []; contexts = {}
+    for g in games[:MAX_GAMES]:
+        if time.monotonic() - start > RUN_TIME_BUDGET_SEC:
+            print("⏳ Time budget reached while reading odds.")
+            break
+        ctx = get_matchup_context(g); contexts[g["id"]] = ctx
+        od = get_game_odds(g["id"])
+        if od:
+            props = extract_props_from_odds(od, g)
             all_props.extend(props)
+            info = f"Pace: {ctx['pace']:.2f}x" if ctx['pace'] != 1.0 else ""
+            print(f"   ✓ {g['teams']['home']['name']} vs {g['teams']['away']['name']}: {len(props)} props {info}")
+        time.sleep(SLEEP_LONG)
 
-            pace_info = f"Pace: {matchup_context['pace']:.2f}x" if matchup_context['pace'] != 1.0 else ""
-            print(f"   ✓ {game['teams']['home']['name']} vs {game['teams']['away']['name']}: {len(props)} props {pace_info}")
+    player_props = [p for p in all_props if p["prop_type"] in ["points","assists","rebounds","threes"]]
+    game_bets = [p for p in all_props if p["prop_type"] in ["moneyline","spread"]]
 
-        time.sleep(0.5)
+    # Limit for speed
+    if len(player_props) > MAX_PLAYER_PROPS_ANALYZE:
+        print(f"⚡ Limiting player props to first {MAX_PLAYER_PROPS_ANALYZE} for speed.")
+        player_props = player_props[:MAX_PLAYER_PROPS_ANALYZE]
 
-    player_props = [p for p in all_props if p["prop_type"] in ["points", "assists", "rebounds", "threes"]]
-    game_bets = [p for p in all_props if p["prop_type"] in ["moneyline", "spread", "game_total"]]
+    print(f"\n   Total props: {len(all_props)} | Player: {len(player_props)} | Game: {len(game_bets)}\n")
+    print(f"🔍 {random.choice(MEEP_MESSAGES)}...")
 
-    print(f"\n   Total props extracted: {len(all_props)}")
-    print(f"   Player props (PTS/AST/REB/3PM): {len(player_props)}")
+    analyzed = []
+    for idx, prop in enumerate(player_props + game_bets, 1):
+        if time.monotonic() - start > RUN_TIME_BUDGET_SEC:
+            print("⏳ Time budget reached during analysis.")
+            break
+        try:
+            if prop["prop_type"] in ["points","assists","rebounds","threes"]:
+                res = analyze_player_prop(prop, contexts.get(prop["game_id"], {}))
+            else:
+                res = analyze_game_bet(prop)
+            if res: analyzed.append(res)
+        except Exception as e:
+            if DEBUG_MODE: print(f"   ⚠️ Analysis failed for {prop.get('player')} {prop.get('prop_type')}: {e}")
+        if idx % 25 == 0:
+            print(f"   {random.choice(MEEP_MESSAGES)}... {idx}/{len(player_props)+len(game_bets)} analyzed")
+        if prop["prop_type"] in ["points","assists","rebounds","threes"]:
+            time.sleep(SLEEP_SHORT)
 
-    # OPTIMIZATION: Limit to first 10 player props for faster testing
-    if len(player_props) > 10:
-        print(f"   ⚡ Limiting to first 10 player props for speed")
-        player_props = player_props[:10]
+    print(f"\n   ✅ {len(analyzed)} props meet ELG gates\n")
+    if not analyzed:
+        print("❌ No props passed ELG gates"); return
 
-    print(f"   Game bets (ML/Spread/Total): {len(game_bets)}")
-    print(f"   Total to analyze: {len(player_props) + len(game_bets)}\n")
+    groups = top_by_category(analyzed, k="elg")
+    print("=" * 72); print(f"TOP {TOP_PER_CATEGORY} PER CATEGORY (by ELG)"); print("=" * 72)
+    for key, label in CATEGORIES:
+        bucket = groups.get(key, [])
+        if not bucket: continue
+        print(f"\n{label}\n" + "-" * len(label))
+        for i, p in enumerate(bucket, 1):
+            conf = "🟢" if p["win_prob"] >= 65 else ("🟡" if p["win_prob"] >= 55 else "🟠")
+            score_val = p.get("elg", p.get("composite_score", 0.0))
+            print(f"{conf} #{i:2d} | {p['player']:<25s} | {label:<8s} | ELG: {score_val:.6f}")
+            print(f"     Game: {p['game']}")
+            if key in ["points","assists","rebounds","threes"]:
+                print(f"     Line: {p['line']:<6.1f} | Proj: {p['projection']:<6.2f} | Δ: {p['disparity']:+.2f} | σ: {p['std_dev']:.2f}")
+                print(f"     🏀 Pace: {p.get('pace_factor',1.0):.3f}x | 🛡️ Defense: {p.get('defense_factor',1.0):.3f}x")
+            print(f"     Pick: {p['pick'].upper() if key!='moneyline' else p['pick']:<6s} | Odds: {p['odds']:+d}")
+            print(f"     Kelly: {p['kelly_pct']:.2f}% | Stake: ${p['stake']:.2f} | Profit: ${p['potential_profit']:.2f}")
+            print(f"     EV: {p['ev']:+.2f}% | Win Prob: {p['win_prob']:.1f}%")
 
-    print("🔍 Analyzing props with Kelly Criterion...")
-    if DEBUG_MODE:
-        print("   🐛 DEBUG MODE ON - Showing detailed analysis")
-    analyzed_props = []
-
-    all_to_analyze = player_props + game_bets
-
-    for idx, prop in enumerate(all_to_analyze, 1):
-        if not DEBUG_MODE and idx % 50 == 0:
-            print(f"   Progress: {idx}/{len(all_to_analyze)} props analyzed...")
-
-        matchup_context = game_contexts.get(prop["game_id"], {})
-
-        result = analyze_prop(prop, matchup_context)
-        if result:
-            analyzed_props.append(result)
-
-        if prop["prop_type"] in ["points", "assists", "rebounds", "threes"]:
-            time.sleep(0.2)
-
-    print(f"\n   ✅ {len(analyzed_props)} props meet criteria (out of {len(all_to_analyze)})\n")
-
-    if not analyzed_props:
-        print("❌ No props met minimum thresholds")
-        print("\n💡 Troubleshooting:")
-        print("   1. Check if player stats are being fetched (look for '📦 Cache hit' or '✅ Parsed' messages)")
-        print("   2. Lower MIN_CONFIDENCE further (currently {:.1%})".format(MIN_CONFIDENCE))
-        print("   3. Check API response structures match expected format")
-        print("   4. Verify player names in odds match player search results")
-        return
-
-    analyzed_props.sort(key=lambda x: x["composite_score"], reverse=True)
-    top_props = analyzed_props[:TOP_PROPS]
-
-    print("=" * 70)
-    print(f"TOP {len(top_props)} PROPS (Ranked by Composite Score)")
-    print("=" * 70)
-    print("Formula: Score = (WinProb×50%) + (Kelly×25%) + (EV×15%) + (RiskAdj×10%)")
-    print("=" * 70)
-    print()
-
-    total_stake = sum(p["stake"] for p in top_props)
-    total_potential = sum(p["potential_profit"] for p in top_props)
-    avg_win_prob = sum(p["win_prob"] for p in top_props) / len(top_props)
-    avg_ev = sum(p["ev"] for p in top_props) / len(top_props)
-
-    for idx, prop in enumerate(top_props, 1):
-        confidence_indicator = "🟢" if prop['win_prob'] >= 65 else "🟡" if prop['win_prob'] >= 55 else "🟠"
-
-        print(f"{confidence_indicator} #{idx:2d} | {prop['player']:<25s} | {prop['prop_type'].upper():<8s} | Score: {prop['composite_score']:.2f}")
-        print(f"     Game: {prop['game']}")
-        print(f"     ⭐ WIN PROBABILITY: {prop['win_prob']:.1f}% | Confidence: {prop['confidence_mult']:.3f}x")
-        print(f"     Line: {prop['line']:<6.1f} | Proj: {prop['projection']:<6.2f} | Disparity: {prop['disparity']:+.2f} | σ: {prop['std_dev']:.2f}")
-        print(f"     Pick: {prop['pick'].upper():<6s} | Odds: {prop['odds']:+d}")
-        print(f"     🏀 Pace: {prop.get('pace_factor', 1.0):.3f}x | 🛡️ Defense: {prop.get('defense_factor', 1.0):.3f}x")
-        print(f"     Edge: {prop['edge']:+.1f}% | Risk-Adj: {prop['risk_adjusted']:+.2f} | Trend: {prop['trend']:+.1f}%")
-        print(f"     Kelly: {prop['kelly_pct']:.2f}% | Stake: ${prop['stake']:.2f} | Profit: ${prop['potential_profit']:.2f}")
-        print(f"     EV: {prop['ev']:+.2f}% | ROI: {prop['roi']:.1f}%")
-        print()
-
-    print("=" * 70)
-    print("PORTFOLIO SUMMARY")
-    print("=" * 70)
-    print(f"Total Bets:           {len(top_props)}")
-    print(f"Total Stake:          ${total_stake:.2f} ({total_stake/BANKROLL*100:.1f}% of bankroll)")
-    print(f"Total Potential:      ${total_potential:.2f}")
-    print(f"Expected Return:      ${total_potential * (avg_win_prob/100):.2f}")
-    print(f"⭐ Avg Win Probability: {avg_win_prob:.1f}%")
-    print(f"Avg Expected Value:   {avg_ev:+.2f}%")
-    print(f"Risk Level:           {'LOW' if total_stake < BANKROLL * 0.15 else 'MODERATE' if total_stake < BANKROLL * 0.30 else 'HIGH'}")
-    print()
-    print("Confidence Levels:")
-    high_conf = sum(1 for p in top_props if p['win_prob'] >= 65)
-    med_conf = sum(1 for p in top_props if 55 <= p['win_prob'] < 65)
-    low_conf = sum(1 for p in top_props if p['win_prob'] < 55)
-    print(f"  🟢 High (65%+):     {high_conf} bets")
-    print(f"  🟡 Medium (55-65%): {med_conf} bets")
-    print(f"  🟠 Lower (50-55%):  {low_conf} bets")
-    print("=" * 70)
-
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = f"prop_analysis_{timestamp}.json"
-
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S"); output_file = f"prop_analysis_{timestamp}.json"
+    groups_json = {key: groups.get(key, []) for key,_ in CATEGORIES}
     with open(output_file, "w") as f:
-        json.dump({
-            "timestamp": timestamp,
-            "bankroll": BANKROLL,
-            "kelly_fraction": KELLY_FRACTION,
-            "top_props": top_props,
-            "summary": {
-                "total_bets": len(top_props),
-                "total_stake": total_stake,
-                "total_potential": total_potential,
-                "avg_win_prob": avg_win_prob,
-                "avg_ev": avg_ev
-            }
-        }, f, indent=2)
-
-    print(f"\n✅ Results saved to: {output_file}")
-
+        json.dump({"timestamp": timestamp, "season": SEASON, "stats_season": STATS_SEASON, "bankroll": BANKROLL, "top_by_category": groups_json}, f, indent=2)
+    print(f"\n✅ Results saved to: {output_file}\n🎉 Meep complete!")
 
 if __name__ == "__main__":
-    try:
-        run_analysis()
-    except KeyboardInterrupt:
-        print("\n\n⚠️  Analysis interrupted by user")
+    try: run_analysis()
+    except KeyboardInterrupt: print("\n\n⚠️ Interrupted by user")
     except Exception as e:
-        print(f"\n\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\n\n❌ Error: {e}"); import traceback; traceback.print_exc()
