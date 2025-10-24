@@ -117,24 +117,27 @@ TEAM_CONTINUITY_DEFAULT = 0.7  # 0.5-0.9
 
 ## ML Training (Optional)
 
-### Setup
+### One-Command Setup
 ```bash
-python setup_kaggle.py  # Authenticate with Kaggle
-python explore_dataset.py  # Inspect data structure
+python setup_kaggle.py  # Set up Kaggle credentials (one time)
 ```
 
-### Train
+### One-Command Training (Fully Automated!)
 ```bash
-python train_prop_model.py
+python train_auto.py
 ```
 
-This trains LightGBM models for:
-- Points
-- Assists
-- Rebounds
-- 3-Pointers
+**That's it!** The script automatically:
+1. ✅ Downloads Kaggle dataset
+2. ✅ Processes and cleans data
+3. ✅ Engineers 50+ features
+4. ✅ Trains LightGBM models (PTS, AST, REB, 3PM)
+5. ✅ Saves models to `models/` directory
+6. ✅ Creates model registry with metrics
 
-Models saved to `models/` directory.
+**Runtime:** ~5-10 minutes depending on dataset size
+
+Models are automatically ready for integration with the analyzer!
 
 ### Integration
 
