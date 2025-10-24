@@ -1271,51 +1271,115 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
 
         log(f"Loaded {len(priors_teams):,} team-season priors from Team Summaries", verbose)
 
-    # Player priors (simplified - just Per 100 Poss for now)
-    per100_path = priors_root / "Per 100 Poss.csv"
+    # Player priors - comprehensive integration of multiple CSVs
+    def load_and_filter_player_csv(path: Path, csv_name: str) -> Optional[pd.DataFrame]:
+        """Helper to load player CSV with NBA filtering and TOT preference"""
+        if not path.exists():
+            log(f"  Skipping {csv_name} (not found)", verbose)
+            return None
+
+        df = pd.read_csv(path, low_memory=False)
+
+        # Filter NBA
+        if "lg" in df.columns:
+            df = df[df["lg"] == "NBA"]
+
+        # Prefer TOT rows for multi-team seasons
+        if "team" in df.columns and "player_id" in df.columns:
+            tot_rows = df[df["team"] == "TOT"]
+            non_tot = df[df["team"] != "TOT"]
+            has_tot = set(tot_rows["player_id"])
+            non_tot = non_tot[~non_tot["player_id"].isin(has_tot)]
+            df = pd.concat([tot_rows, non_tot], ignore_index=True)
+
+        log(f"  Loaded {len(df):,} rows from {csv_name}", verbose)
+        return df
+
     priors_players = pd.DataFrame()
 
-    if per100_path.exists():
-        pp = pd.read_csv(per100_path, low_memory=False)
-        # Filter NBA
-        if "lg" in pp.columns:
-            pp = pp[pp["lg"] == "NBA"]
+    # 1. Per 100 Poss - core rate stats
+    per100_path = priors_root / "Per 100 Poss.csv"
+    per100 = load_and_filter_player_csv(per100_path, "Per 100 Poss.csv")
+    if per100 is not None:
+        cols = ["season", "player_id", "player", "age", "pos", "g", "mp",
+                "pts_per_100_poss", "trb_per_100_poss", "ast_per_100_poss",
+                "stl_per_100_poss", "blk_per_100_poss", "tov_per_100_poss",
+                "fg_per_100_poss", "fga_per_100_poss", "fg_percent",
+                "x3p_per_100_poss", "x3pa_per_100_poss", "x3p_percent",
+                "ft_per_100_poss", "fta_per_100_poss", "ft_percent",
+                "orb_per_100_poss", "drb_per_100_poss",
+                "o_rtg", "d_rtg"]
+        cols = [c for c in cols if c in per100.columns]
+        priors_players = per100[cols].copy()
 
-        # Prefer TOT rows for multi-team seasons; else keep all
-        if "team" in pp.columns:
-            tot_rows = pp[pp["team"] == "TOT"]
-            non_tot = pp[pp["team"] != "TOT"]
-            # For players with TOT, keep only TOT; else keep their single-team row
-            has_tot = set(tot_rows["player_id"]) if "player_id" in tot_rows.columns else set()
-            non_tot = non_tot[~non_tot["player_id"].isin(has_tot)] if "player_id" in non_tot.columns else non_tot
-            pp = pd.concat([tot_rows, non_tot], ignore_index=True)
+    # 2. Advanced - PER, WS, BPM, TS%, USG%
+    advanced_path = priors_root / "Advanced.csv"
+    advanced = load_and_filter_player_csv(advanced_path, "Advanced.csv")
+    if advanced is not None and not priors_players.empty:
+        adv_cols = ["season", "player_id", "per", "ts_percent", "usg_percent",
+                    "ws", "ws_per_48", "bpm", "obpm", "dbpm", "vorp"]
+        adv_cols = [c for c in adv_cols if c in advanced.columns]
+        if len(adv_cols) > 2:  # Need at least season + player_id + 1 stat
+            priors_players = priors_players.merge(
+                advanced[adv_cols], on=["season", "player_id"], how="left"
+            )
 
-        # Keep key rate columns
-        player_cols = ["season", "player_id", "player", "age", "pos", "g", "mp",
-                       "pts_per_100_poss", "trb_per_100_poss", "ast_per_100_poss",
-                       "stl_per_100_poss", "blk_per_100_poss", "tov_per_100_poss",
-                       "fg_per_100_poss", "fga_per_100_poss", "fg_percent",
-                       "x3p_per_100_poss", "x3pa_per_100_poss", "x3p_percent",
-                       "ft_per_100_poss", "fta_per_100_poss", "ft_percent",
-                       "o_rtg", "d_rtg"]
-        player_cols = [c for c in player_cols if c in pp.columns]
-        priors_players = pp[player_cols].copy()
+    # 3. Player Shooting - shooting zones, corner 3%, dunks
+    shooting_path = priors_root / "Player Shooting.csv"
+    shooting = load_and_filter_player_csv(shooting_path, "Player Shooting.csv")
+    if shooting is not None and not priors_players.empty:
+        shoot_cols = ["season", "player_id", "avg_dist_fga",
+                      "percent_fga_from_x2p_range", "percent_fga_from_x0_3_range",
+                      "percent_fga_from_x3_10_range", "percent_fga_from_x10_16_range",
+                      "percent_fga_from_x16_3p_range", "percent_fga_from_x3p_range",
+                      "fg_percent_from_x2p_range", "fg_percent_from_x0_3_range",
+                      "fg_percent_from_x3_10_range", "fg_percent_from_x10_16_range",
+                      "fg_percent_from_x16_3p_range", "fg_percent_from_x3p_range",
+                      "percent_assisted_x2p_fg", "percent_assisted_x3p_fg",
+                      "percent_dunks_of_fga", "num_of_dunks",
+                      "percent_corner_3s_of_3pa", "corner_3_point_percent"]
+        shoot_cols = [c for c in shoot_cols if c in shooting.columns]
+        if len(shoot_cols) > 2:
+            priors_players = priors_players.merge(
+                shooting[shoot_cols], on=["season", "player_id"], how="left"
+            )
 
-        # Normalize percents
-        for col in priors_players.columns:
-            if "percent" in col.lower():
-                vals = pd.to_numeric(priors_players[col], errors="coerce")
-                if vals.max() > 1.5:
-                    priors_players[col] = vals / 100.0
+    # 4. Player Play By Play - position %, on-court +/-, fouls
+    pbp_path = priors_root / "Player Play By Play.csv"
+    pbp = load_and_filter_player_csv(pbp_path, "Player Play By Play.csv")
+    if pbp is not None and not priors_players.empty:
+        pbp_cols = ["season", "player_id",
+                    "pg_percent", "sg_percent", "sf_percent", "pf_percent", "c_percent",
+                    "on_court_plus_minus_per_100_poss", "net_plus_minus_per_100_poss",
+                    "bad_pass_turnover", "lost_ball_turnover",
+                    "shooting_foul_committed", "offensive_foul_committed",
+                    "shooting_foul_drawn", "offensive_foul_drawn",
+                    "points_generated_by_assists", "and1"]
+        pbp_cols = [c for c in pbp_cols if c in pbp.columns]
+        if len(pbp_cols) > 2:
+            priors_players = priors_players.merge(
+                pbp[pbp_cols], on=["season", "player_id"], how="left"
+            )
 
-        # Shift to next season
-        if "season" in priors_players.columns:
-            priors_players["season_for_game"] = pd.to_numeric(priors_players["season"], errors="coerce") + 1
-            priors_players = priors_players.drop(columns=["season"])
-        else:
-            log("Warning: No 'season' column found in Per 100 Poss", verbose)
+    if priors_players.empty:
+        log("Warning: No player priors loaded", verbose)
+        return priors_players, priors_teams
 
-        log(f"Loaded {len(priors_players):,} player-season priors from Per 100 Poss", verbose)
+    # Normalize all percent columns (0-100 -> 0-1)
+    for col in priors_players.columns:
+        if "percent" in col.lower() or "_pct" in col.lower():
+            vals = pd.to_numeric(priors_players[col], errors="coerce")
+            if vals.notna().any() and vals.max() > 1.5:
+                priors_players[col] = vals / 100.0
+
+    # Shift to next season
+    if "season" in priors_players.columns:
+        priors_players["season_for_game"] = pd.to_numeric(priors_players["season"], errors="coerce") + 1
+        priors_players = priors_players.drop(columns=["season"])
+    else:
+        log("Warning: No 'season' column found in player priors", verbose)
+
+    log(f"Final player priors: {len(priors_players):,} player-seasons with {len(priors_players.columns)} features", verbose)
 
     return priors_players, priors_teams
 
@@ -1351,15 +1415,28 @@ def main():
     verbose = args.verbose
     seed = args.seed
 
-    print(_sec("Training configuration"))
-    print(f"- dataset: {args.dataset}")
-    print(f"- models_dir: {args.models_dir}")
-    print(f"- seed: {seed}")
-    print(f"- skip_rest: {args.skip_rest}")
-    print(f"- fresh_run_copy: {args.fresh}")
-    print(f"- lgb_log_period: {args.lgb_log_period}")
-    print(f"- game_season_cutoff: {args.game_season_cutoff}  player_season_cutoff: {args.player_season_cutoff}")
-    print(f"- decay: {args.decay}  min_weight: {args.min_weight}  lockout_weight: {args.lockout_weight}")
+    print(_sec("🏀 NBA Training Pipeline Configuration"))
+    print("\n📊 DATASETS (auto-cached):")
+    print(f"  1. Main:   {args.dataset}")
+    print(f"  2. Odds:   {args.odds_dataset}")
+    print(f"  3. Priors: {args.priors_dataset}")
+
+    print("\n🎯 FEATURES INCLUDED:")
+    print("  • Betting market odds → Implied probabilities, spreads, totals, line movement")
+    print("  • Team priors → O/D ratings, pace, SRS, four factors (Basketball Reference)")
+    print("  • Player priors → ~60 features from 4 CSVs:")
+    print("    - Per 100 Poss: rate stats (pts/reb/ast/stl/blk/tov per 100)")
+    print("    - Advanced: PER, BPM, TS%, USG%, Win Shares, VORP")
+    print("    - Shooting: zones, corner 3%, dunks, assisted rates")
+    print("    - Play-by-Play: position %, on-court +/-, fouls")
+
+    print("\n⚙️  TRAINING SETTINGS:")
+    print(f"  • Output directory: {args.models_dir}")
+    print(f"  • Random seed: {seed}")
+    print(f"  • Season cutoffs: Games ≥{args.game_season_cutoff}, Players ≥{args.player_season_cutoff}")
+    print(f"  • Time-decay weights: {args.decay} decay, {args.min_weight} min, {args.lockout_weight}x lockout penalty")
+    print(f"  • Rest/B2B features: {'Disabled' if args.skip_rest else 'Enabled'}")
+    print(f"  • LightGBM logging: {'Silent' if args.lgb_log_period == 0 else f'Every {args.lgb_log_period} iterations'}")
 
     if kagglehub is None:
         raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
