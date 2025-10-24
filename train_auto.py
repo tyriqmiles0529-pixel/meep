@@ -1647,6 +1647,45 @@ def main():
             else:
                 games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
+    # Diagnostic: Check priors data availability
+    if verbose:
+        print(_sec("Data Availability Diagnostic"))
+        print(f"Total games: {len(games_df):,}")
+
+        # Check betting odds
+        odds_cols = ["market_implied_home", "market_spread", "market_total", "home_abbrev", "away_abbrev"]
+        print("\n📊 BETTING ODDS:")
+        for col in odds_cols:
+            if col in games_df.columns:
+                if col in ["home_abbrev", "away_abbrev"]:
+                    non_null = games_df[col].notna().sum()
+                    print(f"  {col}: {non_null:,} games ({non_null/len(games_df)*100:.1f}%)")
+                else:
+                    default_val = GAME_DEFAULTS.get(col, 0.0)
+                    non_default = (games_df[col] != default_val).sum()
+                    print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
+
+        # Check team priors
+        priors_cols = ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior"]
+        print("\n🏀 TEAM PRIORS:")
+        for col in priors_cols:
+            if col in games_df.columns:
+                default_val = GAME_DEFAULTS.get(col, 0.0)
+                non_default = (games_df[col] != default_val).sum()
+                print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
+
+        # Summary
+        if "home_o_rtg_prior" in games_df.columns:
+            with_priors = (games_df["home_o_rtg_prior"] != GAME_DEFAULTS.get("home_o_rtg_prior", 0.0)).sum()
+            if with_priors == 0:
+                print("\n⚠️  WARNING: NO games have real team priors - all using defaults!")
+                print("   This means priors are NOT being used in training.")
+                print("   Possible causes:")
+                print("   • Season mismatch between games and priors")
+                print("   • Missing home_abbrev/away_abbrev from odds dataset")
+            else:
+                print(f"\n✓ {with_priors:,} games ({with_priors/len(games_df)*100:.1f}%) have real team priors")
+
     # Train game models + OOF
     print(_sec("Training game models"))
     clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
