@@ -71,7 +71,7 @@ The diagnostic output showed "0 games with priors" but didn't clearly explain:
 
 ### 3. Added Column Validation (lines 1293-1303, 1371-1379)
 
-**Team priors validation:**
+**Team priors validation (validates Team Summaries.csv):**
 ```python
 # Validate required columns
 required_cols = ["season", "abbreviation", "o_rtg", "d_rtg", "pace", "srs"]
@@ -82,7 +82,7 @@ if missing_cols:
     log(f"  Team priors will not be loaded.", verbose)
 ```
 
-**Player priors validation:**
+**Player priors validation (validates Per 100 Poss.csv):**
 ```python
 # Validate required columns
 required_cols = ["season", "player_id"]
@@ -185,7 +185,7 @@ Users now understand:
 
 ## Summary
 
-The fix successfully addresses the user's question by:
+The fix achieves the following objectives:
 1. ✅ Clarifying what "priors" means (Basketball Reference prior-season stats)
 2. ✅ Documenting when priors are actual data vs baseline defaults
 3. ✅ Validating that required CSV columns exist
