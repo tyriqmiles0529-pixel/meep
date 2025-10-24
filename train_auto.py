@@ -1,60 +1,50 @@
 #!/usr/bin/env python3
 """
-AUTOMATED NBA PROP MODEL TRAINING
+End-to-end NBA training pipeline (always fetches from Kaggle).
 
-This script automatically:
-1. Downloads Kaggle dataset (if needed)
-2. Processes and cleans data
-3. Engineers features
-4. Trains LightGBM models for PTS, AST, REB, 3PM
-5. Saves models for use in RIQ analyzer
+What it trains
+1) Game-level models (TeamStatistics)
+   - Moneyline classifier: P(home wins), with isotonic probability calibration.
+   - Spread regressor: expected margin (home - away), plus residual sigma for cover probabilities.
+   - Time-safe OOF predictions to feed into player models (learn-from-each-other without leakage).
 
-Just run: python train_auto.py
+2) Player-level models (PlayerStatistics)
+   - Minutes model (regression).
+   - Points, Rebounds, Assists, 3PM models (regression).
+   - Every player row includes BOTH team and opponent context, matchup edges, OOF game signals, and player rolling rates/minutes trends.
+   - Works even if teamId/opponentTeamId are missing — uses 'home' flag to pick the correct side.
 
-Requirements:
-- Kaggle credentials set up (run: python setup_kaggle.py)
-- Dependencies: pip install kagglehub pandas numpy lightgbm scikit-learn
+Key safety and robustness
+- Leakage-safe team context: all rolling stats are shifted by 1 (pre-game only).
+- Missing dates: never dropped; per-team order falls back to numeric gameId.
+- Clean console output with grouped sections and rounded metrics.
+- LightGBM noise reduced (force_col_wise=True, verbosity=-1); sklearn fallback available.
+
+Practical era handling
+- Season cutoffs for data inclusion (player and game).
+- Season features in models (season_end_year, season_decade).
+- Time-decay sample weights with lockout downweight (1999, 2012).
+
+Run (PowerShell)
+- pip install kagglehub
+- python .\train_auto.py --dataset "eoinamoore/historical-nba-data-and-player-box-scores" --verbose --skip-rest --fresh --lgb-log-period 50
 """
-import os
+
+from __future__ import annotations
+
 import sys
-import pandas as pd
-import numpy as np
-from pathlib import Path
-import pickle
+import os
+import re
 import json
-from datetime import datetime
+import math
+import argparse
 import warnings
-warnings.filterwarnings('ignore')
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-# Try to import required libraries
-try:
-    import kagglehub
-    from kagglehub import KaggleDatasetAdapter
-    import lightgbm as lgb
-    from sklearn.model_selection import TimeSeriesSplit
-    from sklearn.metrics import mean_absolute_error, mean_squared_error
-except ImportError as e:
-    print(f"❌ Missing dependency: {e}")
-    print("\nInstall with:")
-    print("   pip install kagglehub pandas numpy lightgbm scikit-learn")
-    sys.exit(1)
-
-# Configuration
-MODEL_DIR = Path("models")
-MODEL_DIR.mkdir(exist_ok=True)
-
-DATASET_NAME = "eoinamoore/historical-nba-data-and-player-box-scores"
-STATS_TO_MODEL = ["points", "assists", "rebounds", "threepoint_goals"]
-TEST_SEASONS = ['2023-24', '2023-2024']  # Hold out for testing
-
-print("=" * 80)
-print("🤖 AUTOMATED NBA PROP MODEL TRAINING")
-print("=" * 80)
-print()
-
-# ========== STEP 1: DOWNLOAD DATASET ==========
-print("📥 STEP 1: Downloading dataset from Kaggle...")
-print("-" * 80)
+import numpy as np
+import pandas as pd
 
 try:
     # Hardcoded Kaggle credentials (for venv compatibility - can't import from other files)
@@ -104,336 +94,1172 @@ print()
 print("📊 STEP 2: Loading and processing data...")
 print("-" * 80)
 
+# Prefer LightGBM; fallback to sklearn HistGBM
+_HAS_LGB = False
 try:
-    # Find the main player box scores file
-    # Common names: player_box_scores.csv, game_stats.csv, etc.
-    box_score_files = [
-        f for f in csv_files
-        if any(term in f.name.lower() for term in ['player', 'box', 'score', 'game', 'stats'])
-    ]
-
-    if not box_score_files:
-        print("⚠️  Could not auto-detect box score file. Available files:")
-        for f in csv_files:
-            print(f"   - {f.name}")
-        print("\nPlease manually specify the file containing player game stats.")
-        sys.exit(1)
-
-    # Use the first matching file (or largest if multiple)
-    data_file = max(box_score_files, key=lambda f: f.stat().st_size)
-    print(f"📖 Loading: {data_file.name}")
-
-    # Load data
-    df = pd.read_csv(data_file)
-    print(f"✅ Loaded {len(df):,} rows × {len(df.columns)} columns")
-
-    # Show column names (for debugging)
-    print(f"\n📋 Columns ({len(df.columns)}):")
-    for i, col in enumerate(df.columns[:20], 1):  # Show first 20
-        print(f"   {i:2d}. {col}")
-    if len(df.columns) > 20:
-        print(f"   ... and {len(df.columns) - 20} more")
-
-    # Auto-detect column mappings
-    print("\n🔍 Auto-detecting column mappings...")
-
-    col_map = {}
-
-    # Try to find key columns
-    def find_column(patterns, df_cols):
-        for pattern in patterns:
-            matches = [col for col in df_cols if pattern.lower() in col.lower()]
-            if matches:
-                return matches[0]
-        return None
-
-    # Map critical columns
-    col_map['player_id'] = find_column(['player_id', 'playerId', 'player'], df.columns)
-    col_map['player_name'] = find_column(['player_name', 'playerName', 'name'], df.columns)
-    col_map['date'] = find_column(['date', 'game_date', 'gameDate'], df.columns)
-    col_map['season'] = find_column(['season'], df.columns)
-    col_map['team_id'] = find_column(['team_id', 'teamId', 'team'], df.columns)
-    col_map['opponent_id'] = find_column(['opponent', 'opp', 'vs'], df.columns)
-    col_map['home_away'] = find_column(['home', 'location', 'venue'], df.columns)
-
-    # Map stat columns
-    col_map['points'] = find_column(['points', 'pts', 'PTS'], df.columns)
-    col_map['assists'] = find_column(['assists', 'ast', 'AST'], df.columns)
-    col_map['rebounds'] = find_column(['rebounds', 'reb', 'REB', 'total_rebounds'], df.columns)
-    col_map['threepoint_goals'] = find_column(['three', '3pt', '3pm', 'threepoint'], df.columns)
-
-    print("\n📌 Detected mappings:")
-    for key, val in col_map.items():
-        status = "✅" if val else "❌"
-        print(f"   {status} {key:<20s} → {val if val else 'NOT FOUND'}")
-
-    # Check if we have minimum required columns
-    required = ['date', 'points', 'assists', 'rebounds']
-    missing = [k for k in required if not col_map.get(k)]
-
-    if missing:
-        print(f"\n❌ Missing required columns: {missing}")
-        print("\n💡 The dataset structure is different than expected.")
-        print("   Please check the data and manually adjust column mappings.")
-        print("\n   You can:")
-        print("   1. Inspect the data: python explore_dataset.py")
-        print("   2. Manually edit train_auto.py to fix column names")
-        sys.exit(1)
-
-    # Rename columns to standard names
-    rename_map = {v: k for k, v in col_map.items() if v}
-    df = df.rename(columns=rename_map)
-
-    # Convert date to datetime
-    df['date'] = pd.to_datetime(df['date'])
-
-    # Sort by player and date
-    if 'player_id' in df.columns:
-        df = df.sort_values(['player_id', 'date'])
-    elif 'player_name' in df.columns:
-        df = df.sort_values(['player_name', 'date'])
-
-    print(f"\n✅ Data processed: {len(df):,} games")
-    print(f"   Date range: {df['date'].min()} to {df['date'].max()}")
-
-    if 'season' in df.columns:
-        seasons = df['season'].unique()
-        print(f"   Seasons: {', '.join(map(str, sorted(seasons)))}")
-
-except Exception as e:
-    print(f"❌ Error processing data: {e}")
-    import traceback
-    traceback.print_exc()
-    print("\n💡 The dataset structure may differ from expected format.")
-    print("   Run: python explore_dataset.py")
-    print("   To inspect the actual data structure.")
-    sys.exit(1)
-
-print()
-
-# ========== STEP 3: FEATURE ENGINEERING ==========
-print("🔧 STEP 3: Engineering features...")
-print("-" * 80)
-
-try:
-    def create_rolling_features(df, stat, windows=[3, 5, 10]):
-        """Create rolling average features"""
-        group_col = 'player_id' if 'player_id' in df.columns else 'player_name'
-
-        for window in windows:
-            # Shift by 1 to avoid leakage (don't use current game)
-            df[f'{stat}_avg_{window}g'] = df.groupby(group_col)[stat].transform(
-                lambda x: x.shift(1).rolling(window, min_periods=1).mean()
-            )
-            df[f'{stat}_std_{window}g'] = df.groupby(group_col)[stat].transform(
-                lambda x: x.shift(1).rolling(window, min_periods=1).std()
-            )
-            df[f'{stat}_max_{window}g'] = df.groupby(group_col)[stat].transform(
-                lambda x: x.shift(1).rolling(window, min_periods=1).max()
-            )
-
-        # Trend (3g vs 10g)
-        if 3 in windows and 10 in windows:
-            df[f'{stat}_trend'] = (df[f'{stat}_avg_3g'] - df[f'{stat}_avg_10g']) / (df[f'{stat}_avg_10g'] + 1e-6)
-
-        return df
-
-    # Create features for each stat
-    for stat in ['points', 'assists', 'rebounds']:
-        if stat in df.columns:
-            print(f"   Creating features for {stat}...")
-            df = create_rolling_features(df, stat, windows=[3, 5, 10])
-
-    # Handle threepoint_goals if available
-    if 'threepoint_goals' in df.columns:
-        print(f"   Creating features for threepoint_goals...")
-        df = create_rolling_features(df, 'threepoint_goals', windows=[3, 5, 10])
-
-    # Situational features
-    if 'home_away' in df.columns:
-        df['is_home'] = df['home_away'].str.lower().str.contains('home').astype(int)
-
-    # Game number in season
-    group_cols = []
-    if 'player_id' in df.columns:
-        group_cols.append('player_id')
-    elif 'player_name' in df.columns:
-        group_cols.append('player_name')
-    if 'season' in df.columns:
-        group_cols.append('season')
-
-    if group_cols:
-        df['game_num'] = df.groupby(group_cols).cumcount() + 1
-
-    print(f"✅ Features created: {len([c for c in df.columns if '_avg_' in c or '_std_' in c])} rolling features")
-
-except Exception as e:
-    print(f"❌ Error creating features: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-
-print()
-
-# ========== STEP 4: TRAIN MODELS ==========
-print("🎯 STEP 4: Training models...")
-print("-" * 80)
-
-models = {}
-
-for stat in STATS_TO_MODEL:
-    if stat not in df.columns:
-        print(f"⏭️  Skipping {stat} (not in dataset)")
-        continue
-
-    print(f"\n{'='*80}")
-    print(f"Training: {stat.upper()}")
-    print(f"{'='*80}")
-
+    import lightgbm as lgb  # type: ignore
+    _HAS_LGB = True
     try:
-        # Feature columns
-        feature_cols = [col for col in df.columns if (
-            col.endswith('_avg_3g') or
-            col.endswith('_avg_5g') or
-            col.endswith('_avg_10g') or
-            col.endswith('_std_3g') or
-            col.endswith('_std_5g') or
-            col.endswith('_max_3g') or
-            col.endswith('_trend') or
-            col in ['is_home', 'game_num']
-        )]
+        lgb.set_config(verbosity=-1)
+    except Exception:
+        pass
+except Exception:
+    pass
 
-        # Filter to rows with valid data
-        train_df = df.copy()
-        train_df = train_df[train_df[stat].notna()]
-        train_df = train_df.dropna(subset=feature_cols)
-        train_df = train_df[train_df['game_num'] >= 5]  # Need at least 5 games
+try:
+    from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
+except Exception:  # pragma: no cover
+    from sklearn.experimental import enable_hist_gradient_boosting  # noqa: F401
+    from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 
-        # Split by season if available
-        if 'season' in train_df.columns:
-            test_mask = train_df['season'].astype(str).isin(TEST_SEASONS)
-            train_data = train_df[~test_mask]
-            test_data = train_df[test_mask]
-        else:
-            # Use last 20% as test
-            split_idx = int(len(train_df) * 0.8)
-            train_data = train_df.iloc[:split_idx]
-            test_data = train_df.iloc[split_idx:]
+# Kaggle (required)
+try:
+    import kagglehub
+except Exception:
+    kagglehub = None
 
-        X_train = train_data[feature_cols]
-        y_train = train_data[stat]
-        X_test = test_data[feature_cols]
-        y_test = test_data[stat]
+# Silence upcoming sklearn FutureWarning for CalibratedClassifierCV(cv='prefit')
+warnings.filterwarnings(
+    "ignore",
+    message="The `cv='prefit'` option is deprecated",
+    category=FutureWarning,
+)
 
-        print(f"Train: {len(X_train):,} games | Test: {len(X_test):,} games")
-        print(f"Features: {len(feature_cols)}")
+# ---------------- Pretty printing helpers ----------------
 
-        # Train LightGBM
-        params = {
-            'objective': 'regression',
-            'metric': 'mae',
-            'boosting_type': 'gbdt',
-            'num_leaves': 31,
-            'learning_rate': 0.05,
-            'feature_fraction': 0.8,
-            'bagging_fraction': 0.8,
-            'bagging_freq': 5,
-            'verbose': -1,
-            'seed': 42
-        }
+def _line(char: str = "─", n: int = 60) -> str:
+    return char * n
 
-        lgb_train = lgb.Dataset(X_train, label=y_train)
-        lgb_test = lgb.Dataset(X_test, label=y_test, reference=lgb_train)
+def _sec(title: str) -> str:
+    return f"\n{_line()} \n{title}\n{_line()}"
 
-        model = lgb.train(
-            params,
-            lgb_train,
-            num_boost_round=500,
-            valid_sets=[lgb_test],
-            callbacks=[lgb.early_stopping(stopping_rounds=50), lgb.log_evaluation(50)]
+def _fmt(n: float, nd: int = 3) -> str:
+    try:
+        return f"{n:.{nd}f}"
+    except Exception:
+        return str(n)
+
+def log(msg: str, verbose: bool):
+    if verbose:
+        print(msg, flush=True)
+
+# ---------------- Era helpers ----------------
+
+LOCKOUT_SEASONS = {1999, 2012}
+
+def _season_from_date(dt: pd.Series) -> pd.Series:
+    """
+    Convert a UTC-naive datetime to NBA season end-year.
+    Season end-year = year if month <= 7; else year+1 (Aug..Dec map to next year's season).
+    """
+    d = pd.to_datetime(dt, errors="coerce", utc=False)
+    y = d.dt.year
+    m = d.dt.month
+    return np.where(m >= 8, y + 1, y)
+
+def _decade_from_season(season_end_year: pd.Series) -> pd.Series:
+    s = pd.to_numeric(season_end_year, errors="coerce")
+    return (s // 10) * 10
+
+def _parse_season_cutoff(arg_val: str, kind: str) -> int:
+    """
+    kind='game' presets: 'classic'->1997, 'balanced'->2002
+    kind='player' presets: 'min'->1998, 'balanced'->2002, 'modern'->2005
+    Also accepts integer strings, e.g., '2001', '2005'.
+    """
+    v = str(arg_val).strip().lower()
+    if kind == "game":
+        presets = {"classic": 1997, "balanced": 2002}
+    else:
+        presets = {"min": 1998, "balanced": 2002, "modern": 2005}
+    if v in presets:
+        return presets[v]
+    try:
+        return int(v)
+    except Exception:
+        # Fallback to balanced defaults
+        return presets["balanced"]
+
+def _compute_sample_weights(seasons: np.ndarray, decay: float, min_weight: float, lockout_weight: float) -> np.ndarray:
+    seasons = seasons.astype("float64")
+    valid = np.isfinite(seasons)
+    if not valid.any():
+        return np.ones_like(seasons, dtype="float64")
+    max_season = int(np.nanmax(seasons[valid]))
+    base = np.ones_like(seasons, dtype="float64")
+    base[valid] = decay ** (max_season - seasons[valid])
+    base = np.maximum(base, min_weight)
+    # Lockouts
+    for lo in LOCKOUT_SEASONS:
+        base = np.where(seasons == lo, base * lockout_weight, base)
+    # For NaN seasons, keep weight at 1.0
+    base = np.where(valid, base, 1.0)
+    return base.astype("float64")
+
+# ---------------- Game feature schema ----------------
+
+GAME_FEATURES: List[str] = [
+    "home_advantage", "neutral_site",
+    "home_recent_pace", "away_recent_pace",
+    "home_off_strength", "home_def_strength",
+    "away_off_strength", "away_def_strength",
+    "home_recent_winrate", "away_recent_winrate",
+    # matchup features
+    "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff",
+    # schedule/injury (often constants if --skip-rest)
+    "home_days_rest", "away_days_rest",
+    "home_b2b", "away_b2b",
+    "home_injury_impact", "away_injury_impact",
+    # era features
+    "season_end_year", "season_decade",
+]
+
+GAME_DEFAULTS: Dict[str, float] = {
+    "home_advantage": 1.0,
+    "neutral_site": 0.0,
+    "home_recent_pace": 1.0,
+    "away_recent_pace": 1.0,
+    "home_off_strength": 1.0,
+    "home_def_strength": 1.0,
+    "away_off_strength": 1.0,
+    "away_def_strength": 1.0,
+    "home_recent_winrate": 0.5,
+    "away_recent_winrate": 0.5,
+    "match_off_edge": 0.0,
+    "match_def_edge": 0.0,
+    "match_pace_sum": 2.0,
+    "winrate_diff": 0.0,
+    "home_days_rest": 2.0,
+    "away_days_rest": 2.0,
+    "home_b2b": 0.0,
+    "away_b2b": 0.0,
+    "home_injury_impact": 0.0,
+    "away_injury_impact": 0.0,
+    # era defaults (will be filled from actual dates when present)
+    "season_end_year": 2002.0,
+    "season_decade": 2000.0,
+}
+
+# ---------------- Utilities ----------------
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+def _id_to_str(s: pd.Series) -> pd.Series:
+    s_num = pd.to_numeric(s, errors="coerce")
+    out = pd.Series(index=s.index, dtype="object")
+    num_mask = s_num.notna()
+    out.loc[num_mask] = s_num.loc[num_mask].astype("Int64").astype(str)
+    out.loc[~num_mask] = s.astype(str)
+    return out.astype(str).str.strip()
+
+def _find_dataset_files(ds_root: Path) -> Tuple[Optional[Path], Optional[Path]]:
+    teams_path: Optional[Path] = None
+    players_path: Optional[Path] = None
+    for p in ds_root.glob("*.csv"):
+        n = p.name.lower()
+        if "teamstatistics" in n or "team_statistics" in n:
+            teams_path = p
+        if "playerstatistics" in n or "player_stats" in n or "playerstats" in n:
+            players_path = p
+    # Fallback: scan names that start with Team/Player
+    if teams_path is None:
+        cand = [p for p in ds_root.glob("*.csv") if "team" in p.name.lower()]
+        if cand:
+            teams_path = cand[0]
+    if players_path is None:
+        cand = [p for p in ds_root.glob("*.csv") if "player" in p.name.lower()]
+        if cand:
+            players_path = cand[0]
+    return teams_path, players_path
+
+def _fresh_run_dir(base: Path) -> Path:
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    run_dir = base / ts
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+def _copy_if_exists(src: Optional[Path], dst_dir: Path) -> Optional[Path]:
+    if src and src.exists():
+        out = dst_dir / src.name
+        out.write_bytes(src.read_bytes())
+        return out
+    return None
+
+# ---------------- Build games from TeamStatistics ----------------
+
+def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    header_cols = list(pd.read_csv(teams_path, nrows=0).columns)
+    usecols = [c for c in [
+        "gameId", "gameDate", "teamId", "opponentTeamId",
+        "home", "teamScore", "opponentScore",
+    ] if c in header_cols]
+    ts = pd.read_csv(teams_path, low_memory=False, usecols=usecols)
+
+    for c in ["gameId", "teamId", "opponentTeamId"]:
+        if c in ts.columns:
+            ts[c] = _id_to_str(ts[c])
+
+    # home flag to 0/1
+    if "home" in ts.columns:
+        hv = ts["home"]
+        hvn = pd.to_numeric(hv, errors="coerce")
+        ts["home_flag"] = np.where(hvn.notna(), (hvn.fillna(0) != 0).astype(int),
+                                   hv.astype(str).str.strip().str.lower().isin(["1","true","t","home","h","yes","y"]).astype(int))
+    else:
+        ts["home_flag"] = 1
+
+    # date (keep NaT)
+    ts["gameDate"] = pd.to_datetime(ts["gameDate"], errors="coerce", utc=True).dt.tz_convert(None)
+
+    # scores
+    ts["teamScore"] = pd.to_numeric(ts["teamScore"], errors="coerce")
+    ts["opponentScore"] = pd.to_numeric(ts["opponentScore"], errors="coerce")
+    ts = ts.dropna(subset=["gameId", "teamId", "opponentTeamId", "teamScore", "opponentScore"]).copy()
+
+    # pair home/away
+    ts_sorted = ts.sort_values(["gameId", "home_flag"], ascending=[True, False])
+    home_rows = ts_sorted[ts_sorted["home_flag"] == 1].drop_duplicates("gameId", keep="first")
+    away_rows = ts_sorted[ts_sorted["home_flag"] == 0].drop_duplicates("gameId", keep="first")
+
+    g = home_rows.merge(
+        away_rows[["gameId", "teamId", "teamScore", "gameDate"]].rename(columns={
+            "teamId": "away_tid", "teamScore": "away_score", "gameDate": "date_check"
+        }),
+        on="gameId", how="left"
+    )
+
+    # fill away from opponent fields if missing
+    need_away = g["away_tid"].isna()
+    if need_away.any():
+        tss = ts.set_index("gameId")
+        idx = g.loc[need_away, "gameId"]
+        g.loc[need_away, "away_tid"] = _id_to_str(tss.loc[idx, "opponentTeamId"])
+        g.loc[need_away, "away_score"] = pd.to_numeric(tss.loc[idx, "opponentScore"], errors="coerce")
+
+    g = g.rename(columns={
+        "gameId": "gid", "teamId": "home_tid", "teamScore": "home_score", "gameDate": "date"
+    })[["gid", "date", "home_tid", "away_tid", "home_score", "away_score"]]
+
+    g = g.dropna(subset=["home_tid", "away_tid", "home_score", "away_score"]).copy()
+    for c in ["gid", "home_tid", "away_tid"]:
+        g[c] = _id_to_str(g[c])
+    g["date"] = pd.to_datetime(g["date"], errors="coerce", utc=True).dt.tz_convert(None)
+
+    # season features
+    g["season_end_year"] = _season_from_date(g["date"]).astype("float32")
+    g["season_decade"]   = _decade_from_season(g["season_end_year"]).astype("float32")
+
+    # long view for rolling context
+    long_home = g[["gid", "date", "season_end_year", "home_tid", "home_score", "away_score"]].rename(
+        columns={"home_tid": "tid", "home_score": "team_pts", "away_score": "opp_pts"}
+    )
+    long_away = g[["gid", "date", "season_end_year", "away_tid", "away_score", "home_score"]].rename(
+        columns={"away_tid": "tid", "away_score": "team_pts", "home_score": "opp_pts"}
+    )
+    teams_long = pd.concat(
+        [long_home[["gid", "date", "season_end_year", "tid", "team_pts", "opp_pts"]],
+         long_away[["gid", "date", "season_end_year", "tid", "team_pts", "opp_pts"]]],
+        ignore_index=True
+    )
+
+    teams_long["gid_num"] = pd.to_numeric(teams_long["gid"], errors="coerce")
+    teams_long = teams_long.sort_values(["tid", "date", "gid_num"], ascending=[True, True, True], na_position="last")
+
+    # leakage-safe rolling with min_periods=1
+    teams_long["off_pts_10"] = teams_long.groupby("tid")["team_pts"].transform(lambda x: x.shift(1).rolling(10, min_periods=1).mean())
+    teams_long["def_pts_10"] = teams_long.groupby("tid")["opp_pts"].transform(lambda x: x.shift(1).rolling(10, min_periods=1).mean())
+    teams_long["tot_pts"]    = teams_long["team_pts"] + teams_long["opp_pts"]
+    teams_long["pace_10"]    = teams_long.groupby("tid")["tot_pts"].transform(lambda x: x.shift(1).rolling(10, min_periods=1).mean())
+
+    teams_long["win"] = (teams_long["team_pts"] > teams_long["opp_pts"]).astype(int)
+    teams_long["wins_prev"]  = teams_long.groupby("tid")["win"].transform(lambda x: x.shift(1).cumsum())
+    teams_long["games_prev"] = teams_long.groupby("tid").cumcount()
+    teams_long["winrate_prev"] = np.where(
+        teams_long["games_prev"] > 0,
+        teams_long["wins_prev"] / teams_long["games_prev"].clip(lower=1),
+        0.5
+    )
+
+    # per-season medians for normalization (era-aware)
+    # guard division by zero by using global fallback medians if needed
+    def _per_season_median(col: str, fallback: float) -> pd.Series:
+        s = teams_long.groupby("season_end_year")[col].transform("median")
+        s = s.fillna(fallback)
+        z = s.replace(0, np.nan)
+        z = z.fillna(fallback if fallback != 0 else 1.0)
+        return z
+
+    off_med_g  = np.nanmedian(teams_long["off_pts_10"].values)
+    def_med_g  = np.nanmedian(teams_long["def_pts_10"].values)
+    pace_med_g = np.nanmedian(teams_long["pace_10"].values)
+    off_med_s  = _per_season_median("off_pts_10", off_med_g if np.isfinite(off_med_g) and off_med_g > 0 else 1.0)
+    def_med_s  = _per_season_median("def_pts_10", def_med_g if np.isfinite(def_med_g) and def_med_g > 0 else 1.0)
+    pace_med_s = _per_season_median("pace_10", pace_med_g if np.isfinite(pace_med_g) and pace_med_g > 0 else 1.0)
+
+    teams_long["off_norm"]  = teams_long["off_pts_10"] / off_med_s
+    teams_long["def_norm"]  = def_med_s / teams_long["def_pts_10"]
+    teams_long["pace_norm"] = teams_long["pace_10"] / pace_med_s
+
+    # split to home/away and merge
+    hstats = teams_long.rename(columns={
+        "tid": "home_tid",
+        "off_norm": "home_off_strength",
+        "def_norm": "home_def_strength",
+        "pace_norm": "home_recent_pace",
+        "winrate_prev": "home_recent_winrate"
+    })[["gid", "season_end_year", "home_tid", "home_off_strength", "home_def_strength", "home_recent_pace", "home_recent_winrate"]].drop_duplicates(["gid", "home_tid"])
+    astats = teams_long.rename(columns={
+        "tid": "away_tid",
+        "off_norm": "away_off_strength",
+        "def_norm": "away_def_strength",
+        "pace_norm": "away_recent_pace",
+        "winrate_prev": "away_recent_winrate"
+    })[["gid", "season_end_year", "away_tid", "away_off_strength", "away_def_strength", "away_recent_pace", "away_recent_winrate"]].drop_duplicates(["gid", "away_tid"])
+
+    for c in ["gid", "home_tid"]:
+        hstats[c] = _id_to_str(hstats[c])
+    for c in ["gid", "away_tid"]:
+        astats[c] = _id_to_str(astats[c])
+
+    g = g.merge(hstats, on=["gid", "home_tid", "season_end_year"], how="left").merge(astats, on=["gid", "away_tid", "season_end_year"], how="left")
+
+    # matchup features
+    g["match_off_edge"] = g["home_off_strength"] - g["away_def_strength"]
+    g["match_def_edge"] = g["home_def_strength"] - g["away_off_strength"]
+    g["match_pace_sum"] = g["home_recent_pace"] + g["away_recent_pace"]
+    g["winrate_diff"]   = g["home_recent_winrate"] - g["away_recent_winrate"]
+
+    # optional rest/b2b
+    if not skip_rest:
+        sched_home = g[["home_tid", "date"]].rename(columns={"home_tid": "tid"})
+        sched_away = g[["away_tid", "date"]].rename(columns={"away_tid": "tid"})
+        sched = pd.concat([sched_home, sched_away], ignore_index=True)
+        sched["tid"]  = _id_to_str(sched["tid"])
+        sched["date"] = pd.to_datetime(sched["date"], errors="coerce", utc=True).dt.tz_convert(None)
+        sched = sched.dropna(subset=["tid", "date"]).drop_duplicates(["tid", "date"]).sort_values(["tid", "date"])
+
+        sched["prev_date"] = sched.groupby("tid")["date"].shift(1)
+        delta = sched["date"] - sched["prev_date"]
+        sched["days_rest"] = pd.to_numeric(delta.dt.days, errors="coerce").fillna(2.0).astype("float32")
+        sched["b2b"] = (sched["days_rest"] <= 1).astype("int8")
+
+        hr = sched.rename(columns={"tid": "home_tid"})[["home_tid", "date", "days_rest", "b2b"]].rename(
+            columns={"days_rest": "home_days_rest", "b2b": "home_b2b"}
+        )
+        ar = sched.rename(columns={"tid": "away_tid"})[["away_tid", "date", "days_rest", "b2b"]].rename(
+            columns={"days_rest": "away_days_rest", "b2b": "away_b2b"}
         )
 
-        # Evaluate
-        y_pred_test = model.predict(X_test)
-        mae = mean_absolute_error(y_test, y_pred_test)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
+        for df_, tid_col in ((hr, "home_tid"), (ar, "away_tid")):
+            df_[tid_col] = _id_to_str(df_[tid_col])
+            df_["date"]  = pd.to_datetime(df_["date"], errors="coerce", utc=True).dt.tz_convert(None)
+            df_.sort_values([tid_col, "date"], inplace=True)
+            df_.drop_duplicates([tid_col, "date"], keep="last", inplace=True)
 
-        print(f"\n📊 Test Metrics:")
-        print(f"   MAE:  {mae:.2f}")
-        print(f"   RMSE: {rmse:.2f}")
+        g.sort_values(["gid", "date"], inplace=True)
+        g.drop_duplicates(subset=["gid", "home_tid", "away_tid", "date"], keep="last", inplace=True)
+        g = g.merge(hr, on=["home_tid", "date"], how="left")
+        g = g.merge(ar, on=["away_tid", "date"], how="left")
+    else:
+        g["home_days_rest"] = GAME_DEFAULTS["home_days_rest"]
+        g["away_days_rest"] = GAME_DEFAULTS["away_days_rest"]
+        g["home_b2b"] = GAME_DEFAULTS["home_b2b"]
+        g["away_b2b"] = GAME_DEFAULTS["away_b2b"]
 
-        # Feature importance
-        importance = pd.DataFrame({
-            'feature': feature_cols,
-            'importance': model.feature_importance(importance_type='gain')
-        }).sort_values('importance', ascending=False)
+    # era features (decade again in case of merges)
+    g["season_decade"] = _decade_from_season(g["season_end_year"]).astype("float32")
 
-        print(f"\n🔑 Top 5 Features:")
-        for idx, row in importance.head(5).iterrows():
-            print(f"   {row['feature']:<30s} {row['importance']:>10.0f}")
+    # fill defaults
+    for col, val in GAME_DEFAULTS.items():
+        if col not in g.columns:
+            g[col] = val
+        g[col] = pd.to_numeric(g[col], errors="coerce").fillna(val).astype("float32")
 
-        # Save model
-        model_info = {
-            'model': model,
-            'features': feature_cols,
-            'stat': stat,
-            'metrics': {'test_mae': mae, 'test_rmse': rmse},
-            'importance': importance,
-            'trained_date': datetime.now().isoformat(),
-            'train_size': len(X_train),
-            'test_size': len(X_test)
+    g["home_advantage"] = np.float32(1.0)
+    g["neutral_site"]   = np.float32(0.0)
+
+    games_df = g[["gid", "date", "season_end_year", "season_decade", "home_tid", "away_tid", "home_score", "away_score"] + GAME_FEATURES].copy()
+    games_df["date"] = pd.to_datetime(games_df["date"], errors="coerce", utc=True).dt.tz_convert(None)
+    games_df = games_df.dropna(subset=["home_score", "away_score"]).reset_index(drop=True)
+
+    # context for players (both sides)
+    context_cols = [
+        "gid", "date", "season_end_year", "season_decade", "home_tid", "away_tid",
+        "home_recent_pace", "home_off_strength", "home_def_strength", "home_recent_winrate",
+        "away_recent_pace", "away_off_strength", "away_def_strength", "away_recent_winrate",
+        "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff"
+    ]
+    context_map = g[context_cols].drop_duplicates(["gid", "home_tid", "away_tid"]).copy()
+
+    log(f"Built TeamStatistics games frame: {len(games_df):,} rows", verbose)
+    return games_df, context_map
+
+# ---------------- Train game models + OOF ----------------
+
+def _fit_game_models(
+    games_df: pd.DataFrame,
+    seed: int,
+    verbose: bool,
+    folds: int = 5,
+    lgb_log_period: int = 0,
+    sample_weights: Optional[np.ndarray] = None,
+) -> Tuple[object, Optional[CalibratedClassifierCV], object, float, pd.DataFrame, Dict[str, float]]:
+    X_full = games_df[GAME_FEATURES].apply(pd.to_numeric, errors="coerce").replace([np.inf,-np.inf], np.nan).astype("float32")
+    y_ml = (games_df["home_score"].values > games_df["away_score"].values).astype(int)
+    y_sp = (games_df["home_score"].values - games_df["away_score"].values).astype(float)
+
+    # chronological order (NaT last)
+    order = pd.to_datetime(games_df["date"], errors="coerce")
+    idx_sorted = order.sort_values(na_position="last", kind="mergesort").index
+    X_sorted = X_full.loc[idx_sorted]
+    y_ml_sorted = y_ml[idx_sorted]
+    y_sp_sorted = y_sp[idx_sorted]
+    gid_sorted = games_df.loc[idx_sorted, "gid"].astype(str).values
+    if sample_weights is None or len(sample_weights) != len(games_df):
+        w_sorted = np.ones(len(X_sorted), dtype=np.float64)
+    else:
+        w_sorted = sample_weights[idx_sorted]
+
+    n = len(X_sorted)
+    if n <= 1:
+        ml_dummy = DummyClassifier(strategy="prior").fit(X_sorted.iloc[:1], y_ml_sorted[:1])
+        sp_dummy = DummyRegressor(strategy="mean").fit(X_sorted.iloc[:1], y_sp_sorted[:1])
+        return ml_dummy, None, sp_dummy, float("nan"), pd.DataFrame(), {
+            "train_size": int(n), "val_size": 0,
+            "ml_logloss": float("nan"), "ml_brier": float("nan"),
+            "sp_rmse": float("nan"), "sp_mae": float("nan"),
         }
 
-        model_path = MODEL_DIR / f"{stat}_model.pkl"
-        with open(model_path, 'wb') as f:
-            pickle.dump(model_info, f)
+    # Time-based folds (equal chunks in sorted order)
+    fold_sizes = [n // folds] * folds
+    for i in range(n % folds):
+        fold_sizes[i] += 1
+    splits = []
+    start = 0
+    for fs in fold_sizes:
+        end = start + fs
+        splits.append((start, end))
+        start = end
 
-        print(f"✅ Saved: {model_path}")
+    oof_ml = np.full(n, np.nan, dtype=np.float32)
+    oof_sp = np.full(n, np.nan, dtype=np.float32)
 
-        models[stat] = model_info
+    # Common LGB params (quiet + col-wise)
+    clf_params = dict(
+        objective="binary", learning_rate=0.05, num_leaves=31, max_depth=-1,
+        colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
+        n_estimators=800, random_state=seed, n_jobs=-1,
+        force_col_wise=True, verbosity=-1
+    )
+    reg_params = dict(
+        objective="regression", learning_rate=0.05, num_leaves=31, max_depth=-1,
+        colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
+        n_estimators=800, random_state=seed, n_jobs=-1,
+        force_col_wise=True, verbosity=-1
+    )
 
-    except Exception as e:
-        print(f"❌ Error training {stat}: {e}")
-        import traceback
-        traceback.print_exc()
-        continue
+    # Train per fold: train on [0:val_start], predict on [val_start:val_end]
+    for k, (val_start, val_end) in enumerate(splits):
+        if val_start == 0:
+            continue
+        tr_slice = slice(0, val_start)
+        vl_slice = slice(val_start, val_end)
 
-print()
+        X_tr, y_ml_tr, y_sp_tr = X_sorted.iloc[tr_slice, :], y_ml_sorted[tr_slice], y_sp_sorted[tr_slice]
+        X_vl = X_sorted.iloc[vl_slice, :]
+        w_tr = w_sorted[tr_slice]
 
-# ========== STEP 5: SAVE MODEL REGISTRY ==========
-print("📝 STEP 5: Saving model registry...")
-print("-" * 80)
+        if _HAS_LGB:
+            clf_k = lgb.LGBMClassifier(**{**clf_params, "random_state": seed + k})
+            clf_k.fit(X_tr, y_ml_tr, sample_weight=w_tr)
+            oof_ml[val_start:val_end] = clf_k.predict_proba(X_vl)[:, 1]
 
-registry = {}
-for stat, info in models.items():
-    registry[stat] = {
-        'version': 'v1.0',
-        'trained_date': info['trained_date'],
-        'test_mae': info['metrics']['test_mae'],
-        'test_rmse': info['metrics']['test_rmse'],
-        'train_size': info['train_size'],
-        'test_size': info['test_size'],
-        'features': info['features'],
-        'model_file': f"{stat}_model.pkl"
+            reg_k = lgb.LGBMRegressor(**{**reg_params, "random_state": seed + k})
+            reg_k.fit(X_tr, y_sp_tr, sample_weight=w_tr)
+            oof_sp[val_start:val_end] = reg_k.predict(X_vl)
+        else:
+            clf_k = HistGradientBoostingClassifier(
+                learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed + k,
+                validation_fraction=0.2, early_stopping=True
+            )
+            clf_k.fit(X_tr, y_ml_tr, sample_weight=w_tr)
+            oof_ml[val_start:val_end] = clf_k.predict_proba(X_vl)[:, 1]
+
+            reg_k = HistGradientBoostingRegressor(
+                learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed + k,
+                validation_fraction=0.2, early_stopping=True
+            )
+            reg_k.fit(X_tr, y_sp_tr, sample_weight=w_tr)
+            oof_sp[val_start:val_end] = reg_k.predict(X_vl)
+
+    # Final train/val split (last 20%) for metrics/calibration
+    split = max(1, min(int(n * 0.8), n - 1))
+    X_tr, X_val = X_sorted.iloc[:split, :], X_sorted.iloc[split:, :]
+    y_ml_tr, y_ml_val = y_ml_sorted[:split], y_ml_sorted[split:]
+    y_sp_tr, y_sp_val = y_sp_sorted[:split], y_sp_sorted[split:]
+    w_tr, w_val = w_sorted[:split], w_sorted[split:]
+
+    # LightGBM callbacks for iteration logging (if requested)
+    lgb_callbacks = []
+    if _HAS_LGB and lgb_log_period and lgb_log_period > 0:
+        lgb_callbacks.append(lgb.log_evaluation(period=int(lgb_log_period)))
+
+    if _HAS_LGB:
+        clf_final = lgb.LGBMClassifier(**{**clf_params, "n_estimators": 1000, "random_state": seed})
+        clf_final.fit(
+            X_tr, y_ml_tr, sample_weight=w_tr,
+            eval_set=[(X_val, y_ml_val)],
+            eval_metric="binary_logloss",
+            callbacks=[lgb.early_stopping(80, verbose=bool(lgb_callbacks))] + lgb_callbacks
+        )
+        p_val_raw = clf_final.predict_proba(X_val)[:, 1]
+
+        calibrator = CalibratedClassifierCV(clf_final, cv="prefit", method="isotonic")
+        # Isotonic supports sample_weight
+        calibrator.fit(X_val, y_ml_val, sample_weight=w_val)
+        p_val_cal = calibrator.predict_proba(X_val)[:, 1]
+
+        reg_final = lgb.LGBMRegressor(**{**reg_params, "n_estimators": 1000, "random_state": seed})
+        reg_final.fit(
+            X_tr, y_sp_tr, sample_weight=w_tr,
+            eval_set=[(X_val, y_sp_val)],
+            eval_metric="l2",
+            callbacks=[lgb.early_stopping(80, verbose=bool(lgb_callbacks))] + lgb_callbacks
+        )
+        y_pred_val = reg_final.predict(X_val)
+    else:
+        clf_final = HistGradientBoostingClassifier(
+            learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
+            validation_fraction=0.2, early_stopping=True
+        )
+        clf_final.fit(X_tr, y_ml_tr, sample_weight=w_tr)
+        p_val_raw = clf_final.predict_proba(X_val)[:, 1]
+        calibrator = None
+        p_val_cal = p_val_raw
+
+        reg_final = HistGradientBoostingRegressor(
+            learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
+            validation_fraction=0.2, early_stopping=True
+        )
+        reg_final.fit(X_tr, y_sp_tr, sample_weight=w_tr)
+        y_pred_val = reg_final.predict(X_val)
+
+    # Metrics
+    ml_logloss = float(log_loss(y_ml_val, p_val_cal)) if len(np.unique(y_ml_val)) == 2 else float("nan")
+    ml_brier = float(brier_score_loss(y_ml_val, p_val_cal))
+    sp_rmse = float(math.sqrt(mean_squared_error(y_sp_val, y_pred_val)))
+    sp_mae = float(mean_absolute_error(y_sp_val, y_pred_val))
+
+    # Spread sigma from validation residuals
+    spread_sigma = float(np.std(y_sp_val - y_pred_val, ddof=1))
+
+    # Compose OOF frame
+    oof_df = pd.DataFrame({
+        "gid": gid_sorted,
+        "oof_ml_prob": oof_ml,
+        "oof_spread_pred": oof_sp,
+    })
+
+    # Pretty summary
+    print(_sec("Game model metrics (validation)"))
+    print(f"- Moneyline: logloss={_fmt(ml_logloss)}, Brier={_fmt(ml_brier)}")
+    print(f"- Spread:    RMSE={_fmt(sp_rmse)}, MAE={_fmt(sp_mae)}, sigma={_fmt(spread_sigma)}")
+
+    metrics = {
+        "train_size": int(len(X_tr)),
+        "val_size": int(len(X_val)),
+        "ml_logloss": ml_logloss,
+        "ml_brier": ml_brier,
+        "sp_rmse": sp_rmse,
+        "sp_mae": sp_mae,
+        "spread_sigma": spread_sigma,
     }
+    return clf_final, calibrator, reg_final, spread_sigma, oof_df, metrics
 
-registry_path = MODEL_DIR / "model_registry.json"
-with open(registry_path, 'w') as f:
-    json.dump(registry, f, indent=2)
+# ---------------- Player dataset (with opponent context) ----------------
 
-print(f"✅ Saved registry: {registry_path}")
+def build_players_from_playerstats(
+    player_path: Path,
+    games_context: pd.DataFrame,
+    oof_games: pd.DataFrame,
+    verbose: bool
+) -> Dict[str, pd.DataFrame]:
+    """
+    Build training frames for player models from PlayerStatistics.csv.
+    Supports files without teamId/opponentTeamId by using the 'home' flag to select side context.
+    Includes opponent context columns (opp_*).
+    """
+    # Read header first (no usecols) so we can detect what exists
+    hdr = list(pd.read_csv(player_path, nrows=0).columns)
 
-print()
-print("=" * 80)
-print("🎉 TRAINING COMPLETE!")
-print("=" * 80)
-print(f"\n📦 Models saved to: {MODEL_DIR.absolute()}")
-print(f"\n📊 Summary:")
-for stat, info in models.items():
-    print(f"   {stat:<20s} MAE: {info['metrics']['test_mae']:.2f}  RMSE: {info['metrics']['test_rmse']:.2f}")
+    # Helpers to resolve columns (case-insensitive, many aliases)
+    def resolve_any(groups: list[list[str]]) -> Optional[str]:
+        norm_map = {_norm(c): c for c in hdr}
+        for group in groups:
+            for cand in group:
+                nc = _norm(cand)
+                if nc in norm_map:
+                    return norm_map[nc]
+        return None
 
-print(f"\n🚀 Next steps:")
-print(f"   1. Review models in {MODEL_DIR}/")
-print(f"   2. Check model_registry.json for details")
-print(f"   3. Integrate with RIQ analyzer (see MODEL_INTEGRATION.md)")
-print()
+    # Column groups (include common names + your exact names)
+    gid_col   = resolve_any([["gameId", "GAME_ID", "game_id", "gid"]])
+    date_col  = resolve_any([["gameDate", "date", "GAME_DATE", "game_date"]])
+    pid_col   = resolve_any([["personId", "playerId", "PLAYER_ID", "player_id", "person_id"]])
+    name_col  = resolve_any([["playerName", "PLAYER_NAME", "player_name", "firstName", "lastName"]])  # optional
+    tid_col   = resolve_any([["teamId", "TEAM_ID", "team_id", "tid"]])  # may be None
+    home_col  = resolve_any([["home", "isHome", "HOME"]])  # present in your file
+
+    min_col   = resolve_any([["numMinutes", "minutes", "mins", "min", "MIN"]])  # numMinutes in your file
+    pts_col   = resolve_any([["points", "pts", "POINTS", "PTS"]])
+    reb_col   = resolve_any([["reboundsTotal", "rebounds", "REB", "REBOUNDS"]])  # reboundsTotal in your file
+    ast_col   = resolve_any([["assists", "ast", "ASSISTS", "AST"]])
+    tpm_col   = resolve_any([["threePointersMade", "3pm", "FG3M", "threes", "three_pm"]])
+    starter_col = resolve_any([["starter", "isStarter", "started", "STARTER", "IS_STARTER"]])  # likely missing
+
+    # Read all detected columns (avoid usecols mismatch)
+    want_cols = [gid_col, date_col, pid_col, name_col, tid_col, home_col,
+                 min_col, pts_col, reb_col, ast_col, tpm_col, starter_col]
+    usecols = [c for c in want_cols if c is not None]
+    ps = pd.read_csv(player_path, low_memory=False, usecols=sorted(set(usecols)) if usecols else None)
+
+    # Show what we detected (easier to debug)
+    print(_sec("Detected player columns"))
+    print(f"- gid: {gid_col}  date: {date_col}  pid: {pid_col}  name: {name_col}")
+    print(f"- teamId: {tid_col}  home_flag: {home_col}")
+    print(f"- minutes: {min_col}  points: {pts_col}  rebounds: {reb_col}  assists: {ast_col}  threes: {tpm_col}")
+
+    # IDs to string (where present)
+    for c in [gid_col, pid_col, tid_col]:
+        if c and c in ps.columns:
+            ps[c] = _id_to_str(ps[c])
+
+    # Ensure player identifier
+    if not pid_col or pid_col not in ps.columns:
+        if name_col and name_col in ps.columns:
+            keys = ps[name_col].astype(str).fillna("unknown")
+            pid_codes, _ = pd.factorize(keys, sort=True)
+            ps["__player_id__"] = pd.Series(pid_codes, index=ps.index).astype("Int64").astype(str)
+            pid_col = "__player_id__"
+        else:
+            raise KeyError("No player identifier found (tried personId/playerId/player_name).")
+
+    # Date parse
+    if date_col and date_col in ps.columns:
+        ps[date_col] = pd.to_datetime(ps[date_col], errors="coerce", utc=True).dt.tz_convert(None)
+    else:
+        ps["__no_date__"] = pd.NaT
+        date_col = "__no_date__"
+
+    # Era features from date
+    ps["season_end_year"] = _season_from_date(ps[date_col]).astype("float32")
+    ps["season_decade"]   = _decade_from_season(ps["season_end_year"]).astype("float32")
+
+    # Numeric conversions
+    for stat_col in [min_col, pts_col, reb_col, ast_col, tpm_col]:
+        if stat_col and stat_col in ps.columns:
+            ps[stat_col] = pd.to_numeric(ps[stat_col], errors="coerce")
+
+    # Starter flag (optional)
+    if starter_col and starter_col in ps.columns:
+        s = ps[starter_col]
+        num = pd.to_numeric(s, errors="coerce")
+        ps["starter_flag"] = np.where(num.notna(), (num.fillna(0) != 0).astype(int),
+                                      s.astype(str).str.strip().str.lower().isin(["1", "true", "t", "yes", "y", "starter", "start"]).astype(int))
+    else:
+        ps["starter_flag"] = 0
+
+    # Home/away flag from player CSV (strong signal if teamId is missing)
+    if home_col and home_col in ps.columns:
+        h = ps[home_col]
+        hnum = pd.to_numeric(h, errors="coerce")
+        ps["is_home"] = np.where(
+            hnum.notna(),
+            (hnum.fillna(0) != 0).astype(int),
+            h.astype(str).str.strip().str.lower().isin(["1", "true", "t", "home", "h", "yes", "y"]).astype(int)
+        )
+    else:
+        ps["is_home"] = np.nan  # will fallback later
+
+    # Sort per player by date then gid numeric
+    ps["gid_num"] = pd.to_numeric(ps[gid_col], errors="coerce")
+    ps = ps.sort_values([pid_col, date_col, "gid_num"], ascending=[True, True, True], na_position="last")
+
+    # Rolling minutes trend
+    if min_col and min_col in ps.columns:
+        ps["min_prev_mean5"]  = ps.groupby(pid_col)[min_col].transform(lambda x: x.shift(1).rolling(5,  min_periods=1).mean())
+        ps["min_prev_mean10"] = ps.groupby(pid_col)[min_col].transform(lambda x: x.shift(1).rolling(10, min_periods=1).mean())
+        ps["min_prev_last1"]  = ps.groupby(pid_col)[min_col].transform(lambda x: x.shift(1))
+    else:
+        ps["min_prev_mean5"] = 20.0
+        ps["min_prev_mean10"] = 20.0
+        ps["min_prev_last1"] = 20.0
+
+    # Per-minute rates (shifted)
+    def rate(prev_count_col: Optional[str]) -> pd.Series:
+        if not (min_col and prev_count_col and prev_count_col in ps.columns and min_col in ps.columns):
+            return pd.Series(index=ps.index, dtype="float32")
+        minutes_shift = ps.groupby(pid_col)[min_col].shift(1)
+        stat_shift = ps.groupby(pid_col)[prev_count_col].shift(1)
+        r = stat_shift / minutes_shift.replace(0, np.nan)
+        return r.fillna(r.median(skipna=True)).astype("float32")
+
+    ps["rate_pts"] = rate(pts_col).fillna(0.5).astype("float32")
+    ps["rate_reb"] = rate(reb_col).fillna(0.2).astype("float32")
+    ps["rate_ast"] = rate(ast_col).fillna(0.2).astype("float32")
+    ps["rate_3pm"] = rate(tpm_col).fillna(0.1).astype("float32")
+
+    # Build side-aware context keyed by (gid, is_home), including opponent context
+    ctx = games_context.copy()
+
+    # Home-side row: team_* from home_*, opp_* from away_*
+    home_side = ctx[[
+        "gid", "date", "season_end_year", "season_decade", "home_tid", "away_tid",
+        "home_recent_pace", "home_off_strength", "home_def_strength", "home_recent_winrate",
+        "away_recent_pace", "away_off_strength", "away_def_strength", "away_recent_winrate",
+        "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff"
+    ]].rename(columns={
+        "home_tid": "tid", "away_tid": "opp_tid",
+        "home_recent_pace": "team_recent_pace",
+        "home_off_strength": "team_off_strength",
+        "home_def_strength": "team_def_strength",
+        "home_recent_winrate": "team_recent_winrate",
+        "away_recent_pace": "opp_recent_pace",
+        "away_off_strength": "opp_off_strength",
+        "away_def_strength": "opp_def_strength",
+        "away_recent_winrate": "opp_recent_winrate",
+    })
+    home_side["is_home"] = 1
+
+    # Away-side row: team_* from away_*, opp_* from home_*
+    away_side = ctx[[
+        "gid", "date", "season_end_year", "season_decade", "home_tid", "away_tid",
+        "away_recent_pace", "away_off_strength", "away_def_strength", "away_recent_winrate",
+        "home_recent_pace", "home_off_strength", "home_def_strength", "home_recent_winrate",
+        "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff"
+    ]].rename(columns={
+        "away_tid": "tid", "home_tid": "opp_tid",
+        "away_recent_pace": "team_recent_pace",
+        "away_off_strength": "team_off_strength",
+        "away_def_strength": "team_def_strength",
+        "away_recent_winrate": "team_recent_winrate",
+        "home_recent_pace": "opp_recent_pace",
+        "home_off_strength": "opp_off_strength",
+        "home_def_strength": "opp_def_strength",
+        "home_recent_winrate": "opp_recent_winrate",
+    })
+    away_side["is_home"] = 0
+
+    side_ctx_tid = pd.concat([home_side, away_side], ignore_index=True)
+    side_ctx_flag = side_ctx_tid.drop(columns=["tid", "opp_tid"]).drop_duplicates(["gid", "is_home"])
+
+    # Join context to players:
+    # 1) If teamId exists: join by (gid, tid)
+    # 2) Else if home flag exists: join by (gid, is_home)
+    # 3) Else: fallback to per-game average context (team_* and opp_*), plus matchup
+    if tid_col and tid_col in ps.columns:
+        ps_join = ps.merge(
+            side_ctx_tid,
+            left_on=[gid_col, tid_col],
+            right_on=["gid", "tid"],
+            how="left",
+            validate="many_to_one"
+        )
+    elif "is_home" in ps.columns and ps["is_home"].notna().any():
+        ps_join = ps.merge(
+            side_ctx_flag,
+            left_on=[gid_col, "is_home"],
+            right_on=["gid", "is_home"],
+            how="left",
+            validate="many_to_one"
+        )
+    else:
+        avg_cols = [
+            "season_end_year", "season_decade",
+            "team_recent_pace", "team_off_strength", "team_def_strength", "team_recent_winrate",
+            "opp_recent_pace", "opp_off_strength", "opp_def_strength", "opp_recent_winrate",
+            "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff"
+        ]
+        avg_ctx = side_ctx_tid.groupby("gid", as_index=False)[avg_cols].mean()
+        ps_join = ps.merge(avg_ctx, left_on=gid_col, right_on="gid", how="left")
+
+    # Add OOF game predictions
+    oof = oof_games.copy()
+    ps_join = ps_join.merge(oof[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
+
+    # Build frames
+    frames: Dict[str, pd.DataFrame] = {}
+
+    base_ctx_cols = [
+        "is_home",
+        "season_end_year", "season_decade",
+        "team_recent_pace", "team_off_strength", "team_def_strength", "team_recent_winrate",
+        "opp_recent_pace",  "opp_off_strength",  "opp_def_strength",  "opp_recent_winrate",
+        "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff",
+        "oof_ml_prob", "oof_spread_pred", "starter_flag",
+    ]
+
+    # Minutes
+    if min_col and min_col in ps_join.columns:
+        minutes_df = ps_join[[gid_col, pid_col] + base_ctx_cols + [
+            "min_prev_mean5", "min_prev_mean10", "min_prev_last1", min_col
+        ]].copy()
+        minutes_df = minutes_df.dropna(subset=[min_col]).reset_index(drop=True)
+        frames["minutes"] = minutes_df
+    else:
+        frames["minutes"] = pd.DataFrame()
+
+    # Helper builder
+    def build_stat_frame(stat_col: Optional[str], rate_col: str) -> pd.DataFrame:
+        if not stat_col or stat_col not in ps_join.columns:
+            return pd.DataFrame()
+        cols = [gid_col, pid_col] + base_ctx_cols + [rate_col]
+        df = ps_join[cols].copy()
+        if min_col and min_col in ps_join.columns:
+            df["minutes"] = ps_join[min_col]
+        df["label"] = pd.to_numeric(ps_join[stat_col], errors="coerce")
+        df = df.dropna(subset=["label"]).reset_index(drop=True)
+        return df
+
+    frames["points"]   = build_stat_frame(pts_col, "rate_pts")
+    frames["rebounds"] = build_stat_frame(reb_col, "rate_reb")
+    frames["assists"]  = build_stat_frame(ast_col, "rate_ast")
+    frames["threes"]   = build_stat_frame(tpm_col, "rate_3pm")
+
+    # Counts
+    print(_sec("Player training frames"))
+    for k, v in frames.items():
+        print(f"- {k}: {len(v):,} rows")
+
+    return frames
+
+# ---------------- Fit player models ----------------
+
+def _fit_minutes_model(df: pd.DataFrame, seed: int, verbose: bool) -> Tuple[object, Dict[str, float]]:
+    if df.empty:
+        mdl = DummyRegressor(strategy="mean").fit([[0]], [24.0])
+        return mdl, {"rows": 0, "rmse": float("nan"), "mae": float("nan")}
+    features = [
+        # team + opponent context
+        "is_home",
+        "season_end_year", "season_decade",
+        "team_recent_pace", "team_off_strength", "team_def_strength", "team_recent_winrate",
+        "opp_recent_pace",  "opp_off_strength",  "opp_def_strength",  "opp_recent_winrate",
+        # matchup + game signals
+        "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff",
+        "oof_ml_prob", "oof_spread_pred", "starter_flag",
+        # minutes trends
+        "min_prev_mean5", "min_prev_mean10", "min_prev_last1"
+    ]
+    features = [f for f in features if f in df.columns]
+    X = df[features].apply(pd.to_numeric, errors="coerce").fillna(0.0).astype("float32")
+    y = pd.to_numeric(df.iloc[:, -1], errors="coerce").astype(float).values  # minutes column is last
+    w = pd.to_numeric(df.get("sample_weight", pd.Series(np.ones(len(df)))), errors="coerce").fillna(1.0).values
+
+    n = len(X)
+    split = max(1, min(int(n * 0.8), n - 1))
+    X_tr, X_val = X.iloc[:split, :], X.iloc[split:, :]
+    y_tr, y_val = y[:split], y[split:]
+    w_tr, w_val = w[:split], w[split:]
+
+    if _HAS_LGB:
+        reg = lgb.LGBMRegressor(
+            objective="regression",
+            learning_rate=0.05, num_leaves=31, max_depth=-1,
+            colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
+            n_estimators=800, random_state=seed, n_jobs=-1,
+            force_col_wise=True, verbosity=-1
+        )
+    else:
+        reg = HistGradientBoostingRegressor(
+            learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
+            validation_fraction=0.2, early_stopping=True
+        )
+    reg.fit(X_tr, y_tr, sample_weight=w_tr)
+    y_pred = reg.predict(X_val) if len(X_val) else np.array([])
+    rmse = float(math.sqrt(mean_squared_error(y_val, y_pred))) if len(y_pred) else float("nan")
+    mae = float(mean_absolute_error(y_val, y_pred)) if len(y_pred) else float("nan")
+
+    print(_sec("Minutes model metrics (validation)"))
+    print(f"- RMSE={_fmt(rmse)}, MAE={_fmt(mae)}")
+    return reg, {"rows": int(n), "rmse": rmse, "mae": mae}
+
+def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tuple[object, Dict[str, float]]:
+    if df.empty:
+        mdl = DummyRegressor(strategy="mean").fit([[0]], [0.0])
+        return mdl, {"rows": 0, "rmse": float("nan"), "mae": float("nan")}
+    features = [
+        # team + opponent context
+        "is_home",
+        "season_end_year", "season_decade",
+        "team_recent_pace", "team_off_strength", "team_def_strength", "team_recent_winrate",
+        "opp_recent_pace",  "opp_off_strength",  "opp_def_strength",  "opp_recent_winrate",
+        # matchup + game signals
+        "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff",
+        "oof_ml_prob", "oof_spread_pred", "starter_flag",
+        # player rates
+        "rate_pts", "rate_reb", "rate_ast", "rate_3pm",
+    ]
+    if "minutes" in df.columns:
+        features.append("minutes")
+    features = [f for f in features if f in df.columns]
+
+    X = df[features].apply(pd.to_numeric, errors="coerce").fillna(0.0).astype("float32")
+    y = pd.to_numeric(df["label"], errors="coerce").astype(float).values
+    w = pd.to_numeric(df.get("sample_weight", pd.Series(np.ones(len(df)))), errors="coerce").fillna(1.0).values
+
+    n = len(X)
+    split = max(1, min(int(n * 0.8), n - 1))
+    X_tr, X_val = X.iloc[:split, :], X.iloc[split:, :]
+    y_tr, y_val = y[:split], y[split:]
+    w_tr, w_val = w[:split], w[split:]
+
+    if _HAS_LGB:
+        reg = lgb.LGBMRegressor(
+            objective="regression",
+            learning_rate=0.05, num_leaves=31, max_depth=-1,
+            colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
+            n_estimators=800, random_state=seed, n_jobs=-1,
+            force_col_wise=True, verbosity=-1
+        )
+    else:
+        reg = HistGradientBoostingRegressor(
+            learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
+            validation_fraction=0.2, early_stopping=True
+        )
+    reg.fit(X_tr, y_tr, sample_weight=w_tr)
+    y_pred = reg.predict(X_val) if len(X_val) else np.array([])
+    rmse = float(math.sqrt(mean_squared_error(y_val, y_pred))) if len(y_pred) else float("nan")
+    mae = float(mean_absolute_error(y_val, y_pred)) if len(y_pred) else float("nan")
+
+    print(_sec(f"{name.capitalize()} model metrics (validation)"))
+    print(f"- RMSE={_fmt(rmse)}, MAE={_fmt(mae)}")
+    return reg, {"rows": int(n), "rmse": rmse, "mae": mae}
+
+# ---------------- Main ----------------
+
+def main():
+    ap = argparse.ArgumentParser(description="Train NBA game and player models (always fetch from Kaggle).")
+    ap.add_argument("--dataset", type=str, default="eoinamoore/historical-nba-data-and-player-box-scores", help="Kaggle dataset ref")
+    ap.add_argument("--models-dir", type=str, default="models", help="Output dir for models")
+    ap.add_argument("--seed", type=int, default=42, help="Random seed")
+    ap.add_argument("--verbose", action="store_true", help="Verbose logging")
+    ap.add_argument("--skip-rest", action="store_true", help="Skip rest/b2b features (useful when dates missing)")
+    ap.add_argument("--fresh", action="store_true", help="Copy CSVs into a new per-run folder to avoid any stale artifacts")
+    ap.add_argument("--lgb-log-period", type=int, default=0, help="Print LightGBM eval metrics every N iterations (0 = silent)")
+
+    # Era controls
+    ap.add_argument("--game-season-cutoff", type=str, default="2002",
+                    help="Minimum season_end_year to include for game models. Presets: classic=1997, balanced=2002. Also accepts an int like 1997/2001/2004.")
+    ap.add_argument("--player-season-cutoff", type=str, default="2002",
+                    help="Minimum season_end_year to include for player models. Presets: min=1998, balanced=2002, modern=2005. Also accepts an int.")
+    ap.add_argument("--decay", type=float, default=0.97, help="Time-decay factor for sample weights (0.90-0.99 typical).")
+    ap.add_argument("--min-weight", type=float, default=0.30, help="Minimum sample weight after decay.")
+    ap.add_argument("--lockout-weight", type=float, default=0.90, help="Extra multiplier applied to lockout seasons (1999, 2012).")
+
+    args = ap.parse_args()
+
+    verbose = args.verbose
+    seed = args.seed
+
+    print(_sec("Training configuration"))
+    print(f"- dataset: {args.dataset}")
+    print(f"- models_dir: {args.models_dir}")
+    print(f"- seed: {seed}")
+    print(f"- skip_rest: {args.skip_rest}")
+    print(f"- fresh_run_copy: {args.fresh}")
+    print(f"- lgb_log_period: {args.lgb_log_period}")
+    print(f"- game_season_cutoff: {args.game_season_cutoff}  player_season_cutoff: {args.player_season_cutoff}")
+    print(f"- decay: {args.decay}  min_weight: {args.min_weight}  lockout_weight: {args.lockout_weight}")
+
+    if kagglehub is None:
+        raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
+
+    # Download Kaggle dataset (always)
+    print(_sec("Fetching latest from Kaggle"))
+    ds_root = Path(kagglehub.dataset_download(args.dataset))
+    print(f"- Downloaded to cache: {ds_root}")
+
+    # Optionally copy to a per-run folder (ensures clean, fresh artifacts)
+    ds_use_root = ds_root
+    if args.fresh:
+        run_dir = _fresh_run_dir(Path(".kaggle_runs"))
+        teams_src, players_src = _find_dataset_files(ds_root)
+        teams_dst = _copy_if_exists(teams_src, run_dir)
+        players_dst = _copy_if_exists(players_src, run_dir)
+        ds_use_root = run_dir
+        print(f"- Copied CSVs to: {run_dir}")
+        if not teams_dst:
+            raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
+        teams_path, players_path = teams_dst, players_dst
+    else:
+        teams_path, players_path = _find_dataset_files(ds_root)
+        if not teams_path:
+            raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
+
+    models_dir = Path(args.models_dir)
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build games and team context
+    print(_sec("Building game dataset"))
+    games_df, context_map = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
+
+    # Era filter for games
+    game_cut = _parse_season_cutoff(args.game_season_cutoff, kind="game")
+    if "season_end_year" in games_df.columns:
+        before_len = len(games_df)
+        games_df = games_df[(games_df["season_end_year"].fillna(game_cut)) >= game_cut].reset_index(drop=True)
+        print(f"- Games filtered by season >= {game_cut}: {before_len:,} -> {len(games_df):,} rows")
+
+    # Compute sample weights for games
+    if "season_end_year" in games_df.columns:
+        game_weights = _compute_sample_weights(
+            games_df["season_end_year"].to_numpy(dtype="float64"),
+            decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+        )
+    else:
+        game_weights = np.ones(len(games_df), dtype="float64")
+
+    print(f"- Games: {len(games_df):,} rows")
+
+    # Train game models + OOF
+    print(_sec("Training game models"))
+    clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
+        games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights
+    )
+
+    # Save game models
+    import pickle
+    with open(models_dir / "moneyline_model.pkl", "wb") as f:
+        pickle.dump(clf_final, f)
+    if calibrator is not None:
+        with open(models_dir / "moneyline_calibrator.pkl", "wb") as f:
+            pickle.dump(calibrator, f)
+    with open(models_dir / "spread_model.pkl", "wb") as f:
+        pickle.dump(reg_final, f)
+    with open(models_dir / "spread_sigma.json", "w", encoding="utf-8") as f:
+        json.dump({"spread_sigma": spread_sigma}, f)
+
+    # Player models
+    player_metrics: Dict[str, Dict[str, float]] = {}
+    if players_path and players_path.exists():
+        print(_sec("Building player datasets"))
+        frames = build_players_from_playerstats(players_path, context_map, oof_games, verbose=verbose)
+
+        # Era filter + weights per frame
+        player_cut = _parse_season_cutoff(args.player_season_cutoff, kind="player")
+        for k, df in list(frames.items()):
+            if df is None or df.empty:
+                continue
+            if "season_end_year" in df.columns:
+                before = len(df)
+                df = df[(df["season_end_year"].fillna(player_cut)) >= player_cut].reset_index(drop=True)
+                frames[k] = df
+                print(f"- {k}: filtered by season >= {player_cut}: {before:,} -> {len(df):,}")
+                # weights
+                df["sample_weight"] = _compute_sample_weights(
+                    df["season_end_year"].to_numpy(dtype="float64"),
+                    decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+                )
+                frames[k] = df
+            else:
+                df["sample_weight"] = 1.0
+                frames[k] = df
+
+        print(_sec("Training player models"))
+        # Minutes
+        minutes_model, m_metrics = _fit_minutes_model(frames.get("minutes", pd.DataFrame()), seed=seed + 10, verbose=verbose)
+        with open(models_dir / "minutes_model.pkl", "wb") as f:
+            pickle.dump(minutes_model, f)
+        player_metrics["minutes"] = m_metrics
+
+        # If minutes missing in stat frames, inject a simple proxy for training convenience
+        for key in ["points", "rebounds", "assists", "threes"]:
+            df = frames.get(key, pd.DataFrame())
+            if not df.empty and "minutes" not in df.columns and not frames["minutes"].empty:
+                df["minutes"] = frames["minutes"]["min_prev_mean10"].median() if "min_prev_mean10" in frames["minutes"].columns else 24.0
+                frames[key] = df
+
+        # Points
+        points_model, p_metrics = _fit_stat_model(frames.get("points", pd.DataFrame()), seed=seed + 20, verbose=verbose, name="points")
+        with open(models_dir / "points_model.pkl", "wb") as f:
+            pickle.dump(points_model, f)
+        player_metrics["points"] = p_metrics
+
+        # Rebounds
+        rebounds_model, r_metrics = _fit_stat_model(frames.get("rebounds", pd.DataFrame()), seed=seed + 21, verbose=verbose, name="rebounds")
+        with open(models_dir / "rebounds_model.pkl", "wb") as f:
+            pickle.dump(rebounds_model, f)
+        player_metrics["rebounds"] = r_metrics
+
+        # Assists
+        assists_model, a_metrics = _fit_stat_model(frames.get("assists", pd.DataFrame()), seed=seed + 22, verbose=verbose, name="assists")
+        with open(models_dir / "assists_model.pkl", "wb") as f:
+            pickle.dump(assists_model, f)
+        player_metrics["assists"] = a_metrics
+
+        # Threes
+        threes_model, t_metrics = _fit_stat_model(frames.get("threes", pd.DataFrame()), seed=seed + 23, verbose=verbose, name="threes")
+        with open(models_dir / "threes_model.pkl", "wb") as f:
+            pickle.dump(threes_model, f)
+        player_metrics["threes"] = t_metrics
+    else:
+        print(_sec("Player models"))
+        print("- Skipped (PlayerStatistics.csv not found in Kaggle dataset).")
+
+    # Save metadata
+    meta = {
+        "game_features": GAME_FEATURES,
+        "game_defaults": GAME_DEFAULTS,
+        "game_metrics": game_metrics,
+        "player_metrics": player_metrics,
+        "era": {
+            "game_season_cutoff": _parse_season_cutoff(args.game_season_cutoff, "game"),
+            "player_season_cutoff": _parse_season_cutoff(args.player_season_cutoff, "player"),
+            "decay": args.decay,
+            "min_weight": args.min_weight,
+            "lockout_weight": args.lockout_weight,
+        },
+        "versions": {
+            "lightgbm": getattr(lgb, "__version__", None) if _HAS_LGB else None,
+            "pandas": pd.__version__,
+            "numpy": np.__version__,
+        }
+    }
+    with open(models_dir / "training_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
+    # Final report
+    print(_sec("Saved artifacts"))
+    print(f"- { (models_dir / 'moneyline_model.pkl').as_posix() }")
+    if os.path.exists(models_dir / "moneyline_calibrator.pkl"):
+        print(f"- { (models_dir / 'moneyline_calibrator.pkl').as_posix() }")
+        print(f"- { (models_dir / 'spread_model.pkl').as_posix() }")
+    else:
+        print(f"- { (models_dir / 'spread_model.pkl').as_posix() }")
+    print(f"- { (models_dir / 'spread_sigma.json').as_posix() }")
+    if player_metrics:
+        print(f"- { (models_dir / 'minutes_model.pkl').as_posix() }")
+        print(f"- { (models_dir / 'points_model.pkl').as_posix() }")
+        print(f"- { (models_dir / 'rebounds_model.pkl').as_posix() }")
+        print(f"- { (models_dir / 'assists_model.pkl').as_posix() }")
+        print(f"- { (models_dir / 'threes_model.pkl').as_posix() }")
+
+    print(_sec("Summary"))
+    print(f"- Games: {len(games_df):,}")
+    print(f"- Moneyline: logloss={_fmt(game_metrics['ml_logloss'])}, Brier={_fmt(game_metrics['ml_brier'])}")
+    print(f"- Spread:    RMSE={_fmt(game_metrics['sp_rmse'])}, MAE={_fmt(game_metrics['sp_mae'])}, sigma={_fmt(game_metrics['spread_sigma'])}")
+    if player_metrics:
+        for k, mm in player_metrics.items():
+            print(f"- {k.capitalize()}: rows={mm.get('rows')}, RMSE={_fmt(mm.get('rmse'))}, MAE={_fmt(mm.get('mae'))}")
+
+if __name__ == "__main__":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    main()
