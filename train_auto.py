@@ -177,6 +177,14 @@ GAME_FEATURES: List[str] = [
     "home_injury_impact", "away_injury_impact",
     # era features
     "season_end_year", "season_decade",
+    # betting market features (optional - added when --odds-dataset provided)
+    "market_implied_home", "market_implied_away",
+    "market_spread", "spread_move",
+    "market_total", "total_move",
+    # team priors from Basketball Reference (optional - added when --priors-dataset provided)
+    "home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior",
+    "away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior",
+    "home_srs_prior", "away_srs_prior",
 ]
 
 GAME_DEFAULTS: Dict[str, float] = {
@@ -203,6 +211,22 @@ GAME_DEFAULTS: Dict[str, float] = {
     # era defaults (will be filled from actual dates when present)
     "season_end_year": 2002.0,
     "season_decade": 2000.0,
+    # betting market defaults (neutral priors)
+    "market_implied_home": 0.5,
+    "market_implied_away": 0.5,
+    "market_spread": 0.0,
+    "spread_move": 0.0,
+    "market_total": 210.0,  # typical NBA total
+    "total_move": 0.0,
+    # team priors defaults (league-average baseline)
+    "home_o_rtg_prior": 110.0,
+    "home_d_rtg_prior": 110.0,
+    "home_pace_prior": 100.0,
+    "away_o_rtg_prior": 110.0,
+    "away_d_rtg_prior": 110.0,
+    "away_pace_prior": 100.0,
+    "home_srs_prior": 0.0,
+    "away_srs_prior": 0.0,
 }
 
 # ---------------- Utilities ----------------
@@ -1008,6 +1032,287 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
     print(f"- RMSE={_fmt(rmse)}, MAE={_fmt(mae)}")
     return reg, {"rows": int(n), "rmse": rmse, "mae": mae}
 
+# ---------------- Betting Odds and Priors Loaders ----------------
+
+def load_team_abbrev_map(priors_root: Path, verbose: bool) -> Dict[Tuple[int, str], str]:
+    """
+    Load Team Abbrev.csv and return dict: (season, team_name) -> abbreviation
+    Handles renames across seasons (NOH->NOP, CHH/CHA, SEA->OKC, etc.)
+    """
+    abbrev_path = priors_root / "Team Abbrev.csv"
+    if not abbrev_path.exists():
+        log(f"Warning: Team Abbrev.csv not found at {abbrev_path}, returning empty map", verbose)
+        return {}
+
+    df = pd.read_csv(abbrev_path, low_memory=False)
+    # Filter NBA non-playoff
+    if "lg" in df.columns:
+        df = df[df["lg"] == "NBA"]
+    if "playoffs" in df.columns:
+        df = df[df["playoffs"] == False]
+
+    abbrev_map: Dict[Tuple[int, str], str] = {}
+    for _, row in df.iterrows():
+        season = int(row["season"]) if "season" in row and pd.notna(row["season"]) else 0
+        team = str(row["team"]).strip() if "team" in row else ""
+        abbr = str(row["abbreviation"]).strip() if "abbreviation" in row else ""
+        if season > 0 and team and abbr:
+            abbrev_map[(season, _norm(team))] = abbr
+
+    log(f"Loaded {len(abbrev_map)} team abbreviation mappings from {abbrev_path.name}", verbose)
+    return abbrev_map
+
+def resolve_team_abbrev(team_name: str, season: int, abbrev_map: Dict[Tuple[int, str], str]) -> Optional[str]:
+    """Resolve team name to abbreviation for a given season"""
+    key = (season, _norm(team_name))
+    if key in abbrev_map:
+        return abbrev_map[key]
+    # Fallback: try finding any season with same team name
+    for (s, tn), abbr in abbrev_map.items():
+        if tn == _norm(team_name):
+            return abbr
+    return None
+
+def load_betting_odds(odds_path: Path, abbrev_map: Dict[Tuple[int, str], str], verbose: bool) -> pd.DataFrame:
+    """
+    Load betting odds dataset and normalize to canonical schema.
+    Returns DataFrame with columns: gid, game_date_utc, season_end_year, home_abbrev, away_abbrev,
+    market_home_ml, market_away_ml, market_spread, spread_move, market_total, total_move,
+    market_implied_home, market_implied_away
+    """
+    if not odds_path.exists():
+        log(f"Betting odds file not found: {odds_path}", verbose)
+        return pd.DataFrame()
+
+    log(_sec("Loading betting odds dataset"), verbose)
+    df = pd.read_csv(odds_path, low_memory=False)
+    log(f"Loaded {len(df):,} odds rows from {odds_path.name}", verbose)
+
+    # Detect and normalize columns (flexible mapping)
+    def find_col(patterns: List[str]) -> Optional[str]:
+        for pat in patterns:
+            matches = [c for c in df.columns if pat.lower() in c.lower()]
+            if matches:
+                return matches[0]
+        return None
+
+    gid_col = find_col(["gameid", "game_id", "gid"])
+    date_col = find_col(["date", "game_date", "gamedate"])
+    home_col = find_col(["hometeam", "home_team", "home"])
+    away_col = find_col(["awayteam", "away_team", "away"])
+    book_col = find_col(["book", "bookmaker", "sportsbook"])
+
+    # Moneyline
+    home_ml_open_col = find_col(["home_ml_open", "homemlopen", "home_moneyline_open"])
+    home_ml_close_col = find_col(["home_ml_close", "homemlclose", "home_moneyline_close", "home_ml"])
+    away_ml_open_col = find_col(["away_ml_open", "awaymlopen", "away_moneyline_open"])
+    away_ml_close_col = find_col(["away_ml_close", "awaymlclose", "away_moneyline_close", "away_ml"])
+
+    # Spread
+    spread_open_col = find_col(["spread_open", "spreadopen", "line_open", "handicap_open"])
+    spread_close_col = find_col(["spread_close", "spreadclose", "line_close", "handicap_close", "spread", "line"])
+
+    # Total
+    total_open_col = find_col(["total_open", "totalopen", "ou_open", "over_under_open"])
+    total_close_col = find_col(["total_close", "totalclose", "ou_close", "over_under_close", "total", "ou"])
+
+    # Build canonical df
+    canonical = pd.DataFrame()
+
+    if gid_col:
+        canonical["gid"] = _id_to_str(df[gid_col])
+
+    if date_col:
+        canonical["game_date_utc"] = pd.to_datetime(df[date_col], errors="coerce", utc=True).dt.tz_convert(None)
+        canonical["season_end_year"] = _season_from_date(canonical["game_date_utc"]).astype("float32")
+
+    if home_col:
+        canonical["home_team"] = df[home_col].astype(str).str.strip()
+    if away_col:
+        canonical["away_team"] = df[away_col].astype(str).str.strip()
+
+    if book_col:
+        canonical["book"] = df[book_col].astype(str).str.strip()
+
+    # Odds columns (numeric)
+    for src, dst in [
+        (home_ml_open_col, "home_ml_open"), (home_ml_close_col, "home_ml_close"),
+        (away_ml_open_col, "away_ml_open"), (away_ml_close_col, "away_ml_close"),
+        (spread_open_col, "spread_open"), (spread_close_col, "spread_close"),
+        (total_open_col, "total_open"), (total_close_col, "total_close"),
+    ]:
+        if src:
+            canonical[dst] = pd.to_numeric(df[src], errors="coerce")
+
+    # Resolve team abbreviations
+    if "home_team" in canonical.columns and "season_end_year" in canonical.columns:
+        canonical["home_abbrev"] = canonical.apply(
+            lambda r: resolve_team_abbrev(r["home_team"], int(r["season_end_year"]), abbrev_map) if pd.notna(r["season_end_year"]) else None,
+            axis=1
+        )
+        canonical["away_abbrev"] = canonical.apply(
+            lambda r: resolve_team_abbrev(r["away_team"], int(r["season_end_year"]), abbrev_map) if pd.notna(r["season_end_year"]) else None,
+            axis=1
+        )
+
+    # Compute consensus closing values per game (median across books)
+    if "gid" not in canonical.columns and "game_date_utc" in canonical.columns and "home_abbrev" in canonical.columns:
+        # Generate synthetic gid from date + teams
+        canonical["gid"] = (
+            canonical["game_date_utc"].dt.strftime("%Y%m%d") + "_" +
+            canonical["home_abbrev"].fillna("UNK") + "_" +
+            canonical["away_abbrev"].fillna("UNK")
+        )
+
+    # Aggregate to one row per game (consensus medians)
+    agg_dict = {}
+    for col in ["season_end_year", "home_ml_close", "away_ml_close", "spread_close", "total_close",
+                "home_ml_open", "away_ml_open", "spread_open", "total_open"]:
+        if col in canonical.columns:
+            agg_dict[col] = "median"
+
+    # Keep first non-null for identifiers
+    for col in ["game_date_utc", "home_team", "away_team", "home_abbrev", "away_abbrev"]:
+        if col in canonical.columns:
+            agg_dict[col] = "first"
+
+    if not agg_dict:
+        log("Warning: No odds columns found to aggregate", verbose)
+        return pd.DataFrame()
+
+    game_odds = canonical.groupby("gid", as_index=False).agg(agg_dict)
+
+    # Compute market priors and movement
+    def american_to_prob(ml: float) -> float:
+        """Convert American odds to implied probability"""
+        if pd.isna(ml):
+            return np.nan
+        if ml < 0:
+            return -ml / (-ml + 100)
+        else:
+            return 100 / (ml + 100)
+
+    if "home_ml_close" in game_odds.columns:
+        game_odds["market_home_ml"] = game_odds["home_ml_close"]
+        game_odds["market_implied_home"] = game_odds["home_ml_close"].apply(american_to_prob)
+    if "away_ml_close" in game_odds.columns:
+        game_odds["market_away_ml"] = game_odds["away_ml_close"]
+        game_odds["market_implied_away"] = game_odds["away_ml_close"].apply(american_to_prob)
+
+    # No-vig normalization
+    if "market_implied_home" in game_odds.columns and "market_implied_away" in game_odds.columns:
+        total_vig = game_odds["market_implied_home"] + game_odds["market_implied_away"]
+        game_odds["market_implied_home"] = game_odds["market_implied_home"] / total_vig
+        game_odds["market_implied_away"] = game_odds["market_implied_away"] / total_vig
+
+    if "spread_close" in game_odds.columns:
+        game_odds["market_spread"] = game_odds["spread_close"]
+        if "spread_open" in game_odds.columns:
+            game_odds["spread_move"] = game_odds["spread_close"] - game_odds["spread_open"]
+
+    if "total_close" in game_odds.columns:
+        game_odds["market_total"] = game_odds["total_close"]
+        if "total_open" in game_odds.columns:
+            game_odds["total_move"] = game_odds["total_close"] - game_odds["total_open"]
+
+    # Keep only needed columns
+    keep_cols = ["gid", "game_date_utc", "season_end_year", "home_abbrev", "away_abbrev",
+                 "market_home_ml", "market_away_ml", "market_spread", "spread_move",
+                 "market_total", "total_move", "market_implied_home", "market_implied_away"]
+    keep_cols = [c for c in keep_cols if c in game_odds.columns]
+    game_odds = game_odds[keep_cols]
+
+    log(f"Processed {len(game_odds):,} unique games with market odds", verbose)
+    return game_odds
+
+def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Load Basketball Reference priors bundle (player + team CSVs).
+    Returns: (priors_players, priors_teams) with season_for_game = season + 1 (shifted for leakage safety)
+    """
+    log(_sec("Loading Basketball Reference priors"), verbose)
+
+    # Team priors
+    team_summaries_path = priors_root / "Team Summaries.csv"
+    team_per100_path = priors_root / "Team Stats Per 100 Poss.csv"
+
+    priors_teams = pd.DataFrame()
+
+    if team_summaries_path.exists():
+        ts = pd.read_csv(team_summaries_path, low_memory=False)
+        # Filter NBA non-playoff
+        if "lg" in ts.columns:
+            ts = ts[ts["lg"] == "NBA"]
+        if "playoffs" in ts.columns:
+            ts = ts[ts["playoffs"] == False]
+
+        # Keep key columns
+        team_cols = ["season", "abbreviation", "w", "l", "mov", "sos", "srs",
+                     "o_rtg", "d_rtg", "n_rtg", "pace", "f_tr", "x3p_ar", "ts_percent",
+                     "e_fg_percent", "tov_percent", "orb_percent", "ft_fga",
+                     "opp_e_fg_percent", "opp_tov_percent", "drb_percent", "opp_ft_fga"]
+        team_cols = ["season", "abbreviation"] + [c for c in team_cols if c in ts.columns]
+        priors_teams = ts[team_cols].copy()
+
+        # Normalize percents (0-100 -> 0-1)
+        for col in priors_teams.columns:
+            if "percent" in col.lower() or col in ["f_tr", "x3p_ar", "ft_fga", "opp_ft_fga"]:
+                vals = pd.to_numeric(priors_teams[col], errors="coerce")
+                # If max > 1.5, assume 0-100 scale
+                if vals.max() > 1.5:
+                    priors_teams[col] = vals / 100.0
+
+        # Shift: season S priors are used in season S+1
+        priors_teams["season_for_game"] = priors_teams["season"] + 1
+        priors_teams = priors_teams.drop(columns=["season"])
+
+        log(f"Loaded {len(priors_teams):,} team-season priors from Team Summaries", verbose)
+
+    # Player priors (simplified - just Per 100 Poss for now)
+    per100_path = priors_root / "Per 100 Poss.csv"
+    priors_players = pd.DataFrame()
+
+    if per100_path.exists():
+        pp = pd.read_csv(per100_path, low_memory=False)
+        # Filter NBA
+        if "lg" in pp.columns:
+            pp = pp[pp["lg"] == "NBA"]
+
+        # Prefer TOT rows for multi-team seasons; else keep all
+        if "team" in pp.columns:
+            tot_rows = pp[pp["team"] == "TOT"]
+            non_tot = pp[pp["team"] != "TOT"]
+            # For players with TOT, keep only TOT; else keep their single-team row
+            has_tot = set(tot_rows["player_id"]) if "player_id" in tot_rows.columns else set()
+            non_tot = non_tot[~non_tot["player_id"].isin(has_tot)] if "player_id" in non_tot.columns else non_tot
+            pp = pd.concat([tot_rows, non_tot], ignore_index=True)
+
+        # Keep key rate columns
+        player_cols = ["season", "player_id", "player", "age", "pos", "g", "mp",
+                       "pts_per_100_poss", "trb_per_100_poss", "ast_per_100_poss",
+                       "stl_per_100_poss", "blk_per_100_poss", "tov_per_100_poss",
+                       "fg_per_100_poss", "fga_per_100_poss", "fg_percent",
+                       "x3p_per_100_poss", "x3pa_per_100_poss", "x3p_percent",
+                       "ft_per_100_poss", "fta_per_100_poss", "ft_percent",
+                       "o_rtg", "d_rtg"]
+        player_cols = [c for c in player_cols if c in pp.columns]
+        priors_players = pp[player_cols].copy()
+
+        # Normalize percents
+        for col in priors_players.columns:
+            if "percent" in col.lower():
+                vals = pd.to_numeric(priors_players[col], errors="coerce")
+                if vals.max() > 1.5:
+                    priors_players[col] = vals / 100.0
+
+        # Shift to next season
+        priors_players["season_for_game"] = priors_players["season"] + 1
+        priors_players = priors_players.drop(columns=["season"])
+
+        log(f"Loaded {len(priors_players):,} player-season priors from Per 100 Poss", verbose)
+
+    return priors_players, priors_teams
+
 # ---------------- Main ----------------
 
 def main():
@@ -1028,6 +1333,10 @@ def main():
     ap.add_argument("--decay", type=float, default=0.97, help="Time-decay factor for sample weights (0.90-0.99 typical).")
     ap.add_argument("--min-weight", type=float, default=0.30, help="Minimum sample weight after decay.")
     ap.add_argument("--lockout-weight", type=float, default=0.90, help="Extra multiplier applied to lockout seasons (1999, 2012).")
+
+    # Additional datasets
+    ap.add_argument("--odds-dataset", type=str, default=None, help="Path or Kaggle dataset ref for betting odds (optional)")
+    ap.add_argument("--priors-dataset", type=str, default=None, help="Path or Kaggle dataset ref for Basketball Reference priors bundle (optional)")
 
     args = ap.parse_args()
 
@@ -1093,6 +1402,130 @@ def main():
         game_weights = np.ones(len(games_df), dtype="float64")
 
     print(f"- Games: {len(games_df):,} rows")
+
+    # Load and merge betting odds (if provided)
+    if args.odds_dataset:
+        odds_path_str = args.odds_dataset
+        # Check if it's a Kaggle dataset ref or local path
+        if "/" in odds_path_str and not os.path.exists(odds_path_str):
+            # Assume Kaggle dataset
+            if not kagglehub:
+                log("Warning: kagglehub not available, skipping odds dataset", verbose)
+                odds_df = pd.DataFrame()
+            else:
+                try:
+                    log(f"Downloading odds dataset from Kaggle: {odds_path_str}", verbose)
+                    odds_root = Path(kagglehub.dataset_download(odds_path_str))
+                    # Find CSV file in downloaded dataset
+                    odds_csvs = list(odds_root.glob("*.csv"))
+                    if odds_csvs:
+                        odds_path = odds_csvs[0]  # Use first CSV found
+                        # Load team abbrev map if priors dataset is available (for team name resolution)
+                        abbrev_map = {}
+                        if args.priors_dataset:
+                            priors_root_str = args.priors_dataset
+                            if "/" in priors_root_str and not os.path.exists(priors_root_str):
+                                priors_root = Path(kagglehub.dataset_download(priors_root_str))
+                            else:
+                                priors_root = Path(priors_root_str)
+                            abbrev_map = load_team_abbrev_map(priors_root, verbose)
+                        odds_df = load_betting_odds(odds_path, abbrev_map, verbose)
+                    else:
+                        log(f"Warning: No CSV files found in {odds_root}", verbose)
+                        odds_df = pd.DataFrame()
+                except Exception as e:
+                    log(f"Warning: Failed to load odds dataset: {e}", verbose)
+                    odds_df = pd.DataFrame()
+        else:
+            odds_path = Path(odds_path_str)
+            abbrev_map = {}
+            if args.priors_dataset:
+                priors_root = Path(args.priors_dataset)
+                abbrev_map = load_team_abbrev_map(priors_root, verbose)
+            odds_df = load_betting_odds(odds_path, abbrev_map, verbose)
+
+        # Merge odds into games_df
+        if not odds_df.empty:
+            # Create abbreviations for games_df home/away teams (for matching)
+            if "home_tid" in games_df.columns and "away_tid" in games_df.columns:
+                # Try to match by gid first if present in both
+                if "gid" in games_df.columns and "gid" in odds_df.columns:
+                    games_df = games_df.merge(
+                        odds_df.drop(columns=["game_date_utc", "season_end_year"], errors="ignore"),
+                        on="gid", how="left", suffixes=("", "_odds")
+                    )
+                    log(f"- Merged {odds_df['gid'].nunique()} odds games by gid", verbose)
+                # Fallback: match by date + team abbrev
+                elif "date" in games_df.columns and "home_abbrev" in odds_df.columns:
+                    # This would need team ID -> abbrev mapping from priors
+                    # For now, just log that we couldn't match
+                    log("Warning: Could not match odds to games (no gid overlap, need team abbrev mapping)", verbose)
+
+            # Fill NaN odds with defaults
+            for col in ["market_implied_home", "market_implied_away", "market_spread", "spread_move", "market_total", "total_move"]:
+                if col in games_df.columns:
+                    games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
+
+    # Load and merge Basketball Reference priors (if provided)
+    if args.priors_dataset:
+        priors_path_str = args.priors_dataset
+        # Check if Kaggle dataset or local path
+        if "/" in priors_path_str and not os.path.exists(priors_path_str):
+            if not kagglehub:
+                log("Warning: kagglehub not available, skipping priors dataset", verbose)
+                priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
+            else:
+                try:
+                    log(f"Downloading priors dataset from Kaggle: {priors_path_str}", verbose)
+                    priors_root = Path(kagglehub.dataset_download(priors_path_str))
+                    priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose)
+                except Exception as e:
+                    log(f"Warning: Failed to load priors dataset: {e}", verbose)
+                    priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
+        else:
+            priors_root = Path(priors_path_str)
+            priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose)
+
+        # Merge team priors into games_df
+        if not priors_teams.empty and "abbreviation" in priors_teams.columns and "season_end_year" in games_df.columns:
+            # TODO: Need to map home_tid/away_tid to abbreviations
+            # For now, if games_df already has home_abbrev/away_abbrev from odds, use those
+            # Otherwise, we'd need a tid -> abbrev map from Team Abbrev.csv
+            if "home_abbrev" in games_df.columns and "away_abbrev" in games_df.columns:
+                # Merge home team priors
+                home_priors = priors_teams.rename(columns={
+                    "abbreviation": "home_abbrev",
+                    "season_for_game": "season_end_year",
+                    "o_rtg": "home_o_rtg_prior",
+                    "d_rtg": "home_d_rtg_prior",
+                    "pace": "home_pace_prior",
+                    "srs": "home_srs_prior"
+                })
+                games_df = games_df.merge(
+                    home_priors[["home_abbrev", "season_end_year", "home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior"]],
+                    on=["home_abbrev", "season_end_year"], how="left"
+                )
+
+                # Merge away team priors
+                away_priors = priors_teams.rename(columns={
+                    "abbreviation": "away_abbrev",
+                    "season_for_game": "season_end_year",
+                    "o_rtg": "away_o_rtg_prior",
+                    "d_rtg": "away_d_rtg_prior",
+                    "pace": "away_pace_prior",
+                    "srs": "away_srs_prior"
+                })
+                games_df = games_df.merge(
+                    away_priors[["away_abbrev", "season_end_year", "away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior", "away_srs_prior"]],
+                    on=["away_abbrev", "season_end_year"], how="left"
+                )
+                log(f"- Merged team priors for {len(priors_teams):,} team-seasons", verbose)
+
+            # Fill NaN priors with defaults
+            for col in ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior",
+                       "away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior", "away_srs_prior"]:
+                if col in games_df.columns:
+                    games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
     # Train game models + OOF
     print(_sec("Training game models"))
