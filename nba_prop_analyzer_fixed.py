@@ -18,7 +18,7 @@ RUN_TIME_BUDGET_SEC = 50 if FAST_MODE else 300
 
 # ========= CONFIG =========
 # Hardcoded API key (for venv compatibility - can't import from other files)
-API_KEY = "YOUR_KEY_HERE"  # Your API-Sports.io key - run ./setup_once.sh to inject
+API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"  # Your API-Sports.io key
 # Fallback to env var if key is placeholder
 if not API_KEY or API_KEY == "YOUR_KEY_HERE":
     API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY")

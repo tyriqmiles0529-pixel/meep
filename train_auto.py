@@ -58,7 +58,7 @@ print("-" * 80)
 
 try:
     # Hardcoded Kaggle credentials (for venv compatibility - can't import from other files)
-    KAGGLE_KEY = "YOUR_KEY_HERE"  # Your Kaggle key - run ./setup_once.sh to inject
+    KAGGLE_KEY = "f005fb2c580e2cbfd2b6b4b931e10dfc"  # Your Kaggle key
     KAGGLE_USERNAME = ""  # Optional - leave empty if not needed
 
     if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":
