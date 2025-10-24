@@ -82,8 +82,8 @@ warnings.filterwarnings(
 )
 
 # ---------------- Kaggle credentials (hardcoded for venv compatibility) ----------------
-KAGGLE_KEY = "f005fb2c580e2cbfd2b6b4b931e10dfc"
-KAGGLE_USERNAME = ""  # Optional
+KAGGLE_KEY = "bcb440122af5ae76181e68d48ca728e6"
+KAGGLE_USERNAME = "tyriqmiles"
 
 if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":
     os.environ['KAGGLE_KEY'] = KAGGLE_KEY
