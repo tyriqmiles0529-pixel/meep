@@ -822,6 +822,9 @@ def build_players_from_playerstats(
     side_ctx_tid = pd.concat([home_side, away_side], ignore_index=True)
     side_ctx_flag = side_ctx_tid.drop(columns=["tid", "opp_tid"]).drop_duplicates(["gid", "is_home"])
 
+    # Drop season columns from ps before merge (they come from game context to avoid conflicts)
+    ps = ps.drop(columns=["season_end_year", "season_decade"], errors="ignore")
+
     # Join context to players:
     # 1) If teamId exists: join by (gid, tid)
     # 2) Else if home flag exists: join by (gid, is_home)
