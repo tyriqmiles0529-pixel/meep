@@ -675,12 +675,14 @@ def build_players_from_playerstats(
     player_path: Path,
     games_context: pd.DataFrame,
     oof_games: pd.DataFrame,
-    verbose: bool
+    verbose: bool,
+    priors_players: Optional[pd.DataFrame] = None
 ) -> Dict[str, pd.DataFrame]:
     """
     Build training frames for player models from PlayerStatistics.csv.
     Supports files without teamId/opponentTeamId by using the 'home' flag to select side context.
     Includes opponent context columns (opp_*).
+    Merges Basketball Reference player priors if provided.
     """
     # Read header first (no usecols) so we can detect what exists
     hdr = list(pd.read_csv(player_path, nrows=0).columns)
@@ -882,6 +884,30 @@ def build_players_from_playerstats(
     # Add OOF game predictions
     oof = oof_games.copy()
     ps_join = ps_join.merge(oof[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
+
+    # Merge Basketball Reference player priors (if provided)
+    if priors_players is not None and not priors_players.empty:
+        log(f"Merging Basketball Reference player priors ({len(priors_players):,} player-seasons, {len(priors_players.columns)} features)", verbose)
+
+        # Merge on (player_id, season_end_year)
+        # priors_players has: player_id, season_for_game (the season these priors apply to)
+        # ps_join has: pid_col (player ID), season_end_year (the season of the game)
+        merge_cols = [c for c in priors_players.columns if c not in ["player_id", "season_for_game", "player"]]
+
+        ps_join = ps_join.merge(
+            priors_players[["player_id", "season_for_game"] + merge_cols],
+            left_on=[pid_col, "season_end_year"],
+            right_on=["player_id", "season_for_game"],
+            how="left",
+            suffixes=("", "_prior")
+        )
+
+        # Drop duplicate ID columns from merge
+        ps_join = ps_join.drop(columns=["player_id", "season_for_game"], errors="ignore")
+
+        # Count how many rows have priors
+        non_null_priors = ps_join["per"].notna().sum() if "per" in ps_join.columns else 0
+        log(f"  Matched {non_null_priors:,} / {len(ps_join):,} player-game rows ({non_null_priors/len(ps_join)*100:.1f}%)", verbose)
 
     # Build frames
     frames: Dict[str, pd.DataFrame] = {}
@@ -1585,6 +1611,9 @@ def main():
                 games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
     # Load and merge Basketball Reference priors (if provided)
+    priors_players = pd.DataFrame()
+    priors_teams = pd.DataFrame()
+
     if args.priors_dataset:
         priors_path_str = args.priors_dataset
         # Check if Kaggle dataset or local path
@@ -1708,7 +1737,7 @@ def main():
     player_metrics: Dict[str, Dict[str, float]] = {}
     if players_path and players_path.exists():
         print(_sec("Building player datasets"))
-        frames = build_players_from_playerstats(players_path, context_map, oof_games, verbose=verbose)
+        frames = build_players_from_playerstats(players_path, context_map, oof_games, verbose=verbose, priors_players=priors_players)
 
         # Era filter + weights per frame
         player_cut = _parse_season_cutoff(args.player_season_cutoff, kind="player")
