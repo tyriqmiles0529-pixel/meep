@@ -487,18 +487,32 @@ def sgo_fetch_events(
             params = {
                 **base_params,
                 "leagueID": league_id_try,
-                "marketOddsAvailable": market_odds_available,  # Boolean, not string
-                "limit": limit,  # Integer, not string
-                # Note: 'expand' parameter removed - not in API docs
+                "marketOddsAvailable": "true" if market_odds_available else "false",  # Must be lowercase string
+                "limit": limit,
             }
             if next_cursor:
                 params["cursor"] = next_cursor
+
+            # Debug: Show exact request details
+            if DEBUG_MODE and pages == 0:
+                print(f"   [DEBUG] Request URL: {SGO_EVENTS_ENDPOINT}")
+                print(f"   [DEBUG] Params: {params}")
+                print(f"   [DEBUG] Headers: {headers}")
+
             try:
                 resp = requests.get(SGO_EVENTS_ENDPOINT, params=params, headers=headers, timeout=20)
+
+                # Debug: Show actual URL sent
+                if DEBUG_MODE and pages == 0:
+                    print(f"   [DEBUG] Full URL sent: {resp.url}")
+
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as e:
                 warns.append(f"SGO fetch error ({league_id_try}): {e}")
+                if DEBUG_MODE:
+                    print(f"   [DEBUG] Response status: {resp.status_code if 'resp' in locals() else 'N/A'}")
+                    print(f"   [DEBUG] Response text: {resp.text[:200] if 'resp' in locals() else 'N/A'}")
                 break
             events = data.get("events", [])
             out.extend(events)
