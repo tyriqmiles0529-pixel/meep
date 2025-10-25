@@ -466,7 +466,7 @@ def _sgo_headers_params(api_key: Optional[str]) -> Tuple[Dict[str, str], Dict[st
     params: Dict[str, str] = {}
     if api_key:
         headers["x-api-key"] = api_key
-        params["apiKey"] = api_key
+        # API key goes in header only, not in query params
     return headers, params
 
 def sgo_fetch_events(
