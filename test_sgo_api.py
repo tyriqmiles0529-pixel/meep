@@ -21,7 +21,7 @@ print("="*60)
 try:
     response = requests.get('https://api.sportsgameodds.com/v2/events', params={
         'leagueID': 'NBA',
-        'marketOddsAvailable': True,
+        'marketOddsAvailable': 'true',  # lowercase string
         'limit': 50,
     }, timeout=10)
 
@@ -40,16 +40,16 @@ except Exception as e:
 
 print()
 
-# Test 2: With x-api-key header
+# Test 2: With x-api-key header (RECOMMENDED)
 print("="*60)
-print("TEST 2: With x-api-key in header")
+print("TEST 2: With x-api-key in header (CORRECT METHOD)")
 print("="*60)
 
 try:
     response = requests.get('https://api.sportsgameodds.com/v2/events',
         params={
             'leagueID': 'NBA',
-            'marketOddsAvailable': True,
+            'marketOddsAvailable': 'true',  # lowercase string
             'limit': 50,
         },
         headers={
@@ -65,6 +65,7 @@ try:
     if response.status_code == 200:
         data = response.json()
         print(f"✓ SUCCESS: Got {len(data.get('events', []))} events")
+        print(f"   Sample event: {data.get('events', [{}])[0].get('id', 'N/A')}")
     else:
         print(f"✗ FAILED: {response.status_code}")
 
@@ -73,9 +74,9 @@ except Exception as e:
 
 print()
 
-# Test 3: With API key as query param
+# Test 3: With API key as query param (NOT RECOMMENDED - causes 400)
 print("="*60)
-print("TEST 3: With apiKey in query params")
+print("TEST 3: With apiKey in query params (WRONG - for comparison)")
 print("="*60)
 
 try:
@@ -83,7 +84,7 @@ try:
         params={
             'apiKey': SGO_API_KEY,
             'leagueID': 'NBA',
-            'marketOddsAvailable': True,
+            'marketOddsAvailable': 'true',  # lowercase string
             'limit': 50,
         },
         timeout=10

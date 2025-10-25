@@ -487,9 +487,8 @@ def sgo_fetch_events(
             params = {
                 **base_params,
                 "leagueID": league_id_try,
-                "marketOddsAvailable": market_odds_available,  # Boolean, not string
-                "limit": limit,  # Integer, not string
-                # Note: 'expand' parameter removed - not in API docs
+                "marketOddsAvailable": "true" if market_odds_available else "false",  # Must be lowercase string
+                "limit": limit,
             }
             if next_cursor:
                 params["cursor"] = next_cursor
