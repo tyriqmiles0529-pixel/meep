@@ -292,7 +292,7 @@ def train_enhanced_ensembler(games_df, ridge_model, elo_model, ff_model, lgb_mod
             ensembler.fit(X_meta[window_start:i], y[window_start:i], game_list[window_start:i])
             n_refits += 1
             
-            if verbose and n_refits % 5 == 0:
+            if verbose and n_refits % 500 == 0:
                 print(f"  Refit #{n_refits} at game {i}")
     
     # Final predictions
@@ -341,28 +341,45 @@ def analyze_ensemble_performance(ensembler, games_df, output_dir='./'):
     plot_coefficient_evolution(ensembler, output_path=f'{output_dir}/coefficient_evolution.csv')
     
     # Save analysis
-    coef_df = ensembler.get_coefficients_history_df()
-    
+    coef_history = ensembler.get_coefficients_history_df()
+
     with open(f'{output_dir}/ensemble_analysis.txt', 'w') as f:
         f.write("Enhanced Ensemble Analysis\n")
         f.write("=" * 50 + "\n\n")
-        
-        f.write(f"Total Refits: {len(coef_df)}\n")
+
+        f.write(f"Total Refits: {len(coef_history)}\n")
         f.write(f"Calibration Mode: {ensembler.calibration_mode}\n")
         f.write(f"Refit Frequency: {ensembler.refit_frequency} games\n\n")
-        
-        if len(coef_df) > 0:
+
+        if len(coef_history) > 0:
             f.write("Coefficient Ranges (first 4 features: Ridge, Elo, FF, LGB):\n")
-            coefs = np.array([c['coefficients'][:4] for c in coef_df])
-            for i, name in enumerate(['Ridge', 'Elo', 'Four Factors', 'LGB']):
-                min_c, max_c, mean_c = coefs[:, i].min(), coefs[:, i].max(), coefs[:, i].mean()
-                f.write(f"  {name:15s}: [{min_c:7.4f}, {max_c:7.4f}], mean = {mean_c:7.4f}\n")
-            
-            f.write("\nCoefficient Trends (Early vs Late Season):\n")
-            early = coefs[:len(coefs)//3]
-            late = coefs[-len(coefs)//3:]
-            f.write("  Early season avg: " + str([f"{x:.4f}" for x in early.mean(axis=0)]) + "\n")
-            f.write("  Late season avg:  " + str([f"{x:.4f}" for x in late.mean(axis=0)]) + "\n")
+            # Handle both list of dicts and DataFrame formats
+            try:
+                if hasattr(coef_history, 'to_dict'):
+                    # It's a DataFrame - convert to list of dicts
+                    coef_list = coef_history.to_dict('records')
+                    coefs = np.array([c['coefficients'][:4] if isinstance(c['coefficients'], (list, np.ndarray)) else [] for c in coef_list])
+                else:
+                    # It's already a list
+                    coefs = np.array([c['coefficients'][:4] if isinstance(c, dict) and 'coefficients' in c else [] for c in coef_history])
+            except Exception as e:
+                f.write(f"  (Could not extract coefficients: {e})\n")
+                coefs = np.array([[]])  # Empty array to skip analysis
+
+            # Only analyze if we have valid coefficients
+            if coefs.size > 0 and coefs.ndim == 2 and coefs.shape[1] >= 4:
+                for i, name in enumerate(['Ridge', 'Elo', 'Four Factors', 'LGB']):
+                    min_c, max_c, mean_c = coefs[:, i].min(), coefs[:, i].max(), coefs[:, i].mean()
+                    f.write(f"  {name:15s}: [{min_c:7.4f}, {max_c:7.4f}], mean = {mean_c:7.4f}\n")
+
+                f.write("\nCoefficient Trends (Early vs Late Season):\n")
+                early = coefs[:len(coefs)//3]
+                late = coefs[-len(coefs)//3:]
+                if len(early) > 0 and len(late) > 0:
+                    f.write("  Early season avg: " + str([f"{x:.4f}" for x in early.mean(axis=0)]) + "\n")
+                    f.write("  Late season avg:  " + str([f"{x:.4f}" for x in late.mean(axis=0)]) + "\n")
+            else:
+                f.write("  (Insufficient coefficient data for analysis)\n")
     
     print(f"✓ Analysis saved to {output_dir}/ensemble_analysis.txt")
     print(f"✓ Coefficient history saved to {output_dir}/coefficient_evolution.csv")
@@ -407,19 +424,17 @@ def train_all_ensemble_components(games_df, game_features, game_defaults, lgb_mo
     print("\n4. Training Four Factors with rolling priors...")
     ff_model, ff_metrics = train_four_factors_dynamic(games, game_features, game_defaults)
     
-    # Test refit frequencies
-    print("\n5. Testing optimal refit frequency...")
-    best_freq, freq_results = test_refit_frequencies(
-        games, ridge_model, elo_model, ff_model, lgb_model,
-        game_features, game_defaults, frequencies=[10, 20, 30]
-    )
-    
-    # Train meta-learner with optimal frequency
-    print("\n6. Training enhanced meta-learner...")
+    # Skip refit frequency testing - use hardcoded value of 20
+    print("\n5. Skipping refit frequency testing - using hardcoded value of 20 games")
+    best_freq = 20
+    freq_results = {'10': None, '20': None, '30': None}  # Placeholder
+
+    # Train meta-learner with hardcoded frequency of 20
+    print("\n6. Training enhanced meta-learner (refit_frequency=20)...")
     ensembler, games, ensemble_metrics = train_enhanced_ensembler(
         games, ridge_model, elo_model, ff_model, lgb_model,
         game_features, game_defaults,
-        refit_frequency=best_freq,
+        refit_frequency=20,  # HARDCODED TO 20 GAMES
         calibration_mode='global',
         verbose=verbose
     )

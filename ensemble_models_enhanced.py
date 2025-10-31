@@ -396,7 +396,8 @@ def plot_coefficient_evolution(ensembler, output_path='coefficient_evolution.csv
         print("\n=== Meta-Learner Coefficient Evolution ===")
         print(f"Refits performed: {len(coef_df)}")
         print(f"Average coefficients (first 4 features: ridge, elo, ff, lgb):")
-        avg_coefs = np.array([c['coefficients'][:4] for c in coef_df[-5:]])  # Last 5 refits
+        # Use .iterrows() to iterate over DataFrame rows as Series
+        avg_coefs = np.array([row['coefficients'][:4] for _, row in coef_df[-5:].iterrows()])  # Last 5 refits
         print(f"  Ridge:  {avg_coefs[:, 0].mean():.4f}")
         print(f"  Elo:    {avg_coefs[:, 1].mean():.4f}")
         print(f"  FF:     {avg_coefs[:, 2].mean():.4f}")

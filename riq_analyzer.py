@@ -2511,12 +2511,14 @@ class ModelPredictor:
         self.player_models: Dict[str, object] = {}
         self.player_sigma_models: Dict[str, object] = {}
         self.game_models: Dict[str, object] = {}
-        # Enhanced ensemble models
+        # Enhanced ensemble models (legacy - kept for backward compatibility)
         self.ridge_model = None
         self.elo_model = None
         self.ff_model = None
         self.ensemble_meta_learner = None
-        
+        # UNIFIED HIERARCHICAL ENSEMBLE (NEW!)
+        self.unified_ensemble = None
+
         # Load player models
         for key, fname in PLAYER_MODEL_FILES.items():
             path = os.path.join(MODEL_DIR, fname)
@@ -2549,32 +2551,49 @@ class ModelPredictor:
                 except Exception as e:
                     if DEBUG_MODE: print(f"   Warning: Failed to load {path}: {e}")
         
-        # Load enhanced ensemble models (if available)
-        ensemble_models = {
-            'ridge': 'ridge_model_enhanced.pkl',
-            'elo': 'elo_model_enhanced.pkl',
-            'ff': 'four_factors_model_enhanced.pkl',
-            'meta': 'ensemble_meta_learner_enhanced.pkl'
-        }
-        for key, fname in ensemble_models.items():
-            path = os.path.join(MODEL_DIR, fname)
-            if os.path.exists(path):
-                try:
-                    with open(path, "rb") as f:
-                        model = pickle.load(f)
-                    if key == 'ridge':
-                        self.ridge_model = model
-                    elif key == 'elo':
-                        self.elo_model = model
-                    elif key == 'ff':
-                        self.ff_model = model
-                    elif key == 'meta':
-                        self.ensemble_meta_learner = model
-                    if DEBUG_MODE: print(f"   ↳ Loaded ensemble {key} model: {path}")
-                except Exception as e:
-                    if DEBUG_MODE: print(f"   Warning: Failed to load ensemble {key} {path}: {e}")
-            else:
-                if DEBUG_MODE: print(f"   ℹ Ensemble {key} model not found: {path}")
+        # Load UNIFIED HIERARCHICAL ENSEMBLE (priority over legacy)
+        unified_path = os.path.join(MODEL_DIR, "hierarchical_ensemble_full.pkl")
+        if os.path.exists(unified_path):
+            try:
+                with open(unified_path, "rb") as f:
+                    self.unified_ensemble = pickle.load(f)
+                if DEBUG_MODE:
+                    print(f"   ✓ Loaded UNIFIED HIERARCHICAL ENSEMBLE: {unified_path}")
+                    print(f"     → Includes ALL 7 models (Ridge, Elo, FF, LGB, Dynamic Elo, Rolling FF, Enhanced Log)")
+                    print(f"     → Master meta-learner with cross-validated weights")
+            except Exception as e:
+                if DEBUG_MODE: print(f"   ⚠ Warning: Failed to load unified ensemble {unified_path}: {e}")
+                self.unified_ensemble = None
+        else:
+            if DEBUG_MODE: print(f"   ℹ Unified ensemble not found, will try loading legacy ensemble models")
+
+        # Load enhanced ensemble models (legacy - if unified not available)
+        if self.unified_ensemble is None:
+            ensemble_models = {
+                'ridge': 'ridge_model_enhanced.pkl',
+                'elo': 'elo_model_enhanced.pkl',
+                'ff': 'four_factors_model_enhanced.pkl',
+                'meta': 'ensemble_meta_learner_enhanced.pkl'
+            }
+            for key, fname in ensemble_models.items():
+                path = os.path.join(MODEL_DIR, fname)
+                if os.path.exists(path):
+                    try:
+                        with open(path, "rb") as f:
+                            model = pickle.load(f)
+                        if key == 'ridge':
+                            self.ridge_model = model
+                        elif key == 'elo':
+                            self.elo_model = model
+                        elif key == 'ff':
+                            self.ff_model = model
+                        elif key == 'meta':
+                            self.ensemble_meta_learner = model
+                        if DEBUG_MODE: print(f"   ↳ Loaded legacy ensemble {key} model: {path}")
+                    except Exception as e:
+                        if DEBUG_MODE: print(f"   Warning: Failed to load legacy ensemble {key} {path}: {e}")
+                else:
+                    if DEBUG_MODE: print(f"   ℹ Legacy ensemble {key} model not found: {path}")
         
         # Load spread sigma
         sigma_path = os.path.join(MODEL_DIR, "spread_sigma.json")
@@ -2638,8 +2657,31 @@ class ModelPredictor:
         except Exception:
             return None
     
-    def predict_moneyline(self, feats: pd.DataFrame) -> Optional[float]:
-        """Predict moneyline probability (returns calibrated probability if calibrator available)"""
+    def predict_moneyline(self, feats: pd.DataFrame, home_team_id: Optional[str] = None, away_team_id: Optional[str] = None) -> Optional[float]:
+        """
+        Predict moneyline probability with unified hierarchical ensemble.
+
+        Priority:
+        1. Unified hierarchical ensemble (7 models + master meta-learner)
+        2. Legacy enhanced ensemble (Ridge + Elo + FF + LGB meta-learner)
+        3. Base LGB + calibration (fallback)
+        """
+        # Try unified ensemble first (BEST)
+        if self.unified_ensemble is not None:
+            try:
+                unified_prob = self.unified_ensemble.predict(feats, self.game_features, self.game_defaults)[0]
+                if DEBUG_MODE: print(f"   ✓ Used UNIFIED ensemble prediction: {unified_prob:.4f}")
+                return float(unified_prob)
+            except Exception as e:
+                if DEBUG_MODE: print(f"   ⚠ Unified ensemble failed, falling back: {e}")
+
+        # Try legacy enhanced ensemble (GOOD)
+        legacy_prob = self.predict_moneyline_ensemble(feats, home_team_id, away_team_id)
+        if legacy_prob is not None:
+            if DEBUG_MODE: print(f"   ↳ Used legacy ensemble prediction: {legacy_prob:.4f}")
+            return legacy_prob
+
+        # Fallback to base LGB + calibration (OK)
         base_model = self.game_models.get("moneyline")
         if base_model is None or feats is None or feats.empty:
             return None
@@ -2647,13 +2689,14 @@ class ModelPredictor:
             # Get base prediction
             y = base_model.predict_proba(feats) if hasattr(base_model, 'predict_proba') else base_model.predict(feats)
             prob = float(y[0, 1]) if hasattr(y, 'shape') and len(y.shape) > 1 else float(y[0])
-            
+
             # Apply calibration if available
             calibrator = self.game_models.get("moneyline_calibrator")
             if calibrator is not None:
                 prob_calibrated = calibrator.predict_proba([[prob]])
                 prob = float(prob_calibrated[0, 1]) if hasattr(prob_calibrated, 'shape') and len(prob_calibrated.shape) > 1 else prob
-            
+
+            if DEBUG_MODE: print(f"   ↳ Used base LGB prediction: {prob:.4f}")
             return prob
         except Exception as e:
             if DEBUG_MODE: print(f"   Warning: Moneyline predict failed: {e}")
@@ -3166,7 +3209,10 @@ def analyze_game_bet(prop: dict) -> Optional[dict]:
         # Build game features and get moneyline prediction
         game_feats = build_game_features(prop)
         if not game_feats.empty and MODEL.game_models.get("moneyline"):
-            p_ml = MODEL.predict_moneyline(game_feats)
+            # Extract team IDs for unified ensemble
+            home_team_id = prop.get("home_team") or prop.get("home_abbrev")
+            away_team_id = prop.get("away_team") or prop.get("away_abbrev")
+            p_ml = MODEL.predict_moneyline(game_feats, home_team_id, away_team_id)
     elif prop["prop_type"] == "spread":
         # Build game features and get spread prediction
         game_feats = build_game_features(prop)

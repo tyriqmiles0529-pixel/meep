@@ -40,6 +40,7 @@ Run (PowerShell)
 from __future__ import annotations
 
 import sys
+from train_ensemble_enhanced import train_all_ensemble_components
 import os
 import re
 import json
@@ -47,9 +48,10 @@ import math
 import argparse
 import warnings
 import requests
+import gc
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 
 import numpy as np
 import pandas as pd
@@ -57,6 +59,9 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, log_loss, brier_score_loss
 from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.calibration import CalibratedClassifierCV
+
+# Global threads limit for learners (can be overridden via --n-jobs)
+N_JOBS: int = -1
 
 # Suppress pandas FutureWarnings for deprecated errors='ignore' parameter
 warnings.filterwarnings('ignore', category=FutureWarning, message=".*errors='ignore' is deprecated.*")
@@ -139,7 +144,12 @@ def _season_from_date(dt: pd.Series) -> pd.Series:
     Convert a UTC-naive datetime to NBA season end-year.
     Season end-year = year if month <= 7; else year+1 (Aug..Dec map to next year's season).
     """
-    d = pd.to_datetime(dt, errors="coerce", utc=False)
+    # Don't re-parse if already datetime (causes NaT when format='mixed' not specified)
+    if pd.api.types.is_datetime64_any_dtype(dt):
+        d = dt
+    else:
+        d = pd.to_datetime(dt, errors="coerce", utc=False)
+
     y = d.dt.year
     m = d.dt.month
     return np.where(m >= 8, y + 1, y)
@@ -575,6 +585,9 @@ def load_or_fetch_historical_odds(games_df: pd.DataFrame, api_key: str, cache_pa
     combined_odds = pd.concat(all_odds_frames, ignore_index=True)
 
     # Save updated cache
+    # Ensure parent directory exists before saving
+    import os
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     combined_odds.to_csv(cache_path, index=False)
     log(f"- Saved {len(combined_odds)} odds records to cache: {cache_path}", verbose)
 
@@ -616,7 +629,7 @@ def fetch_historical_odds_for_date(game_date: str, api_key: str, verbose: bool =
         log(f"- Fetching historical odds for {game_date}...", verbose)
         time.sleep(0.3)  # Rate limiting
 
-        resp = requests.get(url, params=params, timeout=30)
+        resp = requests.get(url, params=params, timeout=120)
 
         if resp.status_code != 200:
             log(f"- Historical odds fetch failed: {resp.status_code} - {resp.text[:200]}", verbose)
@@ -751,7 +764,7 @@ def fetch_historical_player_props_for_date(game_date: str, api_key: str, verbose
         log(f"- Fetching player props for {game_date}...", verbose)
         time.sleep(0.6)  # Rate limiting
 
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, timeout=120)
 
         if response.status_code != 200:
             log(f"- API returned status {response.status_code} for {game_date}", verbose)
@@ -884,6 +897,9 @@ def load_or_fetch_historical_player_props(
         cached_props = pd.read_csv(cache_path)
         log(f"- Loaded {len(cached_props):,} cached player props from {cache_path.name}", verbose)
     else:
+        print("No season_end_year column found; cannot automate 5-year window training.")
+        games_df = pd.DataFrame()  # Ensure games_df is defined as an empty DataFrame if not already
+        print(f"- Games: {len(games_df):,} rows")
         cached_props = pd.DataFrame()
         log(f"- No cache found, will create {cache_path.name}", verbose)
 
@@ -1104,9 +1120,25 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
                                    hv.astype(str).str.strip().str.lower().isin(["1","true","t","home","h","yes","y"]).astype(int))
     else:
         ts["home_flag"] = 1
+    # Downcast to smallest int to save RAM
+    ts["home_flag"] = ts["home_flag"].astype("int8")
 
-    # date (keep NaT)
-    ts[date_c] = pd.to_datetime(ts[date_c], errors="coerce", utc=True).dt.tz_convert(None)
+    # date (keep NaT) - use format='mixed' to handle both ISO8601 and simple datetime
+    ts[date_c] = pd.to_datetime(ts[date_c], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
+
+    # MEMORY OPTIMIZATION: Filter to seasons >= 2002 immediately after loading
+    # This reduces TeamStatistics from ~144k rows (1946-2026) to ~65k rows (2002-2026)
+    if "season" in ts.columns:
+        orig_len = len(ts)
+        ts = ts[ts["season"] >= 2002].copy()
+        if verbose:
+            log(f"  Filtered TeamStatistics by season: {orig_len:,} → {len(ts):,} rows (2002+, saved ~{(orig_len - len(ts)) * 0.3 / 1024:.1f} MB)", True)
+    elif date_c in ts.columns:
+        # Fallback: filter by date if no season column
+        orig_len = len(ts)
+        ts = ts[ts[date_c] >= "2002-01-01"].copy()
+        if verbose and len(ts) < orig_len:
+            log(f"  Filtered TeamStatistics by date: {orig_len:,} → {len(ts):,} rows (2002+, saved ~{(orig_len - len(ts)) * 0.3 / 1024:.1f} MB)", True)
 
     # scores
     ts[tscore_c] = pd.to_numeric(ts[tscore_c], errors="coerce")
@@ -1161,7 +1193,18 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
     g = g.dropna(subset=["home_tid", "away_tid", "home_score", "away_score"]).copy()
     for c in ["gid", "home_tid", "away_tid"]:
         g[c] = _id_to_str(g[c])
-    g["date"] = pd.to_datetime(g["date"], errors="coerce", utc=True).dt.tz_convert(None)
+
+    # Parse dates - handle both ISO8601 (with Z) and simple datetime formats
+    # Use format='mixed' to automatically handle multiple date formats
+    g["date"] = pd.to_datetime(g["date"], errors='coerce', format='mixed', utc=True).dt.tz_convert(None)
+
+    # Count how many dates failed to parse
+    failed_dates = g["date"].isna().sum()
+    if failed_dates > 0:
+        print(f"Warning: {failed_dates} / {len(g)} games have unparseable dates - dropping these games")
+        g = g.dropna(subset=["date"]).copy()
+
+    print(f"Successfully parsed dates for {len(g):,} games (date range: {g['date'].min()} to {g['date'].max()})")
 
     # season features
     g["season_end_year"] = _season_from_date(g["date"]).astype("float32")
@@ -1346,7 +1389,13 @@ def _fit_game_models(
     lgb_log_period: int = 0,
     sample_weights: Optional[np.ndarray] = None,
 ) -> Tuple[object, Optional[CalibratedClassifierCV], object, float, pd.DataFrame, Dict[str, float]]:
-    X_full = games_df[GAME_FEATURES].apply(pd.to_numeric, errors="coerce").replace([np.inf,-np.inf], np.nan).astype("float32")
+    # Ensure all required GAME_FEATURES are present; add missing with sensible defaults
+    missing_cols = [c for c in GAME_FEATURES if c not in games_df.columns]
+    if missing_cols:
+        for c in missing_cols:
+            games_df[c] = GAME_DEFAULTS.get(c, np.nan)
+    
+    X_full = games_df[GAME_FEATURES].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).astype("float32")
     y_ml = (games_df["home_score"].values > games_df["away_score"].values).astype(int)
     y_sp = (games_df["home_score"].values - games_df["away_score"].values).astype(float)
 
@@ -1390,13 +1439,13 @@ def _fit_game_models(
     clf_params = dict(
         objective="binary", learning_rate=0.05, num_leaves=31, max_depth=-1,
         colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
-        n_estimators=800, random_state=seed, n_jobs=-1,
+        n_estimators=800, random_state=seed, n_jobs=N_JOBS,
         force_col_wise=True, verbosity=-1
     )
     reg_params = dict(
         objective="regression", learning_rate=0.05, num_leaves=31, max_depth=-1,
         colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
-        n_estimators=800, random_state=seed, n_jobs=-1,
+        n_estimators=800, random_state=seed, n_jobs=N_JOBS,
         force_col_wise=True, verbosity=-1
     )
 
@@ -1525,13 +1574,18 @@ def build_players_from_playerstats(
     games_context: pd.DataFrame,
     oof_games: pd.DataFrame,
     verbose: bool,
-    priors_players: Optional[pd.DataFrame] = None
+    priors_players: Optional[pd.DataFrame] = None,
+    window_seasons: Optional[Set[int]] = None
 ) -> Dict[str, pd.DataFrame]:
     """
     Build training frames for player models from PlayerStatistics.csv.
     Supports files without teamId/opponentTeamId by using the 'home' flag to select side context.
     Includes opponent context columns (opp_*).
     Merges Basketball Reference player priors if provided.
+
+    Args:
+        window_seasons: If provided, filters data to only these seasons (±1 for context) to save memory.
+                       This enables per-window processing with 80%+ memory reduction.
     """
     # Read header first (no usecols) so we can detect what exists
     hdr = list(pd.read_csv(player_path, nrows=0).columns)
@@ -1566,10 +1620,43 @@ def build_players_from_playerstats(
     starter_col = resolve_any([["starter", "isStarter", "started", "STARTER", "IS_STARTER"]])  # likely missing
 
     # Read all detected columns (avoid usecols mismatch)
-    want_cols = [gid_col, date_col, pid_col, name_col, tid_col, home_col,
+    # FIXED: Include both fname_col and lname_col separately, not just name_col
+    want_cols = [gid_col, date_col, pid_col, name_full_col, fname_col, lname_col, tid_col, home_col,
                  min_col, pts_col, reb_col, ast_col, tpm_col, starter_col]
     usecols = [c for c in want_cols if c is not None]
     ps = pd.read_csv(player_path, low_memory=False, usecols=sorted(set(usecols)) if usecols else None)
+
+    # MEMORY OPTIMIZATION 1: Filter to seasons >= 2002 immediately after loading
+    # This reduces PlayerStatistics from ~1.6M rows (1946-2026) to ~833k rows (2002-2026)
+    # NOTE: season_end_year will be added from games merge, so check date instead
+    if date_col and date_col in ps.columns:
+        ps[date_col] = pd.to_datetime(ps[date_col], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
+        orig_len = len(ps)
+        ps = ps[ps[date_col] >= "2002-01-01"].copy()
+        if verbose and len(ps) < orig_len:
+            memory_saved = (orig_len - len(ps)) * 0.19  # ~0.19 KB per row for PlayerStatistics
+            log(f"  Filtered PlayerStatistics by date: {orig_len:,} → {len(ps):,} rows (2002+, saved ~{memory_saved / 1024:.1f} MB)", True)
+
+    # MEMORY OPTIMIZATION 2: Filter to window seasons if provided (per-window processing)
+    # This reduces from ~833k rows (all seasons) to ~150k per 5-year window (82% reduction!)
+    if window_seasons is not None and date_col and date_col in ps.columns:
+        # Compute season_end_year early for filtering
+        ps["_temp_season"] = _season_from_date(ps[date_col])
+
+        # Add ±1 padding for rolling features that need prior season context
+        padded_seasons = set(window_seasons)
+        if len(padded_seasons) > 0:
+            min_season = min(padded_seasons)
+            max_season = max(padded_seasons)
+            padded_seasons = padded_seasons | {min_season - 1, max_season + 1}
+
+        orig_len = len(ps)
+        ps = ps[ps["_temp_season"].isin(padded_seasons)].copy()
+        ps = ps.drop(columns=["_temp_season"])
+
+        if verbose and len(ps) < orig_len:
+            memory_saved = (orig_len - len(ps)) * 0.19
+            log(f"  Filtered to window seasons {sorted(window_seasons)}: {orig_len:,} → {len(ps):,} rows (saved ~{memory_saved / 1024:.1f} MB)", True)
 
     # Show what we detected (easier to debug)
     print(_sec("Detected player columns"))
@@ -1581,6 +1668,13 @@ def build_players_from_playerstats(
     for c in [gid_col, pid_col, tid_col]:
         if c and c in ps.columns:
             ps[c] = _id_to_str(ps[c])
+    # Convert identifier/text columns to categorical to reduce memory
+    for c in [gid_col, pid_col, tid_col, name_full_col, fname_col, lname_col]:
+        if c and c in ps.columns:
+            try:
+                ps[c] = ps[c].astype("category")
+            except Exception:
+                pass
 
     # Ensure player identifier
     if not pid_col or pid_col not in ps.columns:
@@ -1593,8 +1687,11 @@ def build_players_from_playerstats(
             raise KeyError("No player identifier found (tried personId/playerId/player_name).")
 
     # Build a full-name join column when possible (used for priors name fallback)
-    if name_full_col and name_full_col in ps.columns:
+    # Check if name_full_col has actual data (not all nan)
+    if name_full_col and name_full_col in ps.columns and ps[name_full_col].notna().any():
         ps["__name_join__"] = ps[name_full_col].astype(str)
+        if verbose:
+            log(f"  Using full name column: {name_full_col}", True)
     elif fname_col or lname_col:
         # Ensure fn/ln are pandas Series so .fillna() is always available.
         if fname_col and fname_col in ps.columns:
@@ -1606,20 +1703,34 @@ def build_players_from_playerstats(
         else:
             ln = pd.Series([""] * len(ps), index=ps.index, dtype="object")
         ps["__name_join__"] = (fn.fillna("") + " " + ln.fillna("")).str.strip()
+        if verbose:
+            sample_names = ps["__name_join__"].dropna().head(5).tolist()
+            log(f"  Constructed names from firstName + lastName: {sample_names}", True)
     elif name_col and name_col in ps.columns:
         ps["__name_join__"] = ps[name_col].astype(str)
+        if verbose:
+            log(f"  Using name column: {name_col}", True)
     else:
         ps["__name_join__"] = None
+        if verbose:
+            log(f"  WARNING: No name columns available for player matching!", True)
 
-    # Date parse
+    # Date parse (CRITICAL: format='mixed' needed for multiple date formats)
+    # NOTE: Date may have been parsed already at line 1623 during early filtering - don't re-parse if already datetime
     if date_col and date_col in ps.columns:
-        ps[date_col] = pd.to_datetime(ps[date_col], errors="coerce", utc=True).dt.tz_convert(None)
+        if not pd.api.types.is_datetime64_any_dtype(ps[date_col]):
+            ps[date_col] = pd.to_datetime(ps[date_col], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
     else:
         ps["__no_date__"] = pd.NaT
         date_col = "__no_date__"
 
     # Era features from date
     ps["season_end_year"] = _season_from_date(ps[date_col]).astype("float32")
+
+    # DEBUG: Show season_end_year population
+    if verbose:
+        non_null_seasons = ps["season_end_year"].notna().sum()
+        log(f"  season_end_year populated: {non_null_seasons:,} / {len(ps):,} rows ({(non_null_seasons/len(ps)*100 if len(ps) else 0):.1f}%)", True)
     ps["season_decade"]   = _decade_from_season(ps["season_end_year"]).astype("float32")
 
     # Numeric conversions
@@ -1635,6 +1746,8 @@ def build_players_from_playerstats(
                                       s.astype(str).str.strip().str.lower().isin(["1", "true", "t", "yes", "y", "starter", "start"]).astype(int))
     else:
         ps["starter_flag"] = 0
+    # Downcast flags
+    ps["starter_flag"] = ps["starter_flag"].astype("int8")
 
     # Home/away flag from player CSV (strong signal if teamId is missing)
     if home_col and home_col in ps.columns:
@@ -1767,11 +1880,36 @@ def build_players_from_playerstats(
     # Drop season columns from ps before merge (they come from game context to avoid conflicts)
     ps = ps.drop(columns=["season_end_year", "season_decade"], errors="ignore")
 
+    # DEBUG: Log merge inputs
+    if verbose:
+        log(f"  DEBUG - BEFORE MERGE:", True)
+        log(f"    ps shape: {ps.shape}, columns: {list(ps.columns)[:20]}", True)
+        log(f"    side_ctx_tid shape: {side_ctx_tid.shape}, columns: {list(side_ctx_tid.columns)}", True)
+        log(f"    side_ctx_flag shape: {side_ctx_flag.shape}, columns: {list(side_ctx_flag.columns)}", True)
+
+        # Check merge keys
+        if tid_col and tid_col in ps.columns:
+            log(f"    Merge path: tid (gameId + teamId)", True)
+            log(f"    ps[{gid_col}] sample: {ps[gid_col].head(10).tolist()}", True)
+            log(f"    ps[{tid_col}] sample: {ps[tid_col].head(10).tolist()}", True)
+            log(f"    side_ctx_tid['gid'] sample: {side_ctx_tid['gid'].head(10).tolist()}", True)
+            log(f"    side_ctx_tid['tid'] sample: {side_ctx_tid['tid'].head(10).tolist()}", True)
+            log(f"    ps[{gid_col}] dtype: {ps[gid_col].dtype}, unique count: {ps[gid_col].nunique()}", True)
+            log(f"    ps[{tid_col}] dtype: {ps[tid_col].dtype}, unique count: {ps[tid_col].nunique()}", True)
+            log(f"    side_ctx_tid['gid'] dtype: {side_ctx_tid['gid'].dtype}, unique count: {side_ctx_tid['gid'].nunique()}", True)
+            log(f"    side_ctx_tid['tid'] dtype: {side_ctx_tid['tid'].dtype}, unique count: {side_ctx_tid['tid'].nunique()}", True)
+        elif "is_home" in ps.columns and ps["is_home"].notna().any():
+            log(f"    Merge path: is_home flag", True)
+            log(f"    ps['is_home'] value counts: {ps['is_home'].value_counts().to_dict()}", True)
+            log(f"    side_ctx_flag['is_home'] value counts: {side_ctx_flag['is_home'].value_counts().to_dict()}", True)
+        else:
+            log(f"    Merge path: fallback (per-game average)", True)
+
     # Join context to players:
-    # 1) If teamId exists: join by (gid, tid)
+    # 1) If teamId exists AND has valid data: join by (gid, tid)
     # 2) Else if home flag exists: join by (gid, is_home)
     # 3) Else: fallback to per-game average context (team_* and opp_*), plus matchup
-    if tid_col and tid_col in ps.columns:
+    if tid_col and tid_col in ps.columns and ps[tid_col].notna().any():
         ps_join = ps.merge(
             side_ctx_tid,
             left_on=[gid_col, tid_col],
@@ -1803,12 +1941,37 @@ def build_players_from_playerstats(
     if "is_home" not in ps_join.columns:
         ps_join["is_home"] = np.nan
 
+    # DEBUG: Log merge results
+    if verbose:
+        log(f"  DEBUG - AFTER MERGE:", True)
+        log(f"    ps_join shape: {ps_join.shape}", True)
+        log(f"    'season_end_year' in columns: {'season_end_year' in ps_join.columns}", True)
+        if "season_end_year" in ps_join.columns:
+            non_null_seasons = ps_join["season_end_year"].notna().sum()
+            log(f"    season_end_year non-null: {non_null_seasons:,} / {len(ps_join):,} ({(non_null_seasons/len(ps_join)*100 if len(ps_join) else 0):.1f}%)", True)
+            if non_null_seasons > 0:
+                log(f"    season_end_year sample values: {ps_join['season_end_year'].dropna().head(10).tolist()}", True)
+            else:
+                log(f"    WARNING: season_end_year is all NaN - merge failed!", True)
+        else:
+            log(f"    WARNING: season_end_year column missing after merge!", True)
+
     # Add OOF game predictions
     oof = oof_games.copy()
     ps_join = ps_join.merge(oof[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
 
     # Merge Basketball Reference player priors (if provided)
     if priors_players is not None and not priors_players.empty:
+        # MEMORY OPTIMIZATION: Filter priors to only seasons present in ps_join
+        # This prevents loading priors for 1950-2001 when we only need 2002-2026
+        if "season_end_year" in ps_join.columns and "season_for_game" in priors_players.columns:
+            ps_seasons = set(ps_join["season_end_year"].dropna().unique())
+            if len(ps_seasons) > 0:  # Only filter if we have valid seasons
+                orig_priors_len = len(priors_players)
+                priors_players = priors_players[priors_players["season_for_game"].isin(ps_seasons)].copy()
+                if verbose and orig_priors_len > len(priors_players):
+                    log(f"  Filtered priors from {orig_priors_len:,} to {len(priors_players):,} rows (seasons {min(ps_seasons):.0f}-{max(ps_seasons):.0f})", True)
+
         log(f"Merging Basketball Reference player priors ({len(priors_players):,} player-seasons, {len(priors_players.columns)} features)", verbose)
 
         # Ensure comparable dtypes for IDs
@@ -1848,15 +2011,20 @@ def build_players_from_playerstats(
             join_name_col = "__name_join__" if "__name_join__" in ps_join.columns else name_full_col or name_col
             if pri_name_col and join_name_col and join_name_col in ps_join.columns:
                 def _name_key(s: pd.Series) -> pd.Series:
+                    """
+                    Normalize names for fuzzy matching.
+                    Handles: unicode, suffixes, punctuation, capitalization.
+                    """
                     return (
                         s.astype(str)
-                         .str.normalize('NFKD')
+                         .str.normalize('NFKD')  # Normalize unicode (handles Dončić → Doncic)
                          .str.encode('ascii', errors='ignore')
                          .str.decode('ascii')
                          .str.lower()
-                         .str.replace(r"[^a-z]+", " ", regex=True)
+                         .str.replace(r"[^a-z]+", " ", regex=True)  # Remove all non-letters
                          .str.strip()
-                         .str.replace(r"\s+", " ", regex=True)
+                         .str.replace(r"\s+", " ", regex=True)  # Collapse multiple spaces
+                         .str.replace(r"\s+(jr|sr|ii|iii|iv|v)$", "", regex=True)  # Remove suffixes (Jr., Sr., II, III, IV, V)
                     )
 
                 # Build normalized name keys
@@ -1865,6 +2033,15 @@ def build_players_from_playerstats(
 
                 # Quick diagnostic: name overlap and season overlap
                 if verbose:
+                    # DEBUG: Show raw names before normalization
+                    try:
+                        raw_kaggle = ps_join[join_name_col].dropna().unique()[:10].tolist()
+                        raw_priors = priors_players[pri_name_col].dropna().unique()[:10].tolist()
+                        log(f"  DEBUG - Raw Kaggle names: {raw_kaggle}", True)
+                        log(f"  DEBUG - Raw Priors names: {raw_priors}", True)
+                    except Exception as e:
+                        log(f"  DEBUG - Could not show raw names: {e}", True)
+
                     p_names = set(ps_join["__name_key__"].dropna().unique()[:5000])
                     r_names = set(priors_players["__name_key__"].dropna().unique()[:5000])
                     name_intersection = p_names & r_names
@@ -1873,8 +2050,8 @@ def build_players_from_playerstats(
                         log(f"  Sample common names: {list(name_intersection)[:10]}", True)
                     else:
                         # Show samples from each to debug
-                        log(f"  Sample Kaggle names: {list(p_names)[:5]}", True)
-                        log(f"  Sample Priors names: {list(r_names)[:5]}", True)
+                        log(f"  Sample Kaggle names (normalized): {list(p_names)[:10]}", True)
+                        log(f"  Sample Priors names (normalized): {list(r_names)[:10]}", True)
                     
                     # Check season overlap
                     p_seasons = set(ps_join["season_end_year"].dropna().unique())
@@ -1902,46 +2079,58 @@ def build_players_from_playerstats(
                 )
                 ps_join = ps_join.drop(columns=["season_for_game"], errors="ignore")
                 
-                # For unmatched rows, try +/- 1 season (handles off-by-one issues)
+                # For unmatched rows, try +/- 1 season (handles off-by-one issues) — chunked to save memory
                 prior_cols_present = [c for c in merge_cols if c in ps_join.columns]
                 matched_mask = ps_join[prior_cols_present].notna().any(axis=1) if prior_cols_present else pd.Series([False] * len(ps_join))
-                unmatched = ps_join[~matched_mask].copy()
                 
-                if len(unmatched) > 0 and verbose:
-                    log(f"  Attempting fuzzy season match (+/- 1 year) for {len(unmatched):,} unmatched rows", True)
-                    
-                    # Try season +/- 1
-                    for season_offset in [-1, 1]:
-                        still_unmatched = ps_join[~matched_mask].copy()
-                        if len(still_unmatched) == 0:
-                            break
-                        
-                        still_unmatched["_temp_season"] = still_unmatched["season_end_year"] + season_offset
-                        fuzzy_match = still_unmatched.merge(
+                # Chunked fuzzy matching (Option A fallback)
+                batch_size = 1000
+                for season_offset in [-1, 1]:
+                    # Recompute unmatched indices each pass
+                    if prior_cols_present:
+                        matched_mask = ps_join[prior_cols_present].notna().any(axis=1)
+                    else:
+                        matched_mask = pd.Series([False] * len(ps_join), index=ps_join.index)
+                    unmatched_idx = np.flatnonzero(~matched_mask.values)
+                    if len(unmatched_idx) == 0:
+                        break
+                    if verbose:
+                        log(f"  Fuzzy season match (offset {season_offset}): processing {len(unmatched_idx):,} rows in batches of {batch_size}", True)
+                    for start_idx in range(0, len(unmatched_idx), batch_size):
+                        idx_batch = unmatched_idx[start_idx:start_idx + batch_size]
+                        batch = ps_join.iloc[idx_batch][["__name_key__", "season_end_year"]].copy()
+                        batch["_temp_season"] = pd.to_numeric(batch["season_end_year"], errors="coerce") + season_offset
+                        fuzzy = batch.merge(
                             priors_players[["__name_key__", "season_for_game"] + merge_cols],
                             left_on=["__name_key__", "_temp_season"],
                             right_on=["__name_key__", "season_for_game"],
                             how="left",
                             suffixes=("", "_fuzz")
                         )
-                        
-                        # Update only rows that got matched
+                        # Update only where ps_join is missing
                         for col in merge_cols:
-                            if col in fuzzy_match.columns and col not in ps_join.columns:
-                                ps_join.loc[~matched_mask, col] = fuzzy_match[col]
-                            elif col + "_fuzz" in fuzzy_match.columns:
-                                ps_join.loc[~matched_mask, col] = ps_join.loc[~matched_mask, col].fillna(fuzzy_match[col + "_fuzz"])
-                        
-                        # Update matched mask
-                        matched_mask = ps_join[prior_cols_present].notna().any(axis=1) if prior_cols_present else pd.Series([False] * len(ps_join))
+                            src_col = col if col in fuzzy.columns else (col + "_fuzz" if col + "_fuzz" in fuzzy.columns else None)
+                            if src_col is None:
+                                continue
+                            vals = pd.to_numeric(fuzzy[src_col], errors="coerce") if fuzzy[src_col].dtype.kind in "OUSV" else fuzzy[src_col]
+                            to_update = ps_join.iloc[idx_batch][col].isna() if col in ps_join.columns else pd.Series([True]*len(idx_batch))
+                            if col not in ps_join.columns:
+                                ps_join[col] = np.nan
+                                to_update = pd.Series([True]*len(idx_batch))
+                            if to_update.any():
+                                ps_join.iloc[idx_batch, ps_join.columns.get_loc(col)] = np.where(to_update.values, vals.values, ps_join.iloc[idx_batch][col].values)
                 
                 ps_join = ps_join.drop(columns=["__name_key__"], errors="ignore")
 
                 prior_cols_present = [c for c in merge_cols if c in ps_join.columns]
-                non_null_priors = ps_join[prior_cols_present].notna().any(axis=1).sum() if prior_cols_present else 0
-                log(f"  Name-merge matched: {non_null_priors:,} / {len(ps_join):,} player-game rows ({(non_null_priors/len(ps_join)*100 if len(ps_join) else 0):.1f}%)", verbose)
+                name_matched = ps_join[prior_cols_present].notna().any(axis=1).sum() if prior_cols_present else 0
+                log(f"  Name-merge matched: {name_matched:,} / {len(ps_join):,} player-game rows ({(name_matched/len(ps_join)*100 if len(ps_join) else 0):.1f}%)", verbose)
 
-                if non_null_priors == 0 and verbose:
+                # Report combined match rate (ID + name merging)
+                if verbose:
+                    log(f"  TOTAL matched (ID + name): {name_matched:,} / {len(ps_join):,} player-game rows ({(name_matched/len(ps_join)*100 if len(ps_join) else 0):.1f}%)", True)
+
+                if name_matched == 0 and verbose:
                     # Diagnostics to help identify mismatch
                     try:
                         samp_ps = ps_join[[pid_col, name_col, "season_end_year"]].drop_duplicates().head(5)
@@ -2046,7 +2235,7 @@ def _fit_minutes_model(df: pd.DataFrame, seed: int, verbose: bool) -> Tuple[obje
             objective="regression",
             learning_rate=0.05, num_leaves=31, max_depth=-1,
             colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
-            n_estimators=800, random_state=seed, n_jobs=-1,
+            n_estimators=800, random_state=seed, n_jobs=N_JOBS,
             force_col_wise=True, verbosity=-1
         )
     else:
@@ -2113,7 +2302,7 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
             objective="regression",
             learning_rate=0.05, num_leaves=31, max_depth=-1,
             colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
-            n_estimators=800, random_state=seed, n_jobs=-1,
+            n_estimators=800, random_state=seed, n_jobs=N_JOBS,
             force_col_wise=True, verbosity=-1
         )
     else:
@@ -2384,7 +2573,7 @@ def load_betting_odds(odds_path: Path, verbose: bool) -> pd.DataFrame:
     log(f"Processed {len(game_odds):,} unique games with market odds", verbose)
     return game_odds
 
-def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def load_basketball_reference_priors(priors_root: Path, verbose: bool, seasons_to_keep: Optional[Set[int]] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load Basketball Reference priors bundle from 7 CSVs (2 team + 4 player + 1 mapping).
     Returns: (priors_players, priors_teams) with season_for_game = season + 1 (shifted for leakage safety)
@@ -2463,6 +2652,16 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
                 log(f"Team priors: {len(ts_non_playoff)} non-playoff + {len(ts_playoff_fallback)} playoff fallback = {len(ts)} total", verbose)
             else:
                 ts = ts_non_playoff
+        # Season filter (Option B): keep only seasons we will train on (±1 padding applied by caller)
+        if seasons_to_keep and "season" in ts.columns:
+            try:
+                end_year = _parse_season_end_year(ts["season"]).astype("Int64")
+                before = len(ts)
+                ts = ts[end_year.isin(list(seasons_to_keep))].copy()
+                if verbose:
+                    log(f"Team priors season filter: {before:,} -> {len(ts):,} rows", True)
+            except Exception:
+                pass
 
         # Keep key columns - detect abbreviation vs team-name columns explicitly
         abbr_candidates = [c for c in ("abbreviation", "abbr", "team_abbr") if c in ts.columns]
@@ -2578,6 +2777,17 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool) -> Tuple[
             has_tot = set(tot_rows["player_id"])
             non_tot = non_tot[~non_tot["player_id"].isin(has_tot)]
             df = pd.concat([tot_rows, non_tot], ignore_index=True)
+
+        # Season filter (Option B): keep only seasons we will train on (±1 padding applied by caller)
+        before = len(df)
+        if seasons_to_keep and "season" in df.columns and before:
+            try:
+                end_year = _parse_season_end_year(df["season"]).astype("Int64")
+                df = df[end_year.isin(list(seasons_to_keep))].copy()
+                if verbose:
+                    log(f"  {csv_name}: filtered by season {before:,} -> {len(df):,}", True)
+            except Exception:
+                pass
 
         log(f"  Loaded {len(df):,} rows from {csv_name}", verbose)
         return df
@@ -2710,6 +2920,7 @@ def main():
     ap.add_argument("--skip-rest", action="store_true", help="Skip rest/b2b features (useful when dates missing)")
     ap.add_argument("--fresh", action="store_true", help="Copy CSVs into a new per-run folder to avoid any stale artifacts")
     ap.add_argument("--lgb-log-period", type=int, default=0, help="Print LightGBM eval metrics every N iterations (0 = silent)")
+    ap.add_argument("--n-jobs", type=int, default=-1, help="Threads for LightGBM/HistGBM (-1=all cores). Reduce to lower RAM usage.")
 
     # Era controls
     ap.add_argument("--game-season-cutoff", type=str, default="2002",
@@ -2726,11 +2937,16 @@ def main():
     ap.add_argument("--skip-odds", action="store_true", help="Do not load or merge betting odds; keep training independent of odds")
     ap.add_argument("--priors-dataset", type=str, default="C:/Users/tmiles11/nba_predictor/priors_data",
                     help="Path or Kaggle dataset ref for Basketball Reference priors bundle (local path or Kaggle dataset)")
+    ap.add_argument("--enable-window-ensemble", action="store_true",
+                    help="Run experimental 5-year window ensemble training (requires pre-trained game model)")
 
     args = ap.parse_args()
 
     verbose = args.verbose
     seed = args.seed
+    # Apply global threads limit for learners
+    global N_JOBS
+    N_JOBS = int(args.n_jobs)
 
     print(_sec("🏀 NBA Training Pipeline Configuration"))
     print("\n📊 DATASETS (auto-cached):")
@@ -2855,63 +3071,18 @@ def main():
 
         # Clean up temp file
         temp_csv.unlink(missing_ok=True)
+        # Free temp frames
+        del current_season_df, current_games_df, current_context, current_abbrevs
+        gc.collect()
     else:
         print("- No current season games available yet (season may not have started)")
 
-    # Load historical odds from The Odds API (or cache)
-    print(_sec("Loading historical betting odds from The Odds API"))
-    historical_odds_cache = Path("data/historical_odds_cache.csv")
-    historical_odds_df = load_or_fetch_historical_odds(
-        games_df=games_df,
-        api_key=THEODDS_API_KEY,
-        cache_path=historical_odds_cache,
-        verbose=verbose,
-        max_requests=200  # Increased to 200 dates (2000 credits) - fetches ~6 months of historical odds
-    )
-
-    # Merge historical odds with games_df
-    if not historical_odds_df.empty:
-        # Ensure date columns are compatible for merging
-        if 'date' in games_df.columns:
-            games_df['date_str'] = pd.to_datetime(games_df['date']).dt.strftime('%Y-%m-%d')
-        else:
-            log("Warning: No 'date' column in games_df, cannot merge historical odds", verbose)
-            games_df['date_str'] = None
-
-        historical_odds_df['date_str'] = historical_odds_df['date'].astype(str).str[:10]
-
-        # Check if we have team names in games_df (may be home_name/away_name or missing)
-        has_names = 'home_name' in games_df.columns and 'away_name' in games_df.columns
-
-        if has_names:
-            # Normalize team names for fuzzy matching
-            games_df['home_name_norm'] = games_df['home_name'].str.lower().str.strip()
-            games_df['away_name_norm'] = games_df['away_name'].str.lower().str.strip()
-            historical_odds_df['home_team_norm'] = historical_odds_df['home_team'].str.lower().str.strip()
-            historical_odds_df['away_team_norm'] = historical_odds_df['away_team'].str.lower().str.strip()
-
-            # Merge on date + normalized team names
-            before_merge = len(games_df)
-            games_df = games_df.merge(
-                historical_odds_df[['date_str', 'home_team_norm', 'away_team_norm', 'market_spread', 'market_total',
-                                    'market_implied_home', 'market_implied_away']],
-                left_on=['date_str', 'home_name_norm', 'away_name_norm'],
-                right_on=['date_str', 'home_team_norm', 'away_team_norm'],
-                how='left'
-            )
-
-            # Clean up temp columns
-            games_df = games_df.drop(columns=['home_name_norm', 'away_name_norm', 'home_team_norm', 'away_team_norm'], errors='ignore')
-
-            # Count successful merges
-            odds_matched = games_df['market_spread'].notna().sum()
-            print(f"- Merged historical odds: {odds_matched:,} / {before_merge:,} games matched ({odds_matched/before_merge*100:.1f}%)")
-            log(f"- Games without odds data: {before_merge - odds_matched:,} (will use feature defaults)", verbose)
-        else:
-            log("Warning: games_df missing team name columns, cannot merge odds by team names", verbose)
-            log("- Will skip historical odds merge (odds features will use defaults)", verbose)
-    else:
-        print("- No historical odds available (API may be unavailable or cache empty)")
+    # SKIP historical odds fetching for now - only needed for 2022+ seasons
+    # Historical odds (pre-2022) are not available from The Odds API anyway
+    # This saves significant time and RAM, especially for cached historical windows (2002-2021)
+    print(_sec("Skipping historical odds fetch - only available for 2022+ seasons"))
+    print("- Historical windows (2002-2021) don't need odds data")
+    print("- Odds will be loaded later only for current season window if needed")
 
     # Add team abbreviations for ALL games (needed for team priors merge)
     if team_id_to_abbrev:
@@ -2920,28 +3091,173 @@ def main():
         matched = games_df["home_abbrev"].notna().sum()
         log(f"- Mapped {matched:,} / {len(games_df):,} games to team abbreviations ({matched/len(games_df)*100:.1f}%)", verbose)
 
-    # Era filter for games
-    game_cut = _parse_season_cutoff(args.game_season_cutoff, kind="game")
-    if "season_end_year" in games_df.columns:
-        before_len = len(games_df)
-        games_df = games_df[(games_df["season_end_year"].fillna(game_cut)) >= game_cut].reset_index(drop=True)
-        print(f"- Games filtered by season >= {game_cut}: {before_len:,} -> {len(games_df):,} rows")
+    # Ensure home_team and away_team columns exist for exhaustion features
+    games_df['home_team'] = games_df['home_abbrev']
+    games_df['away_team'] = games_df['away_abbrev']
 
-    # Compute sample weights for games
-    if "season_end_year" in games_df.columns:
-        game_weights = _compute_sample_weights(
-            games_df["season_end_year"].to_numpy(dtype="float64"),
-            decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
-        )
-    else:
-        game_weights = np.ones(len(games_df), dtype="float64")
+    # AUTOMATED 5-YEAR WINDOW TRAINING (RAM-efficient with smart caching)
+    # Strategy: Only train missing windows + current season window
+    # This prevents retraining from 2002 onwards every time
+    # NOTE: This has been moved to AFTER base LGB model training (see line ~3600)
+    # Keeping this comment here for reference
+    if False:  # DISABLED - moved to after clf_final is trained
+        # args.enable_window_ensemble:
+        if "season_end_year" in games_df.columns:
+            import pickle
+            cache_dir = "model_cache"
+            os.makedirs(cache_dir, exist_ok=True)
 
-    print(f"- Games: {len(games_df):,} rows")
+            min_year = int(games_df["season_end_year"].min())
+            max_year = int(games_df["season_end_year"].max())
+            window_size = 5
 
+            # Get all unique seasons and split into exact 5-year windows
+            # Convert to integers to avoid numpy float issues
+            all_seasons = sorted([int(s) for s in games_df["season_end_year"].dropna().unique()])
+
+            print(f"\n{'='*70}")
+            print(f"5-YEAR WINDOW TRAINING (RAM-Efficient Mode)")
+            print(f"Data range: {min_year}-{max_year}")
+            print(f"Total unique seasons: {len(all_seasons)}")
+            print(f"{'='*70}")
+
+            # Determine which window contains the current season
+            current_season_year = max_year
+            windows_to_process = []
+
+            for i in range(0, len(all_seasons), window_size):
+                window_seasons = all_seasons[i:i+window_size]
+                start_year = int(window_seasons[0])
+                end_year = int(window_seasons[-1])
+                cache_path = f"{cache_dir}/ensemble_{start_year}_{end_year}.pkl"
+                cache_meta_path = f"{cache_dir}/ensemble_{start_year}_{end_year}_meta.json"
+
+                is_current_window = current_season_year in window_seasons
+                cache_exists = os.path.exists(cache_path) and os.path.getsize(cache_path) > 0
+                cache_valid = False
+
+                # Validate cache with metadata
+                if cache_exists and os.path.exists(cache_meta_path):
+                    try:
+                        with open(cache_meta_path, 'r') as f:
+                            meta = json.load(f)
+                            # Check if cache has all expected seasons
+                            cached_seasons = set(meta.get('seasons', []))
+                            expected_seasons = set(map(int, window_seasons))
+                            cache_valid = cached_seasons == expected_seasons
+                            if cache_valid:
+                                print(f"[OK] Window {start_year}-{end_year}: Valid cache found")
+                    except Exception as e:
+                        print(f"[WARN] Window {start_year}-{end_year}: Cache metadata invalid ({e})")
+                        cache_valid = False
+
+                # Decide whether to process this window
+                if is_current_window:
+                    # Always retrain current season window (new data may have arrived)
+                    print(f"[TRAIN] Window {start_year}-{end_year}: Current season - will train")
+                    windows_to_process.append({
+                        'seasons': window_seasons,
+                        'start_year': start_year,
+                        'end_year': end_year,
+                        'cache_path': cache_path,
+                        'cache_meta_path': cache_meta_path,
+                        'is_current': True
+                    })
+                elif not cache_valid:
+                    # Historical window missing or invalid - need to train
+                    status = "missing" if not cache_exists else "invalid"
+                    print(f"[TRAIN] Window {start_year}-{end_year}: Cache {status} - will train")
+                    windows_to_process.append({
+                        'seasons': window_seasons,
+                        'start_year': start_year,
+                        'end_year': end_year,
+                        'cache_path': cache_path,
+                        'cache_meta_path': cache_meta_path,
+                        'is_current': False
+                    })
+
+            if not windows_to_process:
+                print("\n[OK] All windows cached and up-to-date. No training needed!")
+            else:
+                print(f"\n{'='*70}")
+                print(f"Will process {len(windows_to_process)} window(s) sequentially to minimize RAM")
+                print(f"{'='*70}\n")
+
+                # Process windows sequentially (not all at once) to save RAM
+                for idx, window_info in enumerate(windows_to_process, 1):
+                    window_seasons = window_info['seasons']
+                    start_year = window_info['start_year']
+                    end_year = window_info['end_year']
+                    cache_path = window_info['cache_path']
+                    cache_meta_path = window_info['cache_meta_path']
+                    is_current = window_info['is_current']
+
+                    print(f"\n{'='*70}")
+                    print(f"Training window {idx}/{len(windows_to_process)}: {start_year}-{end_year}")
+                    print(f"Seasons: {list(window_seasons)}")
+                    print(f"{'='*70}")
+
+                    # Extract only this window's data to minimize RAM
+                    window_mask = games_df["season_end_year"].isin(window_seasons)
+                    games_window = games_df[window_mask].reset_index(drop=True)
+                    print(f"Window contains {len(games_window):,} games")
+
+                    # Train the model for this window
+                    use_player_props = end_year >= 2022
+                    if use_player_props:
+                        print("Using historic player props for this window.")
+                    else:
+                        print("Skipping historic player props for this window.")
+
+                    game_weights = _compute_sample_weights(
+                        games_window["season_end_year"].to_numpy(dtype="float64"),
+                        decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+                    )
+
+                    result = train_all_ensemble_components(
+                        games_df=games_window,
+                        game_features=GAME_FEATURES,
+                        game_defaults=GAME_DEFAULTS,
+                        lgb_model=clf_final,
+                        optimal_refit_freq=20,
+                        verbose=verbose
+                    )
+
+                    # Cache the result (even for current window, for faster subsequent runs)
+                    print(f"Saving trained model to cache: {cache_path}")
+                    with open(cache_path, "wb") as f:
+                        pickle.dump(result, f)
+
+                    # Save metadata for cache validation
+                    meta = {
+                        'seasons': list(map(int, window_seasons)),
+                        'start_year': start_year,
+                        'end_year': end_year,
+                        'trained_date': datetime.now().isoformat(),
+                        'num_games': len(games_window),
+                        'is_current_season': is_current
+                    }
+                    with open(cache_meta_path, 'w') as f:
+                        json.dump(meta, f, indent=2)
+
+                    print(f"[OK] Window {start_year}-{end_year} complete and cached")
+
+                    # Free memory after each window
+                    del games_window, result, game_weights
+                    gc.collect()
+                    print(f"Memory freed for next window")
+
+                print(f"\n{'='*70}")
+                print(f"[OK] All required windows trained and cached")
+                print(f"{'='*70}\n")
+        else:
+            print("No season_end_year column found; cannot automate 5-year window training.")
     # Load and merge betting odds (if provided)
-    # Note: Odds are independent of Basketball Reference priors
+    # NOTE: This section has been DISABLED - odds loading moved to after window training
+    # Betting odds (2008-2025) should NOT be loaded into historical windows (2002-2006, etc.)
     odds_df = pd.DataFrame()
-    if args.odds_dataset and not args.skip_odds:
+    if False:  # DISABLED - moved to after window ensemble training
+        # args.odds_dataset and not args.skip_odds:
         odds_path_str = args.odds_dataset
         # Check if it's a Kaggle dataset ref or local path
         if "/" in odds_path_str and not os.path.exists(odds_path_str):
@@ -3054,6 +3370,19 @@ def main():
     priors_teams = pd.DataFrame()
 
     if args.priors_dataset:
+        # Compute target seasons to keep for priors (games seasons ±1 for safety)
+        seasons_to_keep: Optional[Set[int]] = None
+        if "season_end_year" in games_df.columns:
+            try:
+                base_seasons = set(int(x) for x in pd.to_numeric(games_df["season_end_year"], errors="coerce").dropna().astype(int).unique())
+                padded = set()
+                for s in base_seasons:
+                    padded.update([s-1, s, s+1])
+                seasons_to_keep = padded
+                if verbose:
+                    log(f"Priors season filter prepared: keeping {len(seasons_to_keep)} seasons (sample: {sorted(list(seasons_to_keep))[:5]}…)", True)
+            except Exception:
+                seasons_to_keep = None
         priors_path_str = args.priors_dataset
         # Check if Kaggle dataset or local path
         if "/" in priors_path_str and not os.path.exists(priors_path_str):
@@ -3072,7 +3401,7 @@ def main():
                     for f in csv_files:
                         log(f"  - {f.relative_to(priors_root)}", verbose)
                     
-                    priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose)
+                    priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
                 except Exception as e:
                     log(f"Warning: Failed to load priors dataset: {e}", verbose)
                     import traceback
@@ -3089,7 +3418,7 @@ def main():
                 for f in csv_files:
                     log(f"  - {f.name} ({f.stat().st_size / 1024 / 1024:.1f} MB)", verbose)
                 
-                priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose)
+                priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
             else:
                 log(f"Warning: Priors dataset path does not exist: {priors_root}", verbose)
                 priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
@@ -3425,6 +3754,16 @@ def main():
 
     # Train game models + OOF
     print(_sec("Training game models"))
+
+    # Compute sample weights for games (era-decay), even if window ensemble is disabled
+    if "season_end_year" in games_df.columns:
+        game_weights = _compute_sample_weights(
+            games_df["season_end_year"].to_numpy(dtype="float64"),
+            decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+        )
+    else:
+        game_weights = np.ones(len(games_df), dtype="float64")
+
     clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
         games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights
     )
@@ -3442,12 +3781,183 @@ def main():
         json.dump({"spread_sigma": spread_sigma}, f)
 
     # ========================================================================
+    # AUTOMATED 5-YEAR WINDOW TRAINING (RAM-efficient with smart caching)
+    # ========================================================================
+    # Now that clf_final is trained, we can use it for window ensemble training
+    if args.enable_window_ensemble:
+        if "season_end_year" in games_df.columns:
+            import pickle
+            cache_dir = "model_cache"
+            os.makedirs(cache_dir, exist_ok=True)
+
+            # Filter games to only include seasons >= game_season_cutoff (2002)
+            game_cutoff_year = int(args.game_season_cutoff)
+            original_game_count = len(games_df)
+            games_df = games_df[games_df["season_end_year"] >= game_cutoff_year].copy()
+            if verbose:
+                print(f"\n{'='*70}")
+                print(f"SEASON FILTERING FOR ENSEMBLE TRAINING")
+                print(f"Game season cutoff: {game_cutoff_year}")
+                print(f"Games before filter: {original_game_count:,}")
+                print(f"Games after filter: {len(games_df):,} (seasons {game_cutoff_year}-{int(games_df['season_end_year'].max())})")
+                print(f"{'='*70}")
+
+            min_year = int(games_df["season_end_year"].min())
+            max_year = int(games_df["season_end_year"].max())
+            window_size = 5
+
+            # Get all unique seasons and split into exact 5-year windows
+            # Convert to integers to avoid numpy float issues
+            all_seasons = sorted([int(s) for s in games_df["season_end_year"].dropna().unique()])
+
+            print(f"\n{'='*70}")
+            print(f"5-YEAR WINDOW TRAINING (RAM-Efficient Mode)")
+            print(f"Data range: {min_year}-{max_year}")
+            print(f"Total unique seasons: {len(all_seasons)}")
+            if verbose:
+                print(f"DEBUG - All seasons: {all_seasons}")
+                print(f"DEBUG - Season value counts (first 10):")
+                vc = games_df["season_end_year"].value_counts().sort_index()
+                print(vc.head(10))
+            print(f"{'='*70}")
+
+            # Determine which window contains the current season
+            current_season_year = max_year
+            windows_to_process = []
+
+            for i in range(0, len(all_seasons), window_size):
+                window_seasons = all_seasons[i:i+window_size]
+                start_year = int(window_seasons[0])
+                end_year = int(window_seasons[-1])
+                cache_path = f"{cache_dir}/ensemble_{start_year}_{end_year}.pkl"
+                cache_meta_path = f"{cache_dir}/ensemble_{start_year}_{end_year}_meta.json"
+
+                is_current_window = current_season_year in window_seasons
+                cache_exists = os.path.exists(cache_path) and os.path.getsize(cache_path) > 0
+                cache_valid = False
+
+                # Validate cache with metadata
+                if cache_exists and os.path.exists(cache_meta_path):
+                    try:
+                        with open(cache_meta_path, 'r') as f:
+                            meta = json.load(f)
+                            # Check if cache has all expected seasons
+                            cached_seasons = set(meta.get('seasons', []))
+                            expected_seasons = set(map(int, window_seasons))
+                            cache_valid = cached_seasons == expected_seasons
+                            if cache_valid:
+                                print(f"[OK] Window {start_year}-{end_year}: Valid cache found")
+                    except Exception as e:
+                        print(f"[WARN] Window {start_year}-{end_year}: Cache metadata invalid ({e})")
+                        cache_valid = False
+
+                # Decide whether to process this window
+                if is_current_window:
+                    # Always retrain current season window (new data may have arrived)
+                    print(f"[TRAIN] Window {start_year}-{end_year}: Current season - will train")
+                    windows_to_process.append({
+                        'seasons': window_seasons,
+                        'start_year': start_year,
+                        'end_year': end_year,
+                        'cache_path': cache_path,
+                        'cache_meta_path': cache_meta_path,
+                        'is_current': True
+                    })
+                elif not cache_valid:
+                    # Historical window missing or invalid - need to train
+                    status = "missing" if not cache_exists else "invalid"
+                    print(f"[TRAIN] Window {start_year}-{end_year}: Cache {status} - will train")
+                    windows_to_process.append({
+                        'seasons': window_seasons,
+                        'start_year': start_year,
+                        'end_year': end_year,
+                        'cache_path': cache_path,
+                        'cache_meta_path': cache_meta_path,
+                        'is_current': False
+                    })
+
+            if not windows_to_process:
+                print("\n[OK] All windows cached and up-to-date. No training needed!")
+            else:
+                print(f"\n{'='*70}")
+                print(f"Will process {len(windows_to_process)} window(s) sequentially to minimize RAM")
+                print(f"{'='*70}\n")
+
+                # Process windows sequentially (not all at once) to save RAM
+                for idx, window_info in enumerate(windows_to_process, 1):
+                    window_seasons = window_info['seasons']
+                    start_year = window_info['start_year']
+                    end_year = window_info['end_year']
+                    cache_path = window_info['cache_path']
+                    cache_meta_path = window_info['cache_meta_path']
+                    is_current = window_info['is_current']
+
+                    print(f"\n{'='*70}")
+                    print(f"Training window {idx}/{len(windows_to_process)}: {start_year}-{end_year}")
+                    print(f"Seasons: {list(window_seasons)}")
+                    print(f"{'='*70}")
+
+                    # Extract only this window's data to minimize RAM
+                    window_mask = games_df["season_end_year"].isin(window_seasons)
+                    games_window = games_df[window_mask].reset_index(drop=True)
+                    print(f"Window contains {len(games_window):,} games")
+
+                    # Train the model for this window
+                    use_player_props = end_year >= 2022
+                    if use_player_props:
+                        print("Using historic player props for this window.")
+                    else:
+                        print("Skipping historic player props for this window.")
+
+                    game_weights = _compute_sample_weights(
+                        games_window["season_end_year"].to_numpy(dtype="float64"),
+                        decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+                    )
+
+                    result = train_all_ensemble_components(
+                        games_df=games_window,
+                        game_features=GAME_FEATURES,
+                        game_defaults=GAME_DEFAULTS,
+                        lgb_model=clf_final,
+                        optimal_refit_freq=20,
+                        verbose=verbose
+                    )
+
+                    # Cache the result (even for current window, for faster subsequent runs)
+                    print(f"Saving trained model to cache: {cache_path}")
+                    with open(cache_path, "wb") as f:
+                        pickle.dump(result, f)
+
+                    # Save metadata for cache validation
+                    meta = {
+                        'seasons': list(map(int, window_seasons)),
+                        'start_year': start_year,
+                        'end_year': end_year,
+                        'trained_date': datetime.now().isoformat(),
+                        'num_games': len(games_window),
+                        'is_current_season': is_current
+                    }
+                    with open(cache_meta_path, 'w') as f:
+                        json.dump(meta, f, indent=2)
+
+                    print(f"[OK] Window {start_year}-{end_year} complete and cached")
+
+                    # Free memory after each window
+                    del games_window, result, game_weights
+                    gc.collect()
+                    print(f"Memory freed for next window")
+
+                print(f"\n{'='*70}")
+                print(f"[OK] All required windows trained and cached")
+                print(f"{'='*70}\n")
+        else:
+            print("No season_end_year column found; cannot automate 5-year window training.")
+
+    # ========================================================================
     # ENHANCED ENSEMBLE: Ridge + Elo + Four Factors + Meta-Learner (All Improvements)
     # ========================================================================
     print(_sec("Training Enhanced Ensemble (All Improvements)"))
     try:
-        from train_ensemble_enhanced import train_all_ensemble_components
-        
         # Train all components in one pipeline
         ridge_model, elo_model, ff_model, ensembler, games_enhanced, ensemble_metrics = \
             train_all_ensemble_components(
