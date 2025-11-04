@@ -120,29 +120,29 @@
     "away_mov_prior": 0.0
   },
   "game_metrics": {
-    "train_size": 25992,
-    "val_size": 6499,
-    "ml_logloss": 0.6475043769102836,
-    "ml_brier": 0.22812678363021713,
-    "sp_rmse": 14.565703313969786,
-    "sp_mae": 11.442229167795906,
-    "spread_sigma": 14.566644000294827,
+    "train_size": 26007,
+    "val_size": 6502,
+    "ml_logloss": 0.6498999030601342,
+    "ml_brier": 0.2292180523666031,
+    "sp_rmse": 14.529452260161836,
+    "sp_mae": 11.400600823951335,
+    "spread_sigma": 14.526799019300526,
     "ridge": {
       "alpha": 1.0,
-      "cv_r2_score": 0.12312703028498109,
-      "n_samples": 32491
+      "cv_r2_score": 0.12319615470527845,
+      "n_samples": 32509
     },
     "elo": {
       "base_k": 20.0,
       "home_advantage": 70,
-      "upset_games": 16850,
-      "chalk_games": 13342,
+      "upset_games": 16854,
+      "chalk_games": 13354,
       "n_teams": 31,
-      "final_avg_rating": 1499.9999999999998
+      "final_avg_rating": 1500.0
     },
     "four_factors": {
       "rolling_window": 10,
-      "n_samples": 32491,
+      "n_samples": 32509,
       "n_teams_tracked": 30
     },
     "refit_frequency_tests": {
@@ -154,38 +154,38 @@
     "ensemble": {
       "refit_frequency": 20,
       "calibration_mode": "global",
-      "total_refits": 1619,
+      "total_refits": 1620,
       "refits_per_season": 123,
-      "final_logloss": 0.7051497322103197,
-      "final_accuracy": 0.5842848788895386,
+      "final_logloss": 0.7157699889038731,
+      "final_accuracy": 0.5716878402903811,
       "n_interaction_features": 17
     }
   },
   "player_metrics": {
     "minutes": {
-      "rows": 155623,
-      "rmse": 6.123457912043403,
-      "mae": 4.706145650734856
+      "rows": 156045,
+      "rmse": 6.12350144368263,
+      "mae": 4.70215929211777
     },
     "points": {
-      "rows": 192958,
-      "rmse": 5.16902950407981,
-      "mae": 3.594642937533392
+      "rows": 193470,
+      "rmse": 5.171346790167383,
+      "mae": 3.596035165187526
     },
     "rebounds": {
-      "rows": 192958,
-      "rmse": 2.4865452793725384,
-      "mae": 1.6938283697476753
+      "rows": 193470,
+      "rmse": 2.4899481514026287,
+      "mae": 1.6973924427341995
     },
     "assists": {
-      "rows": 192958,
-      "rmse": 1.706963474276674,
-      "mae": 1.15443586318696
+      "rows": 193470,
+      "rmse": 1.7084521380115085,
+      "mae": 1.1550166308417105
     },
     "threes": {
-      "rows": 192958,
-      "rmse": 1.1286569130962232,
-      "mae": 0.7345344858080811
+      "rows": 193470,
+      "rmse": 1.1320659725196769,
+      "mae": 0.7365445718904636
     }
   },
   "era": {

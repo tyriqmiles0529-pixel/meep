@@ -1,0 +1,80 @@
+╔═══════════════════════════════════════════════════════════════════════╗
+║              SCHEDULED TASKS & AUTOMATION SUMMARY                     ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+✅ ANALYSIS COMPLETE
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCHEDULED TASKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ No NBA-related scheduled tasks found
+   → You're running everything manually (recommended for now)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+POWERSHELL SCRIPTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ run_pipeline.ps1 - UPDATED to new workflow!
+
+BEFORE (ran training every time - BAD):
+  - Trained models daily (unnecessary)
+  - Combined train + analyze (wrong frequency)
+
+AFTER (flexible workflow - GOOD):
+  - Separate morning/evening routines
+  - Monthly training option
+  - Smart logging
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NEW USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DAILY MORNING (Get predictions):
+  .\run_pipeline.ps1 -Morning
+
+DAILY EVENING (Evaluate results):
+  .\run_pipeline.ps1 -Evening
+
+FULL DAY (Both morning + evening):
+  .\run_pipeline.ps1
+
+MONTHLY (Retrain models):
+  .\run_pipeline.ps1 -Train
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OPTIONAL: SET UP AUTOMATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If you want to automate, create scheduled tasks:
+
+1. MORNING TASK (8 AM daily):
+   Program: powershell.exe
+   Arguments: -ExecutionPolicy Bypass -File "C:\Users\tmiles11\nba_predictor\run_pipeline.ps1" -Morning
+   
+2. EVENING TASK (11 PM daily):
+   Program: powershell.exe
+   Arguments: -ExecutionPolicy Bypass -File "C:\Users\tmiles11\nba_predictor\run_pipeline.ps1" -Evening
+
+3. MONTHLY RETRAIN (1st of month):
+   Program: powershell.exe
+   Arguments: -ExecutionPolicy Bypass -File "C:\Users\tmiles11\nba_predictor\run_pipeline.ps1" -Train
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RECOMMENDED WORKFLOW (MANUAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Morning:  python riq_analyzer.py    (OR: .\run_pipeline.ps1 -Morning)
+Evening:  python evaluate.py        (OR: .\run_pipeline.ps1 -Evening)
+Monthly:  python train_auto.py --verbose  (OR: .\run_pipeline.ps1 -Train)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LOGS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All runs logged to: logs/daily_YYYY-MM-DD_HH-MM-SS.log
+
+View latest log:
+  Get-Content (Get-ChildItem logs\daily_*.log | Sort LastWriteTime -Desc | Select -First 1).FullName
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
