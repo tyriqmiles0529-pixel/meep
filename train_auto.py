@@ -2819,12 +2819,16 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
                            "rate_fga", "rate_3pa", "rate_fta", "ts_pct_L5", "ts_pct_L10", "three_pct_L5"]
         phase2_requested = ["matchup_pace", "pace_factor", "def_matchup_difficulty", "offensive_environment"]
         phase3_requested = ["usage_rate_L5", "rebound_rate_L5", "assist_rate_L5"]
+        phase4_requested = ["opp_def_vs_points", "rest_days", "is_b2b", "mins_trend", "expected_margin"]
+        phase5_requested = ["is_guard", "is_center", "starter_prob", "likely_injury_return", "games_since_injury"]
 
         phase1_missing = [f for f in phase1_requested if f not in df.columns]
         phase2_missing = [f for f in phase2_requested if f not in df.columns]
         phase3_missing = [f for f in phase3_requested if f not in df.columns]
+        phase4_missing = [f for f in phase4_requested if f not in df.columns]
+        phase5_missing = [f for f in phase5_requested if f not in df.columns]
 
-        if phase1_missing or phase2_missing or phase3_missing:
+        if phase1_missing or phase2_missing or phase3_missing or phase4_missing or phase5_missing:
             log(f"  [DEBUG] Phase features MISSING from dataframe:", True)
             if phase1_missing:
                 log(f"    Phase 1 missing ({len(phase1_missing)}): {phase1_missing}", True)
@@ -2832,8 +2836,12 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
                 log(f"    Phase 2 missing ({len(phase2_missing)}): {phase2_missing}", True)
             if phase3_missing:
                 log(f"    Phase 3 missing ({len(phase3_missing)}): {phase3_missing}", True)
+            if phase4_missing:
+                log(f"    Phase 4 missing ({len(phase4_missing)}): {phase4_missing}", True)
+            if phase5_missing:
+                log(f"    Phase 5 missing ({len(phase5_missing)}): {phase5_missing}", True)
         else:
-            log(f"  [DEBUG] ALL Phase 1+2+3 features present in dataframe!", True)
+            log(f"  [DEBUG] ✅ ALL Phase 1-5 features present in dataframe!", True)
 
     features = [f for f in features if f in df.columns]
 
