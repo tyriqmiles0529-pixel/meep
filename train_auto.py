@@ -2653,6 +2653,22 @@ def build_players_from_playerstats(
 
     # Add PHASE 3: Advanced rate stats
     base_ctx_cols.extend(["usage_rate_L5", "rebound_rate_L5", "assist_rate_L5"])
+    
+    # Add PHASE 4: Advanced context features
+    base_ctx_cols.extend([
+        "opp_def_vs_points", "opp_def_vs_assists", "opp_def_vs_rebounds", "opp_def_vs_threes",
+        "rest_days", "is_b2b", "is_rested",
+        "mins_trend", "role_expanding", "role_shrinking",
+        "expected_margin", "likely_close_game", "likely_blowout", "pace_x_minutes", "player_home_advantage"
+    ])
+    
+    # Add PHASE 5: Position-specific and status features
+    base_ctx_cols.extend([
+        "position", "is_guard", "is_forward", "is_center",
+        "opp_def_vs_rebounds_adj", "opp_def_vs_assists_adj",
+        "starter_prob", "minutes_ceiling", "avg_minutes",
+        "likely_injury_return", "games_since_injury", "days_since_last_game"
+    ])
 
     # Filter to only columns that actually exist in ps_join
     base_ctx_cols = [c for c in base_ctx_cols if c in ps_join.columns]
