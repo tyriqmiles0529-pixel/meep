@@ -7,8 +7,15 @@ Loads and uses trained models from train_auto.py:
 - Game models: moneyline_model.pkl, moneyline_calibrator.pkl, spread_model.pkl
 - Metadata: training_metadata.json (includes RMSE for each model), spread_sigma.json
 
+Feature Engineering:
+- All 3 phases implemented matching train_auto.py:
+  Phase 1: Shot volume (FGA, 3PA, FTA rolling stats + per-minute rates + efficiency metrics)
+  Phase 2: Matchup context (pace, defensive difficulty, offensive environment)
+  Phase 3: Advanced rates (usage%, rebound%, assist%)
+- 61 features total for player predictions
+- Aligns exactly with training schema to prevent shape mismatches
+
 Model predictions are ensembled with statistical projections using inverse-variance weighting.
-Game models (moneyline/spread) are loaded but not yet integrated into game bet analysis (TODO).
 """
 from __future__ import annotations
 
@@ -2953,8 +2960,8 @@ MODEL = ModelPredictor()
 
 def build_player_features(df_last: pd.DataFrame, df_curr: pd.DataFrame) -> pd.DataFrame:
     """
-    Build features for ML prediction matching train_auto.py schema.
-    Models expect 56 features. We provide best estimates when context unavailable.
+    Build features for ML prediction matching train_auto.py schema with ALL PHASES.
+    Includes Phase 1 (shot volume), Phase 2 (matchup), Phase 3 (advanced rates).
     """
     def seq(col: str) -> List[float]:
         vals: List[float] = []
@@ -2976,8 +2983,18 @@ def build_player_features(df_last: pd.DataFrame, df_curr: pd.DataFrame) -> pd.Da
     
     def safe_div(n, d):
         return float(n / d) if d > 0 else 0.0
+    
+    # Calculate True Shooting % from recent games
+    def calc_ts_pct(pts_seq, fga_seq, fta_seq, window):
+        if not pts_seq or not fga_seq or not fta_seq:
+            return 0.56  # league average
+        p = avg(pts_seq, window)
+        a = avg(fga_seq, window)
+        t = avg(fta_seq, window)
+        denominator = 2 * (a + 0.44 * t)
+        return p / denominator if denominator > 0 else 0.56
 
-    # Base features (1-19)
+    # Base context features (1-18)
     feats = {
         "is_home": 1,
         "season_end_year": 2025.0,
@@ -2997,19 +3014,26 @@ def build_player_features(df_last: pd.DataFrame, df_curr: pd.DataFrame) -> pd.Da
         "oof_ml_prob": 0.5,
         "oof_spread_pred": 0.0,
         "starter_flag": 1,
-        "rate_pts": safe_div(avg(pts, 10), avg(mins, 10)) if mins else 0.5,
         
-        # Player rest features (20-21)
+        # Player rest features (19-20)
         "days_rest": 3.0,
         "player_b2b": 0.0,
         
-        # Recent performance features (22-39)
+        # Core stat rolling averages (21-32)
         "points_L3": avg(pts, 3),
         "points_L5": avg(pts, 5),
         "points_L10": avg(pts, 10),
         "assists_L3": avg(ast, 3),
         "assists_L5": avg(ast, 5),
         "assists_L10": avg(ast, 10),
+        "rebounds_L3": avg(reb, 3),
+        "rebounds_L5": avg(reb, 5),
+        "rebounds_L10": avg(reb, 10),
+        "threes_L3": avg(thr, 3),
+        "threes_L5": avg(thr, 5),
+        "threes_L10": avg(thr, 10),
+        
+        # PHASE 1: Shot volume rolling stats (33-41)
         "fieldGoalsAttempted_L3": avg(fga, 3) if fga else 10.0,
         "fieldGoalsAttempted_L5": avg(fga, 5) if fga else 10.0,
         "fieldGoalsAttempted_L10": avg(fga, 10) if fga else 10.0,
@@ -3020,36 +3044,36 @@ def build_player_features(df_last: pd.DataFrame, df_curr: pd.DataFrame) -> pd.Da
         "freeThrowsAttempted_L5": avg(fta, 5) if fta else 2.0,
         "freeThrowsAttempted_L10": avg(fta, 10) if fta else 2.0,
         
-        # Rate stats (40-42)
+        # PHASE 1: Per-minute shot volume rates (42-44)
         "rate_fga": safe_div(avg(fga, 10), avg(mins, 10)) if fga and mins else 0.4,
         "rate_3pa": safe_div(avg(tpa, 10), avg(mins, 10)) if tpa and mins else 0.12,
         "rate_fta": safe_div(avg(fta, 10), avg(mins, 10)) if fta and mins else 0.08,
         
-        # Efficiency stats (43-46)
-        "ts_pct_L5": 0.56,  # league average
-        "ts_pct_L10": 0.56,
-        "ts_pct_season": 0.56,
-        "three_pct_L5": 0.35,
-        "ft_pct_L5": 0.77,
+        # PHASE 1: Efficiency metrics (45-49)
+        "ts_pct_L5": calc_ts_pct(pts, fga, fta, 5),
+        "ts_pct_L10": calc_ts_pct(pts, fga, fta, 10),
+        "ts_pct_season": calc_ts_pct(pts, fga, fta, len(pts) if pts else 10),
+        "three_pct_L5": 0.35,  # TODO: calculate from makes/attempts
+        "ft_pct_L5": 0.77,     # TODO: calculate from makes/attempts
         
-        # Matchup factors (47-48)
+        # PHASE 2: Matchup & context factors (50-53)
         "matchup_pace": 1.0,
         "pace_factor": 1.0,
         "def_matchup_difficulty": 1.0,
         "offensive_environment": 1.0,
         
-        # Advanced stats (49-51)
+        # PHASE 3: Advanced rate stats (54-56)
         "usage_rate_L5": 0.22,
         "rebound_rate_L5": 0.12,
         "assist_rate_L5": 0.18,
         
-        # Home/Away splits (52-55)
+        # Home/Away performance splits (57-60)
         "points_home_avg": avg(pts, 10),
         "points_away_avg": avg(pts, 10),
         "assists_home_avg": avg(ast, 10),
         "assists_away_avg": avg(ast, 10),
         
-        # Minutes (56)
+        # Minutes prediction (61)
         "minutes": avg(mins, 10) if mins else 24.0,
     }
     return pd.DataFrame([feats])

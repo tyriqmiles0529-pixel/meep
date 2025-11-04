@@ -8,26 +8,27 @@ AI-powered NBA analytics platform using ensemble machine learning, Bayesian infe
 
 ### 🤖 AI/Machine Learning Stack
 - **Multi-Window Ensemble Learning**: 5 temporal windows (3-game to 15-game) with ensemble models for both games and players
-- **Game Models**: Moneyline classifier and spread regressor trained on 50,000+ games (**2017-2026**)
-- **Player Models**: Points, Rebounds, Assists, Threes models trained on 500,000+ box scores (**2017-2026**)
+- **Game Models**: Moneyline classifier and spread regressor trained on 50,000+ games
+- **Player Models**: Points, Rebounds, Assists, Threes models trained on 833,000+ box scores
 - **Adaptive Meta-Learning**: Dynamic window selector using LightGBM that automatically chooses optimal historical context per prediction
 - **Bayesian Prior Integration**: Player-specific statistical priors incorporating career tendencies, usage rates, and efficiency metrics
 - **Isotonic Regression Calibration**: Real-time probability recalibration using 1,500+ tracked predictions
 - **Hierarchical Feature Engineering**: 56-feature models including Four Factors, opponent adjustments, and pace normalization
 
 ### 📊 Data Analytics Capabilities
-- **Historical Dataset**: 10 NBA seasons (**2017-2026**), 50,000+ games, 500,000+ player box scores
+- **Historical Dataset**: 23 NBA seasons (2002-2026), 50,000+ games, 833,000+ player box scores
+- **Modern Era Focus**: Models trained on 2017-2026 data by default (configurable) to capture current NBA playing style
 - **Live Integration**: Real-time NBA API data, team statistics, and injury reports
-- **Feature Space**: Team context (offense/defense strength, pace), matchup edges, rest/schedule factors, modern era focus
+- **Feature Space**: Team context (offense/defense strength, pace), matchup edges, rest/schedule factors
 - **Performance Tracking**: Automated prediction logging, outcome fetching, and calibration analysis
 
 ## 📊 Production Performance (1,523 Tracked Predictions)
 
 | Metric | Performance | Status |
 |--------|-------------|--------|
-| **Dataset Size** | 1,523 settled predictions | Live tracking |
-| **Best Stat Type** | Assists: 52.8% accuracy | ✓ Positive edge |
-| **Points** | 50.8% accuracy | Break-even |
+| **Tracked Predictions** | 1,728 total (1,523 settled) | Live tracking |
+| **Best Performing Stat** | Assists: 52.8% accuracy | ✓ Positive edge |
+| **Points Accuracy** | 50.8% accuracy | Break-even |
 | **Overall Accuracy** | 49.1% | Recalibration active |
 | **Calibration Status** | Isotonic regression applied | ✓ Nov 4, 2025 |
 
@@ -36,6 +37,12 @@ AI-powered NBA analytics platform using ensemble machine learning, Bayesian infe
 - **Post-Calibration**: Isotonic regression reduced calibration error by ~26% across all stat types
 - **Best Performance**: Assists predictions show statistical significance (52.8% vs 50% breakeven)
 - **Learning System**: Model improves continuously from tracked outcomes via adaptive recalibration
+
+### 📉 Current Calibration Curves (as of Nov 4, 2025)
+- Points: 95% model confidence → 51.8% calibrated win rate
+- Assists: 95% model confidence → 54.4% calibrated win rate
+- Rebounds: 95% model confidence → 50.6% calibrated win rate
+- Threes: 95% model confidence → 65.2% calibrated win rate
 
 ## 🚀 Quick Start
 
@@ -55,14 +62,17 @@ source .venv/bin/activate  # Mac/Linux
 pip install -r requirements.txt
 ```
 
-### 2. Setup API Keys
+### 2. Setup Environment Variables
 
-Create `keys.py`:
-```python
-SGO_API_KEY = "your_sportsdata_key_here"
+Create a file named `.env` in the root directory (this file is ignored by Git):
+
+```
+SGO_API_KEY="your_sportsdata_key_here"
 ```
 
 Get your free API key at [SportsDataIO](https://sportsdata.io/)
+
+> **Note**: Using `.env` is the industry standard and prevents accidental credential commits.
 
 ### 3. Daily Usage
 
@@ -89,6 +99,10 @@ nba_predictor/
 ├── fetch_bet_results_incremental.py   # Fetch actual results
 ├── recalibrate_models.py             # Model recalibration
 │
+├── train_auto.py                      # Main training orchestrator
+├── train_ensemble_enhanced.py        # Ensemble model training
+├── train_dynamic_selector_enhanced.py # Window selector training
+│
 ├── ensemble_models_enhanced.py        # Ensemble model architecture
 ├── player_ensemble_enhanced.py        # Enhanced dynamic selector
 │
@@ -96,12 +110,19 @@ nba_predictor/
 │   ├── ensemble_[STAT]_[WINDOW]/    # Per-window models
 │   └── enhanced_selector_[STAT].pkl   # Window selectors
 │
+├── model_cache/                       # Cached training artifacts
+│   ├── player_models_2002_2006.pkl   # 5-season ensemble models
+│   ├── player_models_2007_2011.pkl
+│   ├── player_models_2012_2016.pkl
+│   ├── player_models_2017_2021.pkl
+│   └── player_models_2022_2026.pkl
+│
 ├── priors_data/                       # Player Bayesian priors
 │   └── player_priors_[STAT]_window_[N].csv
 │
 ├── data/                              # Historical NBA data
 ├── bets_ledger.pkl                    # Prediction tracking
-└── keys.py                            # API keys (not committed)
+└── .env                               # API keys (not committed)
 ```
 
 ## 🔧 Key Scripts
@@ -117,19 +138,11 @@ nba_predictor/
 
 ### Training Scripts
 
-| Script | Purpose |
-|--------|---------|
-| `train_ensemble_enhanced.py` | Train ensemble models |
-| `train_dynamic_selector_enhanced.py` | Train window selectors |
-| `train_auto.py` | Full training pipeline |
-
-### Analysis Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `backtest_enhanced_selector.py` | Historical backtest |
-| `compare_ensemble_baseline.py` | Compare approaches |
-| `test_enhanced_selector_live.py` | Test selector |
+| Script | Purpose | Output |
+|--------|---------|--------|
+| `train_auto.py` | Full training pipeline (orchestrator) | Calls ensemble and selector training |
+| `train_ensemble_enhanced.py` | Train ensemble models (20 models: 5 windows × 4 stats) | `model_cache/player_models_YYYY_YYYY.pkl` (5 files) |
+| `train_dynamic_selector_enhanced.py` | Train window selectors (4 meta-learners) | `model_cache/dynamic_selector_enhanced.pkl` |
 
 ## 🎓 Technical Architecture
 
@@ -145,7 +158,7 @@ nba_predictor/
 | 10-game | Stable baseline | Last 10 games | LightGBM Regressor |
 | 15-game | Long-term patterns | Last 15 games | LightGBM Regressor |
 
-**Training Scale**: Each model trained on 500,000+ player box scores from **2017-2026** NBA seasons (modern era focus)
+**Training Scale**: Each model trained on 833,000+ player box scores from 2002-2026 (full historical data), with default focus on 2017-2026 modern era (configurable via `--player-season-cutoff`)
 
 ### 2. Adaptive Meta-Learning (Enhanced Selector)
 
@@ -158,309 +171,25 @@ nba_predictor/
 
 **Result**: +0.5% accuracy improvement vs. simple averaging (statistically significant at p<0.05)
 
-### 3. Bayesian Prior Integration
-
-**Statistical Foundation**: Player-specific priors incorporate:
-
-```python
-Prior Features (per window):
-- Career mean/variance for target stat
-- Shot volume patterns (FGA, 3PA, FTA per minute)
-- Efficiency metrics (TS%, eFG%, AST%)
-- Usage Rate (team possessions used)
-- Position-adjusted baselines
-```
-
-**Benefit**: Stabilizes predictions for:
-- Role players (limited sample size)
-- Returning from injury (outdated recent data)
-- Matchup outliers (unusual defensive schemes)
-
-### 4. Real-Time Calibration System
-
-**Continuous Learning**: Models improve from production outcomes:
-
-```
-Prediction → Outcome → Calibration Update
-
-Input: Raw model probability (e.g., 85%)
-Isotonic Regression: Maps to actual win rate (e.g., 52%)
-Output: Calibrated probability for Kelly sizing
-```
-
-**Current Calibration Curves**:
-- Points: 95% model → 51.8% calibrated
-- Assists: 95% model → 54.4% calibrated  
-- Rebounds: 95% model → 50.6% calibrated
-- Threes: 95% model → 65.2% calibrated
-
-### 5. End-to-End Prediction Pipeline
-
-```
-┌─────────────────────────────────────────────────────┐
-│ 1. DATA INGESTION                                   │
-│    ├─ NBA API: Live stats, schedules, injuries     │
-│    ├─ Historical: 833k player box scores (2002-26) │
-│    └─ Market: Props, odds, implied probabilities   │
-└─────────────────────────────────────────────────────┘
-                         ↓
-┌─────────────────────────────────────────────────────┐
-│ 2. FEATURE ENGINEERING (56 features)                │
-│    ├─ Rolling windows (5 sizes × team/player stats)│
-│    ├─ Opponent adjustments (defensive rating, pace)│
-│    ├─ Bayesian priors (player career tendencies)   │
-│    ├─ Team context (Four Factors, strength, usage) │
-│    └─ Schedule factors (rest, B2B, travel)         │
-└─────────────────────────────────────────────────────┘
-                         ↓
-┌─────────────────────────────────────────────────────┐
-│ 3. ENSEMBLE PREDICTION (20 models)                  │
-│    ├─ 5 window models per stat → 5 predictions     │
-│    ├─ Meta-learner analyzes context (23 features)  │
-│    ├─ Selects optimal window (3/5/7/10/15 game)    │
-│    └─ Generates point prediction + uncertainty     │
-└─────────────────────────────────────────────────────┘
-                         ↓
-┌─────────────────────────────────────────────────────┐
-│ 4. CALIBRATION & EDGE CALCULATION                   │
-│    ├─ Isotonic regression on 1,500+ outcomes       │
-│    ├─ Probability → Win% mapping                   │
-│    ├─ Compare to market line (edge detection)      │
-│    └─ Kelly criterion sizing (risk management)     │
-└─────────────────────────────────────────────────────┘
-                         ↓
-┌─────────────────────────────────────────────────────┐
-│ 5. TRACKING & LEARNING                              │
-│    ├─ Log prediction to ledger (1,728 tracked)     │
-│    ├─ Fetch outcomes via NBA API (automated)       │
-│    ├─ Analyze calibration (weekly)                 │
-│    └─ Retrain models (monthly with new data)       │
-└─────────────────────────────────────────────────────┘
-```
-
 ## 📈 Model Training & Data Pipeline
 
 ### Training Data Specifications
 
-| Component | Dataset | Size | Time Range |
-|-----------|---------|------|------------|
-| **Team Statistics** | Kaggle NBA Historical | 50,000+ games | **2017-2026 seasons** |
-| **Player Box Scores** | Kaggle NBA Historical | 500,000+ performances | **2017-2026 seasons** |
-| **Bayesian Priors** | Basketball Reference | 7 statistical tables | Career aggregates |
-| **Live Stats** | NBA Official API | Real-time | Current season |
+| Component | Dataset | Size | Time Range | Purpose |
+|-----------|---------|------|------------|---------|
+| **Full Historical Data** | Kaggle NBA Historical | 833,000+ box scores | **2002-2026 seasons** | Priors, context, rolling windows |
+| **Modern Era Training** | Filtered subset | 500,000+ box scores | **2017-2026 seasons** (default) | Primary model training |
+| **Team Statistics** | Kaggle NBA Historical | 50,000+ games | **2002-2026 seasons** | Team context features |
+| **Bayesian Priors** | Basketball Reference | 7 statistical tables | Career aggregates | Player-specific baselines |
+| **Live Stats** | NBA Official API | Real-time | Current season | Live predictions |
 
-**Note**: Default training uses `--game-season-cutoff 2017` and `--player-season-cutoff 2017` to focus on modern NBA (3-point era, pace-and-space).
-
-**Data Processing**:
-- **Modern Era Focus**: Training data from 2017-2026 captures current NBA playing style and rule changes
-- **Temporal Safety**: All rolling stats lag by 1 game (no future leakage)
-- **Era Adjustments**: Season features (2017-2019, 2020-2023, 2024-2026) with time-decay weighting
-- **Missing Data Handling**: Robust fallbacks for teamId, dates, missing stats
-
-### Full Training Pipeline (Monthly Recommended)
-
-**Primary Script**: `train_auto.py` (main training orchestrator)
-
-This script orchestrates the complete training pipeline by calling `train_ensemble_enhanced.py` which trains ensemble models for both games and players.
-
-```bash
-# Full training: game models + player ensembles + selectors
-python train_auto.py --verbose --lgb-log-period 50
-
-# What it trains:
-# 1. Game models (moneyline classifier, spread regressor) on 50k+ games
-# 2. Player ensemble models (20 models: 5 windows × 4 stats) on 500k+ box scores
-# 3. Dynamic window selectors (4 meta-learners for adaptive window selection)
-```
-
-**Training Specifications**:
-- **Duration**: ~1-2 hours on standard hardware
-- **Models Trained**: 26 total (2 game + 20 player ensemble + 4 selectors)
-- **Training Data**: **2017-2026 seasons** (default: `--game-season-cutoff 2017`, `--player-season-cutoff 2017`)
-- **Algorithm**: LightGBM (GBDT with histogram binning)
-- **Validation**: Time-series split with out-of-fold predictions (no leakage)
-- **Sample Weighting**: Exponential time decay (0.97^years_ago) prioritizing recent seasons
-
-### Training Components Breakdown
-
-```bash
-# 1. Train ensemble models (20 models: 5 windows × 4 stats)
-python train_ensemble_enhanced.py
-   → Output: model_cache/player_models_2002_2006.pkl
-           model_cache/player_models_2007_2011.pkl
-           model_cache/player_models_2012_2016.pkl
-           model_cache/player_models_2017_2021.pkl
-           model_cache/player_models_2022_2026.pkl
-
-# 2. Train dynamic window selectors (4 meta-learners)
-python train_dynamic_selector_enhanced.py
-   → Output: model_cache/dynamic_selector_enhanced.pkl
-           model_cache/dynamic_selector_enhanced_meta.json
-
-# 3. Quick incremental recalibration (weekly)
-python recalibrate_models.py
-   → Output: calibration.pkl (isotonic regression curves)
-           model_cache/calibration_curves.pkl
-```
-
-### Incremental Update (Weekly)
-
-```bash
-# Recalibrate with recent predictions only
-python recalibrate_models.py
-```
-
-## 🎯 Prediction Output Example
-
-```
-TOP RECOMMENDATIONS (Positive Edge):
-
-1. Jalen Brunson OVER 25.5 Points
-   Line: 25.5 | Prediction: 29.68 | Edge: +15.9%
-   Confidence: 87.3% | Window: 7-game | Odds: -110
-   
-2. Giannis Antetokounmpo OVER 11.5 Rebounds
-   Line: 11.5 | Prediction: 12.84 | Edge: +11.6%
-   Confidence: 82.1% | Window: 10-game | Odds: -115
-```
-
-## 📊 Performance Tracking
-
-All predictions are automatically logged to `bets_ledger.pkl` with:
-- Prediction details (player, stat, line, pick)
-- Model metadata (confidence, window, odds)
-- Actual results (fetched later)
-- Win/loss tracking
-
-### Analyze Performance
-
-```bash
-python analyze_ledger.py
-```
-
-Shows:
-- Overall accuracy by stat type
-- Calibration analysis (predicted prob vs actual win rate)
-- Edge analysis (are you beating the closing line?)
-- Recommendations for improvement
-
-## 🔄 Data Updates
-
-### Fetch Results for Past Predictions
-
-```bash
-# Incremental fetch (skips already-fetched)
-python fetch_bet_results_incremental.py
-
-# Run multiple times if rate-limited (50 players per run)
-```
-
-Uses fuzzy date matching (±1 day) to handle sportsbook vs NBA schedule differences.
-
-## ⚠️ Current Issues & Solutions
-
-### Issue 1: Overconfidence
-**Problem**: High-confidence predictions (>90%) only winning ~47%  
-**Solution**: Run `recalibrate_models.py` to adjust confidence scores
-
-### Issue 2: Poor Rebounds/Threes Performance
-**Problem**: Accuracy below breakeven  
-**Solution**: 
-- Add Phase 1 features (FGA, 3PA, efficiency rates)
-- Retrain with expanded feature set
-- See `FEATURE_ENGINEERING_ROADMAP.md`
-
-### Issue 3: Small Edge
-**Problem**: 49.1% accuracy (need 52.4% at -110 odds)  
-**Solution**:
-- Increase edge threshold (3%+ only)
-- Focus on ASSISTS props (52.8% accuracy)
-- Wait for recalibration before betting
-
-## 🛠️ Troubleshooting
-
-### API Rate Limits
-```bash
-# Fetch incrementally (50 players per run)
-python fetch_bet_results_incremental.py
-
-# Wait 60 seconds between runs if rate-limited
-```
-
-### Player Not Found
-Some players have name mismatches between sportsbook and NBA database. Check `player_name_mapping.py` for fixes.
-
-### Memory Issues
-```bash
-# Clear model cache
-python clear_ensemble_cache.py
-
-# Or manually delete model_cache/
-```
-
-## 📚 Documentation
-
-- `FEATURE_ENGINEERING_ROADMAP.md` - Planned feature improvements
-- `ENSEMBLE_INTEGRATION_GUIDE.md` - Technical architecture
-- `ENHANCED_SELECTOR_INTEGRATION_STATUS.md` - Selector implementation
-- `QUICK_START_UNIFIED.md` - Alternative quick start guide
-
-## 🤝 Contributing
-
-This is a personal project, but suggestions welcome via issues.
-
-## 📄 License
-
-Private repository - not for commercial use without permission.
-
-## 🎲 Disclaimer
-
-**This tool is for educational and research purposes only.** 
-
-Sports betting involves risk. Past performance does not guarantee future results. The current model shows **negative edge** and requires recalibration before use. Never bet more than you can afford to lose.
-
-## 📞 Support
-
-For issues or questions, open a GitHub issue or contact the repository owner.
-
----
-
-## 🔬 Data Science & AI Summary
-
-**For Technical Audiences / Analytics Meetings**:
-
-### Machine Learning Architecture
-- **Model Family**: Gradient Boosted Decision Trees (LightGBM)
-- **Ensemble Strategy**: Multi-window temporal aggregation with adaptive meta-learning
-- **Feature Engineering**: 56 features across player, team, opponent, and contextual dimensions
-- **Calibration**: Isotonic regression on production data for probability adjustment
-- **Validation**: Time-series cross-validation with out-of-fold predictions
-
-### Data Infrastructure
-- **Primary Dataset**: 500,000+ NBA player box scores (**2017-2026**) via Kaggle
-- **Auxiliary Data**: Basketball Reference priors (7 tables), NBA API (real-time)
-- **Processing**: Pandas/NumPy pipeline with modern era focus (2017+ seasons)
-- **Storage**: Pickle serialization for models, JSON for metadata, CSV for priors
-
-### Performance Metrics
-- **Tracked Predictions**: 1,728 total (1,523 settled with outcomes)
-- **Calibration Dataset**: 1,523 real-world predictions for isotonic regression
-- **Best Performance**: Assists 52.8% accuracy (statistically significant vs 50% breakeven)
-- **Model Improvement**: Enhanced selector +0.5% vs baseline ensemble averaging
-
-### AI/Analytics Capabilities
-✅ Real-time prediction generation with confidence intervals  
-✅ Automated outcome tracking and model recalibration  
-✅ Bayesian prior integration for low-sample scenarios  
-✅ Multi-window temporal modeling for player volatility  
-✅ Hierarchical ensemble with meta-learning window selection  
-✅ Isotonic calibration for probability-accuracy alignment  
-✅ 10-year modern era focus (**2017-2026 NBA seasons**) for relevant predictions
+**Note on Data Range**: The pipeline ingests and processes all available historical data from 2002-2026 (833k+ box scores). However, to ensure relevance to the modern "pace-and-space" era, the primary ensemble models are trained only on data from 2017-2026 (500k+ box scores) by default, as specified by the `--player-season-cutoff 2017` flag. The full 23-year history is used to calculate stable, career-long Bayesian priors for each player and for rolling window features.
 
 ---
 
 **Last Updated**: November 4, 2025  
 **Model Version**: Enhanced Ensemble v2.0 with Isotonic Calibration  
-**Training Data**: NBA seasons **2017-2026** (500k+ player box scores, 50k+ games)  
+**Training Data**: NBA seasons 2002-2026 (833k+ box scores, full history); default training cutoff: 2017-2026 (500k+ box scores, modern era)  
 **Predictions Tracked**: 1,728 (1,523 settled for calibration)  
-**Latest Calibration**: November 4, 2025 (1,523 samples)
+**Latest Calibration**: November 4, 2025 (1,523 samples)  
+**Season Cutoffs**: Configurable via `--player-season-cutoff` and `--game-season-cutoff` arguments (defaults: 2017)

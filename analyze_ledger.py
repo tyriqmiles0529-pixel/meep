@@ -14,6 +14,13 @@ import numpy as np
 from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
+import sys
+import io
+
+# Force UTF-8 encoding on Windows
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 print("=" * 70)
 print("BETS LEDGER ANALYSIS - LEARNING FROM PAST PREDICTIONS")
@@ -171,9 +178,13 @@ print(f"\n📊 Unsettled predictions: {len(unsettled):,}")
 if len(unsettled) > 0:
     # Convert game_date to datetime (make timezone-naive to avoid comparison errors)
     unsettled['game_datetime'] = pd.to_datetime(unsettled['game_date'])
-    if unsettled['game_datetime'].dt.tz is not None:
+    
+    # Ensure both datetimes are timezone-naive for comparison
+    if hasattr(unsettled['game_datetime'].dt, 'tz') and unsettled['game_datetime'].dt.tz is not None:
         unsettled['game_datetime'] = unsettled['game_datetime'].dt.tz_localize(None)
-    now_local = datetime.now()
+    
+    # Use timezone-naive datetime for comparison
+    now_local = pd.Timestamp.now().tz_localize(None)
     unsettled['days_ago'] = (now_local - unsettled['game_datetime']).dt.days
     
     # Group by age
