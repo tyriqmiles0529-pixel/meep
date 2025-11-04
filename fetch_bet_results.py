@@ -87,8 +87,10 @@ for player_name in ready_to_settle['player'].unique():
     
     print(f"\nFetching: {player_name}...", end=" ")
     
-    # Find NBA player ID
-    player_id = player_lookup.get(player_name.lower())
+    # Find NBA player ID (try multiple strategies)
+    from player_name_mapping import find_player_id
+    player_id = find_player_id(player_name, all_players)
+    
     if not player_id:
         print(f"NOT FOUND in NBA database")
         continue

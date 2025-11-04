@@ -1,0 +1,584 @@
+========================================================================
+RIQ MEEPING MACHINE 🚀 — Unified Analyzer (TheRundown + ML Ensemble)
+========================================================================
+Season: 2025-2026 | Stats: prior=2024-2025 | Bankroll: $100.00
+Odds Range: -500 to 400 | Ranking: ELG + dynamic Kelly
+FAST_MODE: OFF | Time Budget: Disabled
+========================================================================
+
+📅 Fetching games for 2 days:
+   - 2025-11-02
+   - 2025-11-03
+
+   Found 17 total games
+
+🎲 Fetching odds from multiple sources...
+   • The Odds API (all markets + player props)...
+   ✓ Fetched 283 unique props from The Odds API
+   ✓ 2025-11-02T14:30 — Oklahoma City Thunder vs New Orleans Pelicans: 0 props
+   ✓ 2025-11-02T17:00 — Toronto Raptors vs Memphis Grizzlies: 0 props
+   ✓ 2025-11-02T17:00 — Brooklyn Nets vs Philadelphia 76ers: 0 props
+   ✓ 2025-11-02T17:00 — Cleveland Cavaliers vs Atlanta Hawks: 0 props
+   ✓ 2025-11-02T17:00 — Charlotte Hornets vs Utah Jazz: 0 props
+   ✓ 2025-11-02T18:00 — New York Knicks vs Chicago Bulls: 0 props
+   ✓ 2025-11-02T19:00 — Phoenix Suns vs San Antonio Spurs: 0 props
+   ✓ 2025-11-02T20:30 — Los Angeles Lakers vs Miami Heat: 27 props
+   ✓ 2025-11-03T18:00 — Brooklyn Nets vs Minnesota Timberwolves: 48 props
+   ✓ 2025-11-03T18:00 — Indiana Pacers vs Milwaukee Bucks: 44 props
+   ✓ 2025-11-03T18:30 — Boston Celtics vs Utah Jazz: 28 props
+   ✓ 2025-11-03T18:30 — New York Knicks vs Washington Wizards: 35 props
+   ✓ 2025-11-03T19:00 — Houston Rockets vs Dallas Mavericks: 47 props
+   ✓ 2025-11-03T19:00 — Memphis Grizzlies vs Detroit Pistons: 36 props
+   ✓ 2025-11-03T20:00 — Denver Nuggets vs Sacramento Kings: 6 props
+   ✓ 2025-11-03T21:00 — Portland Trail Blazers vs Los Angeles Lakers: 6 props
+   ✓ 2025-11-03T21:30 — Los Angeles Clippers vs Miami Heat: 6 props
+
+   Total props: 283 | Player: 223 | Game: 40
+
+🔍 Riq Machine Working...
+   Meeping...... 25/263 analyzed
+   Analyzing props... 50/263 analyzed
+   Crunching numbers... 75/263 analyzed
+   Meeping...... 100/263 analyzed
+   Finding value... 125/263 analyzed
+   Riq Machine Working... 150/263 analyzed
+   Riq Machine Working... 175/263 analyzed
+   Meeping...... 200/263 analyzed
+   Finding value... 225/263 analyzed
+   Finding value... 250/263 analyzed
+
+   ✅ 164 props meet ELG gates
+
+   🎯 Built 10 optimal parlays (2-3 legs)
+
+========================================================================
+SUMMARY: Top Props by Category
+========================================================================
+Category        Count      Best ELG        Best Win%      
+------------------------------------------------------------------------
+Points          5          0.344777        98.9           %
+Assists         5          0.191229        92.7           %
+Rebounds        5          0.288613        97.2           %
+3PM             5          0.145121        92.3           %
+Moneyline       5          0.114147        57.1           %
+Spread          5          0.033401        67.2           %
+
+========================================================================
+TOP 5 PER CATEGORY (by ELG)
+========================================================================
+
+========================================================================
+POINTS (5 props)
+========================================================================
+
+🟢 #1 — Johnny Furphy
+   Game:     Milwaukee Bucks at Indiana Pacers
+   Date:     2025-11-04T00:00
+   Bookmaker: FanDuel
+   Line:     7.5
+   Projection: 2.25 (Δ: -5.25, σ: 1.26)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -114
+   Kelly:    48.77% → Stake: $10.00
+   Profit:   $8.77
+   EV:       +85.64% | Win Prob: 98.9%
+   ELG Score: 0.344777
+
+🟢 #2 — Reed Sheppard
+   Game:     Dallas Mavericks at Houston Rockets
+   Date:     2025-11-04T01:10
+   Bookmaker: FanDuel
+   Line:     9.5
+   Projection: 13.49 (Δ: +3.99, σ: 2.17)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ +102
+   Kelly:    45.08% → Stake: $10.00
+   Profit:   $10.20
+   EV:       +93.13% | Win Prob: 95.6%
+   ELG Score: 0.335394
+
+🟢 #3 — C.J. McCollum
+   Game:     Washington Wizards at New York Knicks
+   Date:     2025-11-04T00:40
+   Bookmaker: FanDuel
+   Line:     15.5
+   Projection: 19.16 (Δ: +3.66, σ: 2.33)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ +102
+   Kelly:    42.45% → Stake: $10.00
+   Profit:   $10.20
+   EV:       +88.11% | Win Prob: 93.1%
+   ELG Score: 0.296997
+
+🟢 #4 — Daniel Gafford
+   Game:     Dallas Mavericks at Houston Rockets
+   Date:     2025-11-04T01:10
+   Bookmaker: FanDuel
+   Line:     7.5
+   Projection: 11.01 (Δ: +3.51, σ: 1.90)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ -114
+   Kelly:    44.77% → Stake: $10.00
+   Profit:   $8.77
+   EV:       +79.65% | Win Prob: 95.7%
+   ELG Score: 0.291474
+
+🟢 #5 — Cam Whitmore
+   Game:     Washington Wizards at New York Knicks
+   Date:     2025-11-04T00:40
+   Bookmaker: FanDuel
+   Line:     9.5
+   Projection: 11.89 (Δ: +2.39, σ: 1.99)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ +102
+   Kelly:    36.48% → Stake: $10.00
+   Profit:   $10.20
+   EV:       +76.70% | Win Prob: 87.5%
+   ELG Score: 0.219908
+
+========================================================================
+ASSISTS (5 props)
+========================================================================
+
+🟢 #1 — Anfernee Simons
+   Game:     Utah Jazz at Boston Celtics
+   Date:     2025-11-04T00:40
+   Bookmaker: FanDuel
+   Line:     3.5
+   Projection: 4.22 (Δ: +0.72, σ: 0.90)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ +140
+   Kelly:    29.53% → Stake: $10.00
+   Profit:   $14.00
+   EV:       +86.62% | Win Prob: 77.8%
+   ELG Score: 0.191229
+
+🟢 #2 — Amen Thompson
+   Game:     Dallas Mavericks at Houston Rockets
+   Date:     2025-11-04T01:10
+   Bookmaker: FanDuel
+   Line:     5.5
+   Projection: 4.52 (Δ: -0.98, σ: 0.98)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ +100
+   Kelly:    31.62% → Stake: $10.00
+   Profit:   $10.00
+   EV:       +66.18% | Win Prob: 83.1%
+   ELG Score: 0.164019
+
+🟢 #3 — Ryan Rollins
+   Game:     Milwaukee Bucks at Indiana Pacers
+   Date:     2025-11-04T00:00
+   Bookmaker: FanDuel
+   Line:     5.5
+   Projection: 4.10 (Δ: -1.40, σ: 0.96)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -158
+   Kelly:    37.84% → Stake: $10.00
+   Profit:   $6.33
+   EV:       +49.39% | Win Prob: 91.5%
+   ELG Score: 0.155951
+
+🟢 #4 — P.J. Washington
+   Game:     Dallas Mavericks at Houston Rockets
+   Date:     2025-11-04T01:10
+   Bookmaker: FanDuel
+   Line:     2.5
+   Projection: 3.22 (Δ: +0.72, σ: 0.90)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ +116
+   Kelly:    27.93% → Stake: $10.00
+   Profit:   $11.60
+   EV:       +68.25% | Win Prob: 77.9%
+   ELG Score: 0.146190
+
+🟢 #5 — Austin Reaves
+   Game:     Miami Heat at Los Angeles Lakers
+   Date:     2025-11-03T02:40
+   Bookmaker: FanDuel
+   Line:     10.5
+   Projection: 8.94 (Δ: -1.56, σ: 1.01)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -180
+   Kelly:    38.64% → Stake: $10.00
+   Profit:   $5.56
+   EV:       +44.21% | Win Prob: 92.7%
+   ELG Score: 0.144633
+
+========================================================================
+REBOUNDS (5 props)
+========================================================================
+
+🟢 #1 — Johnny Furphy
+   Game:     Milwaukee Bucks at Indiana Pacers
+   Date:     2025-11-04T00:00
+   Bookmaker: FanDuel
+   Line:     4.5
+   Projection: 2.30 (Δ: -2.20, σ: 1.03)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -125
+   Kelly:    46.33% → Stake: $10.00
+   Profit:   $8.00
+   EV:       +74.88% | Win Prob: 97.2%
+   ELG Score: 0.288613
+
+🟢 #2 — Andrew Wiggins
+   Game:     Miami Heat at Los Angeles Lakers
+   Date:     2025-11-03T02:40
+   Bookmaker: FanDuel
+   Line:     7.5
+   Projection: 5.95 (Δ: -1.55, σ: 1.30)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ +114
+   Kelly:    36.91% → Stake: $10.00
+   Profit:   $11.40
+   EV:       +86.65% | Win Prob: 87.2%
+   ELG Score: 0.247469
+
+🟢 #3 — Tyrese Martin
+   Game:     Minnesota Timberwolves at Brooklyn Nets
+   Date:     2025-11-04T00:10
+   Bookmaker: FanDuel
+   Line:     3.5
+   Projection: 5.02 (Δ: +1.52, σ: 1.20)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ +104
+   Kelly:    37.87% → Stake: $10.00
+   Profit:   $10.40
+   EV:       +81.03% | Win Prob: 88.7%
+   ELG Score: 0.241073
+
+🟢 #4 — Josh Minott
+   Game:     Utah Jazz at Boston Celtics
+   Date:     2025-11-04T00:40
+   Bookmaker: FanDuel
+   Line:     5.5
+   Projection: 3.66 (Δ: -1.84, σ: 1.28)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -146
+   Kelly:    38.18% → Stake: $10.00
+   Profit:   $6.85
+   EV:       +53.88% | Win Prob: 91.3%
+   ELG Score: 0.170420
+
+🟢 #5 — Rui Hachimura
+   Game:     Miami Heat at Los Angeles Lakers
+   Date:     2025-11-03T02:40
+   Bookmaker: FanDuel
+   Line:     6.5
+   Projection: 5.47 (Δ: -1.03, σ: 1.26)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ +124
+   Kelly:    29.01% → Stake: $10.00
+   Profit:   $12.40
+   EV:       +75.57% | Win Prob: 78.4%
+   ELG Score: 0.166776
+
+========================================================================
+3PM (5 props)
+========================================================================
+
+🟢 #1 — Luka Doncic
+   Game:     Miami Heat at Los Angeles Lakers
+   Date:     2025-11-03T02:40
+   Bookmaker: FanDuel
+   Line:     1.5
+   Projection: 2.02 (Δ: +0.52, σ: 0.71)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     OVER @ -118
+   Kelly:    31.96% → Stake: $10.00
+   Profit:   $8.47
+   EV:       +56.78% | Win Prob: 84.9%
+   ELG Score: 0.145121
+
+🟢 #2 — Kyshawn George
+   Game:     Washington Wizards at New York Knicks
+   Date:     2025-11-04T00:40
+   Bookmaker: FanDuel
+   Line:     2.5
+   Projection: 2.39 (Δ: -0.11, σ: 0.70)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -205
+   Kelly:    36.80% → Stake: $10.00
+   Profit:   $4.88
+   EV:       +37.26% | Win Prob: 92.3%
+   ELG Score: 0.116801
+
+🟢 #3 — Austin Reaves
+   Game:     Miami Heat at Los Angeles Lakers
+   Date:     2025-11-03T02:40
+   Bookmaker: FanDuel
+   Line:     3.5
+   Projection: 2.95 (Δ: -0.55, σ: 0.69)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -152
+   Kelly:    31.64% → Stake: $10.00
+   Profit:   $6.58
+   EV:       +43.80% | Win Prob: 86.7%
+   ELG Score: 0.113546
+
+🟢 #4 — D'Angelo Russell
+   Game:     Dallas Mavericks at Houston Rockets
+   Date:     2025-11-04T01:10
+   Bookmaker: FanDuel
+   Line:     2.5
+   Projection: 1.77 (Δ: -0.73, σ: 0.57)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -188
+   Kelly:    32.43% → Stake: $10.00
+   Profit:   $5.32
+   EV:       +36.30% | Win Prob: 89.0%
+   ELG Score: 0.098381
+
+🟢 #5 — Cole Anthony
+   Game:     Milwaukee Bucks at Indiana Pacers
+   Date:     2025-11-04T00:00
+   Bookmaker: FanDuel
+   Line:     1.5
+   Projection: 1.19 (Δ: -0.31, σ: 0.56)
+   Pace:     1.000x | Defense: 1.000x
+   Pick:     UNDER @ -144
+   Kelly:    26.71% → Stake: $10.00
+   Profit:   $6.94
+   EV:       +39.76% | Win Prob: 82.5%
+   ELG Score: 0.085913
+
+========================================================================
+MONEYLINE (5 props)
+========================================================================
+
+🟠 #1 — Utah Jazz
+   Game:     Utah Jazz at Boston Celtics
+   Date:     2025-11-04T00:40
+   Bookmaker: FanDuel
+   Pick:     Utah Jazz @ +390
+   Kelly:    13.87% → Stake: $10.00
+   Profit:   $39.00
+   EV:       +121.94% | Win Prob: 45.3%
+   ELG Score: 0.114147
+
+🟠 #2 — Miami Heat
+   Game:     Miami Heat at Los Angeles Lakers
+   Date:     2025-11-03T02:40
+   Bookmaker: FanDuel
+   Pick:     Miami Heat @ +300
+   Kelly:    13.83% → Stake: $10.00
+   Profit:   $30.00
+   EV:       +94.10% | Win Prob: 48.5%
+   ELG Score: 0.091801
+
+🟠 #3 — Miami Heat
+   Game:     Miami Heat at Los Angeles Clippers
+   Date:     2025-11-04T03:40
+   Bookmaker: FanDuel
+   Pick:     Miami Heat @ +240
+   Kelly:    13.37% → Stake: $10.00
+   Profit:   $24.00
+   EV:       +72.93% | Win Prob: 50.9%
+   ELG Score: 0.071016
+
+🟠 #4 — Indiana Pacers
+   Game:     Milwaukee Bucks at Indiana Pacers
+   Date:     2025-11-04T00:00
+   Bookmaker: FanDuel
+   Pick:     Indiana Pacers @ +200
+   Kelly:    12.85% → Stake: $10.00
+   Profit:   $20.00
+   EV:       +58.79% | Win Prob: 52.9%
+   ELG Score: 0.056312
+
+🟡 #5 — Memphis Grizzlies
+   Game:     Detroit Pistons at Memphis Grizzlies
+   Date:     2025-11-04T01:10
+   Bookmaker: FanDuel
+   Pick:     Memphis Grizzlies @ +148
+   Kelly:    11.99% → Stake: $10.00
+   Profit:   $14.80
+   EV:       +41.68% | Win Prob: 57.1%
+   ELG Score: 0.038560
+
+========================================================================
+SPREAD (5 props)
+========================================================================
+
+🟢 #1 — Denver Nuggets -12.5
+   Game:     Sacramento Kings at Denver Nuggets
+   Date:     2025-11-04T02:00
+   Bookmaker: FanDuel
+   Pick:     Denver Nuggets -12.5 @ -106
+   Kelly:    13.75% → Stake: $10.00
+   Profit:   $9.43
+   EV:       +30.57% | Win Prob: 67.2%
+   ELG Score: 0.033401
+
+🟢 #2 — Los Angeles Clippers -8.0
+   Game:     Miami Heat at Los Angeles Clippers
+   Date:     2025-11-04T03:40
+   Bookmaker: FanDuel
+   Pick:     Los Angeles Clippers -8.0 @ -110
+   Kelly:    11.91% → Stake: $10.00
+   Profit:   $9.09
+   EV:       +26.31% | Win Prob: 66.2%
+   ELG Score: 0.025114
+
+🟢 #3 — Milwaukee Bucks -6.5
+   Game:     Milwaukee Bucks at Indiana Pacers
+   Date:     2025-11-04T00:00
+   Bookmaker: FanDuel
+   Pick:     Milwaukee Bucks -6.5 @ -110
+   Kelly:    10.68% → Stake: $10.00
+   Profit:   $9.09
+   EV:       +24.12% | Win Prob: 65.0%
+   ELG Score: 0.020725
+
+🟡 #4 — Boston Celtics -10.5
+   Game:     Utah Jazz at Boston Celtics
+   Date:     2025-11-04T00:40
+   Bookmaker: FanDuel
+   Pick:     Boston Celtics -10.5 @ -110
+   Kelly:    9.95% → Stake: $9.95
+   Profit:   $9.04
+   EV:       +22.88% | Win Prob: 64.4%
+   ELG Score: 0.018391
+
+🟡 #5 — Houston Rockets -12.5
+   Game:     Dallas Mavericks at Houston Rockets
+   Date:     2025-11-04T01:10
+   Bookmaker: FanDuel
+   Pick:     Houston Rockets -12.5 @ -110
+   Kelly:    9.61% → Stake: $9.61
+   Profit:   $8.73
+   EV:       +22.27% | Win Prob: 64.0%
+   ELG Score: 0.017315
+
+========================================================================
+🎯 TOP PARLAYS (10 combinations)
+========================================================================
+
+🎲 Parlay #1 — 3 Legs
+   Combined Odds: +666 (Decimal: 7.66)
+   Win Probability: 88.0%
+   Stake: $5.63 (Kelly: 5.63%)
+   Potential Profit: $37.49
+   Expected Value: +574.39%
+
+   Legs:
+     1. Johnny Furphy - POINTS UNDER 7.5 @ -114 (98.9%)
+     2. C.J. McCollum - POINTS OVER 15.5 @ +102 (93.1%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #2 — 3 Legs
+   Combined Odds: +612 (Decimal: 7.12)
+   Win Probability: 90.5%
+   Stake: $6.25 (Kelly: 6.25%)
+   Potential Profit: $38.22
+   Expected Value: +544.08%
+
+   Legs:
+     1. Johnny Furphy - POINTS UNDER 7.5 @ -114 (98.9%)
+     2. Daniel Gafford - POINTS OVER 7.5 @ -114 (95.7%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #3 — 3 Legs
+   Combined Odds: +666 (Decimal: 7.66)
+   Win Probability: 85.2%
+   Stake: $5.42 (Kelly: 5.42%)
+   Potential Profit: $36.07
+   Expected Value: +552.63%
+
+   Legs:
+     1. C.J. McCollum - POINTS OVER 15.5 @ +102 (93.1%)
+     2. Daniel Gafford - POINTS OVER 7.5 @ -114 (95.7%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #4 — 3 Legs
+   Combined Odds: +711 (Decimal: 8.11)
+   Win Probability: 82.5%
+   Stake: $4.93 (Kelly: 4.93%)
+   Potential Profit: $35.07
+   Expected Value: +569.18%
+
+   Legs:
+     1. Andrew Wiggins - REBOUNDS UNDER 7.5 @ +114 (87.2%)
+     2. Johnny Furphy - POINTS UNDER 7.5 @ -114 (98.9%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #5 — 3 Legs
+   Combined Odds: +612 (Decimal: 7.12)
+   Win Probability: 88.1%
+   Stake: $6.05 (Kelly: 6.05%)
+   Potential Profit: $37.04
+   Expected Value: +527.30%
+
+   Legs:
+     1. Johnny Furphy - POINTS UNDER 7.5 @ -114 (98.9%)
+     2. C.J. McCollum - POINTS OVER 15.5 @ +102 (93.1%)
+     3. Daniel Gafford - POINTS OVER 7.5 @ -114 (95.7%)
+
+🎲 Parlay #6 — 3 Legs
+   Combined Odds: +634 (Decimal: 7.34)
+   Win Probability: 86.5%
+   Stake: $5.74 (Kelly: 5.74%)
+   Potential Profit: $36.44
+   Expected Value: +535.34%
+
+   Legs:
+     1. Johnny Furphy - REBOUNDS UNDER 4.5 @ -125 (97.2%)
+     2. C.J. McCollum - POINTS OVER 15.5 @ +102 (93.1%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #7 — 3 Legs
+   Combined Odds: +674 (Decimal: 7.74)
+   Win Probability: 83.9%
+   Stake: $5.27 (Kelly: 5.27%)
+   Potential Profit: $35.49
+   Expected Value: +549.03%
+
+   Legs:
+     1. Johnny Furphy - POINTS UNDER 7.5 @ -114 (98.9%)
+     2. Tyrese Martin - REBOUNDS OVER 3.5 @ +104 (88.7%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #8 — 3 Legs
+   Combined Odds: +583 (Decimal: 6.83)
+   Win Probability: 88.9%
+   Stake: $6.37 (Kelly: 6.37%)
+   Potential Profit: $37.12
+   Expected Value: +506.79%
+
+   Legs:
+     1. Johnny Furphy - REBOUNDS UNDER 4.5 @ -125 (97.2%)
+     2. Daniel Gafford - POINTS OVER 7.5 @ -114 (95.7%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #9 — 3 Legs
+   Combined Odds: +773 (Decimal: 8.73)
+   Win Probability: 77.7%
+   Stake: $4.28 (Kelly: 4.28%)
+   Potential Profit: $33.10
+   Expected Value: +578.08%
+
+   Legs:
+     1. Andrew Wiggins - REBOUNDS UNDER 7.5 @ +114 (87.2%)
+     2. C.J. McCollum - POINTS OVER 15.5 @ +102 (93.1%)
+     3. Reed Sheppard - POINTS OVER 9.5 @ +102 (95.6%)
+
+🎲 Parlay #10 — 3 Legs
+   Combined Odds: +711 (Decimal: 8.11)
+   Win Probability: 80.3%
+   Stake: $4.78 (Kelly: 4.78%)
+   Potential Profit: $34.00
+   Expected Value: +551.76%
+
+   Legs:
+     1. Andrew Wiggins - REBOUNDS UNDER 7.5 @ +114 (87.2%)
+     2. Johnny Furphy - POINTS UNDER 7.5 @ -114 (98.9%)
+     3. C.J. McCollum - POINTS OVER 15.5 @ +102 (93.1%)
+
+========================================================================
+✅ Results saved to: prop_analysis_20251102_224801.json
+   Total Props Analyzed: 263
+   Props Passed ELG: 164
+   Parlays Generated: 10
+========================================================================
+🎉 Meep complete!
