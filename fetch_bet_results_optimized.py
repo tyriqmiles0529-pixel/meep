@@ -82,9 +82,8 @@ games_processed = 0
 
 # Process each unique game
 for (game_name, game_date), count in unique_games.items():
-    if api_calls >= 100:  # Higher limit since we're doing fewer calls
-        print(f"\nAPI limit reached ({api_calls} calls). Run again for more.")
-        break
+    # No limit - fetch ALL predictions!
+    # (NBA API allows 600 requests/min, we're doing ~2 per game with 0.6s delay)
     
     print(f"\nGame: {game_name} ({game_date.split('T')[0]})...", end=" ")
     
