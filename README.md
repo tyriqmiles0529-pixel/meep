@@ -8,17 +8,17 @@ AI-powered NBA analytics platform using ensemble machine learning, Bayesian infe
 
 ### 🤖 AI/Machine Learning Stack
 - **Multi-Window Ensemble Learning**: 5 temporal windows (3-game to 15-game) with ensemble models for both games and players
-- **Game Models**: Moneyline classifier and spread regressor trained on 65,000+ games (2002-2026)
-- **Player Models**: Points, Rebounds, Assists, Threes models trained on 833,000+ box scores (2002-2026)
+- **Game Models**: Moneyline classifier and spread regressor trained on 50,000+ games (**2017-2026**)
+- **Player Models**: Points, Rebounds, Assists, Threes models trained on 500,000+ box scores (**2017-2026**)
 - **Adaptive Meta-Learning**: Dynamic window selector using LightGBM that automatically chooses optimal historical context per prediction
 - **Bayesian Prior Integration**: Player-specific statistical priors incorporating career tendencies, usage rates, and efficiency metrics
 - **Isotonic Regression Calibration**: Real-time probability recalibration using 1,500+ tracked predictions
 - **Hierarchical Feature Engineering**: 56-feature models including Four Factors, opponent adjustments, and pace normalization
 
 ### 📊 Data Analytics Capabilities
-- **Historical Dataset**: 23 NBA seasons (2002-2026), 65,000+ games, 833,000+ player box scores
+- **Historical Dataset**: 10 NBA seasons (**2017-2026**), 50,000+ games, 500,000+ player box scores
 - **Live Integration**: Real-time NBA API data, team statistics, and injury reports
-- **Feature Space**: Team context (offense/defense strength, pace), matchup edges, rest/schedule factors, era adjustments
+- **Feature Space**: Team context (offense/defense strength, pace), matchup edges, rest/schedule factors, modern era focus
 - **Performance Tracking**: Automated prediction logging, outcome fetching, and calibration analysis
 
 ## 📊 Production Performance (1,523 Tracked Predictions)
@@ -145,7 +145,7 @@ nba_predictor/
 | 10-game | Stable baseline | Last 10 games | LightGBM Regressor |
 | 15-game | Long-term patterns | Last 15 games | LightGBM Regressor |
 
-**Training Scale**: Each model trained on 833,000+ player box scores from 2002-2026 NBA seasons
+**Training Scale**: Each model trained on 500,000+ player box scores from **2017-2026** NBA seasons (modern era focus)
 
 ### 2. Adaptive Meta-Learning (Enhanced Selector)
 
@@ -244,17 +244,17 @@ Output: Calibrated probability for Kelly sizing
 
 | Component | Dataset | Size | Time Range |
 |-----------|---------|------|------------|
-| **Team Statistics** | Kaggle NBA Historical | 65,000+ games | **2002-2026 seasons** |
-| **Player Box Scores** | Kaggle NBA Historical | 833,000+ performances | **2002-2026 seasons** |
+| **Team Statistics** | Kaggle NBA Historical | 50,000+ games | **2017-2026 seasons** |
+| **Player Box Scores** | Kaggle NBA Historical | 500,000+ performances | **2017-2026 seasons** |
 | **Bayesian Priors** | Basketball Reference | 7 statistical tables | Career aggregates |
 | **Live Stats** | NBA Official API | Real-time | Current season |
 
-**Note**: Default training uses `--game-season-cutoff 2002` and `--player-season-cutoff 2002` to balance data quality and league evolution.
+**Note**: Default training uses `--game-season-cutoff 2017` and `--player-season-cutoff 2017` to focus on modern NBA (3-point era, pace-and-space).
 
 **Data Processing**:
-- **Memory Optimization**: ~1.2M rows filtered to 833k (2002+) saves ~800MB RAM
+- **Modern Era Focus**: Training data from 2017-2026 captures current NBA playing style and rule changes
 - **Temporal Safety**: All rolling stats lag by 1 game (no future leakage)
-- **Era Adjustments**: Season features (2000s, 2010s, 2020s) with time-decay weighting
+- **Era Adjustments**: Season features (2017-2019, 2020-2023, 2024-2026) with time-decay weighting
 - **Missing Data Handling**: Robust fallbacks for teamId, dates, missing stats
 
 ### Full Training Pipeline (Monthly Recommended)
@@ -268,18 +268,18 @@ This script orchestrates the complete training pipeline by calling `train_ensemb
 python train_auto.py --verbose --lgb-log-period 50
 
 # What it trains:
-# 1. Game models (moneyline classifier, spread regressor) on 65k games
-# 2. Player ensemble models (20 models: 5 windows × 4 stats) on 833k box scores
+# 1. Game models (moneyline classifier, spread regressor) on 50k+ games
+# 2. Player ensemble models (20 models: 5 windows × 4 stats) on 500k+ box scores
 # 3. Dynamic window selectors (4 meta-learners for adaptive window selection)
 ```
 
 **Training Specifications**:
-- **Duration**: ~2-3 hours on standard hardware
+- **Duration**: ~1-2 hours on standard hardware
 - **Models Trained**: 26 total (2 game + 20 player ensemble + 4 selectors)
-- **Training Data**: 2002-2026 seasons (default: `--game-season-cutoff 2002`)
+- **Training Data**: **2017-2026 seasons** (default: `--game-season-cutoff 2017`, `--player-season-cutoff 2017`)
 - **Algorithm**: LightGBM (GBDT with histogram binning)
 - **Validation**: Time-series split with out-of-fold predictions (no leakage)
-- **Sample Weighting**: Exponential time decay (0.97^years_ago) with lockout penalties
+- **Sample Weighting**: Exponential time decay (0.97^years_ago) prioritizing recent seasons
 
 ### Training Components Breakdown
 
@@ -437,9 +437,9 @@ For issues or questions, open a GitHub issue or contact the repository owner.
 - **Validation**: Time-series cross-validation with out-of-fold predictions
 
 ### Data Infrastructure
-- **Primary Dataset**: 833,000+ NBA player box scores (2002-2026) via Kaggle
+- **Primary Dataset**: 500,000+ NBA player box scores (**2017-2026**) via Kaggle
 - **Auxiliary Data**: Basketball Reference priors (7 tables), NBA API (real-time)
-- **Processing**: Pandas/NumPy pipeline with memory optimization (1.6M→833k rows)
+- **Processing**: Pandas/NumPy pipeline with modern era focus (2017+ seasons)
 - **Storage**: Pickle serialization for models, JSON for metadata, CSV for priors
 
 ### Performance Metrics
@@ -455,12 +455,12 @@ For issues or questions, open a GitHub issue or contact the repository owner.
 ✅ Multi-window temporal modeling for player volatility  
 ✅ Hierarchical ensemble with meta-learning window selection  
 ✅ Isotonic calibration for probability-accuracy alignment  
-✅ 23-year historical context (2002-2026 NBA seasons)  
+✅ 10-year modern era focus (**2017-2026 NBA seasons**) for relevant predictions
 
 ---
 
 **Last Updated**: November 4, 2025  
 **Model Version**: Enhanced Ensemble v2.0 with Isotonic Calibration  
-**Training Data**: NBA seasons 2002-2026 (833k player box scores, 65k games)  
+**Training Data**: NBA seasons **2017-2026** (500k+ player box scores, 50k+ games)  
 **Predictions Tracked**: 1,728 (1,523 settled for calibration)  
 **Latest Calibration**: November 4, 2025 (1,523 samples)

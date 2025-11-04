@@ -170,8 +170,10 @@ print(f"\n📊 Unsettled predictions: {len(unsettled):,}")
 
 if len(unsettled) > 0:
     # Convert game_date to datetime (make timezone-naive to avoid comparison errors)
-    unsettled['game_datetime'] = pd.to_datetime(unsettled['game_date'], utc=False)
-    now_local = pd.Timestamp.now()
+    unsettled['game_datetime'] = pd.to_datetime(unsettled['game_date'])
+    if unsettled['game_datetime'].dt.tz is not None:
+        unsettled['game_datetime'] = unsettled['game_datetime'].dt.tz_localize(None)
+    now_local = datetime.now()
     unsettled['days_ago'] = (now_local - unsettled['game_datetime']).dt.days
     
     # Group by age
