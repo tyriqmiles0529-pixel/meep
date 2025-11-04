@@ -1,0 +1,237 @@
+{
+  "baseline": {
+    "points": {
+      "rmse": 5.868812060997583,
+      "mae": 4.273185180869602,
+      "bias": 0.023256483335676797,
+      "r2": 0.5043771497908133,
+      "n_samples": 790785
+    },
+    "rebounds": {
+      "rmse": 2.608065550997855,
+      "mae": 1.8930892359219906,
+      "bias": 0.012828208377630787,
+      "r2": 0.4527463382297887,
+      "n_samples": 790785
+    },
+    "assists": {
+      "rmse": 1.7066190540047632,
+      "mae": 1.1571125025354052,
+      "bias": 0.003758003775834161,
+      "r2": 0.5011133588592931,
+      "n_samples": 790785
+    },
+    "threes": {
+      "rmse": 0.9772554157765475,
+      "mae": 0.5860664533564247,
+      "bias": -0.00024192657266121999,
+      "r2": 0.3323740037795325,
+      "n_samples": 790785
+    },
+    "minutes": {
+      "rmse": 7.284220958130497,
+      "mae": 5.608855182919494,
+      "bias": 0.03690076074144922,
+      "r2": 0.5780362356604527,
+      "n_samples": 656445
+    }
+  },
+  "comparison": {
+    "points": {
+      "baseline_rmse": 5.868812060997583,
+      "ensemble_rmse": 5.649544974554073,
+      "improvement_pct": 3.736140877652152,
+      "baseline_samples": 790785,
+      "ensemble_samples": 671356
+    },
+    "rebounds": {
+      "baseline_rmse": 2.608065550997855,
+      "ensemble_rmse": 2.5401868340309863,
+      "improvement_pct": 2.6026461237102816,
+      "baseline_samples": 790785,
+      "ensemble_samples": 671356
+    },
+    "assists": {
+      "baseline_rmse": 1.7066190540047632,
+      "ensemble_rmse": 1.655257616654492,
+      "improvement_pct": 3.009543180110772,
+      "baseline_samples": 790785,
+      "ensemble_samples": 671356
+    },
+    "threes": {
+      "baseline_rmse": 0.9772554157765475,
+      "ensemble_rmse": 0.9173158449833805,
+      "improvement_pct": 6.133460078656898,
+      "baseline_samples": 790785,
+      "ensemble_samples": 671356
+    },
+    "minutes": {
+      "baseline_rmse": 7.284220958130497,
+      "ensemble_rmse": 6.925889825557951,
+      "improvement_pct": 4.919278734571947,
+      "baseline_samples": 656445,
+      "ensemble_samples": 560238
+    }
+  },
+  "ensemble_windows": [
+    {
+      "start_year": 2002,
+      "end_year": 2006,
+      "seasons": [
+        2002,
+        2003,
+        2004,
+        2005,
+        2006
+      ],
+      "metrics": {
+        "points": {
+          "rmse": 5.552237642350067,
+          "mae": 4.10913485311035,
+          "n_samples": 160193
+        },
+        "rebounds": {
+          "rmse": 2.5668224175876158,
+          "mae": 1.9016781411385248,
+          "n_samples": 160193
+        },
+        "assists": {
+          "rmse": 1.6471444141893172,
+          "mae": 1.1357060264309762,
+          "n_samples": 160193
+        },
+        "threes": {
+          "rmse": 0.7888774359676514,
+          "mae": 0.4469197445467524,
+          "n_samples": 160193
+        },
+        "minutes": {
+          "rmse": 7.416102779904933,
+          "mae": 5.756311922813071,
+          "n_samples": 135896
+        }
+      }
+    },
+    {
+      "start_year": 2007,
+      "end_year": 2011,
+      "seasons": [
+        2007,
+        2008,
+        2009,
+        2010,
+        2011
+      ],
+      "metrics": {
+        "points": {
+          "rmse": 5.5871387541287945,
+          "mae": 4.169134888404795,
+          "n_samples": 161900
+        },
+        "rebounds": {
+          "rmse": 2.531142266820603,
+          "mae": 1.8685273199344758,
+          "n_samples": 161900
+        },
+        "assists": {
+          "rmse": 1.635100193355132,
+          "mae": 1.122042338163706,
+          "n_samples": 161900
+        },
+        "threes": {
+          "rmse": 0.8435766994835892,
+          "mae": 0.5047789486792308,
+          "n_samples": 161900
+        },
+        "minutes": {
+          "rmse": 7.070285806206565,
+          "mae": 5.524610764322571,
+          "n_samples": 136984
+        }
+      }
+    },
+    {
+      "start_year": 2012,
+      "end_year": 2016,
+      "seasons": [
+        2016,
+        2012,
+        2013,
+        2014,
+        2015
+      ],
+      "metrics": {
+        "points": {
+          "rmse": 5.56750879927204,
+          "mae": 4.151429419126058,
+          "n_samples": 180768
+        },
+        "rebounds": {
+          "rmse": 2.535123356029482,
+          "mae": 1.8674598210070534,
+          "n_samples": 180768
+        },
+        "assists": {
+          "rmse": 1.6374559309149472,
+          "mae": 1.1304417366948498,
+          "n_samples": 180768
+        },
+        "threes": {
+          "rmse": 0.9190148519838452,
+          "mae": 0.5819580651664841,
+          "n_samples": 180768
+        },
+        "minutes": {
+          "rmse": 6.7186172448954915,
+          "mae": 5.226926081458861,
+          "n_samples": 148753
+        }
+      }
+    },
+    {
+      "start_year": 2017,
+      "end_year": 2021,
+      "seasons": [
+        2017,
+        2018,
+        2019,
+        2020,
+        2021
+      ],
+      "metrics": {
+        "points": {
+          "rmse": 5.890033035849611,
+          "mae": 4.3707180891641,
+          "n_samples": 168495
+        },
+        "rebounds": {
+          "rmse": 2.528986479041521,
+          "mae": 1.8715676275145048,
+          "n_samples": 168495
+        },
+        "assists": {
+          "rmse": 1.7014378605931013,
+          "mae": 1.1935669909856716,
+          "n_samples": 168495
+        },
+        "threes": {
+          "rmse": 1.1084560901800509,
+          "mae": 0.7576484601645747,
+          "n_samples": 168495
+        },
+        "minutes": {
+          "rmse": 6.524998800949713,
+          "mae": 5.034281834100963,
+          "n_samples": 138605
+        }
+      }
+    }
+  ],
+  "summary": {
+    "avg_improvement_pct": 4.08021379894041,
+    "total_baseline_samples": 3819585,
+    "total_ensemble_samples": 3245662,
+    "seasons_covered": "2002-2026",
+    "n_seasons": 24
+  }
+}

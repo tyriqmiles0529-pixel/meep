@@ -1619,10 +1619,19 @@ def build_players_from_playerstats(
     tpm_col   = resolve_any([["threePointersMade", "3pm", "FG3M", "threes", "three_pm"]])
     starter_col = resolve_any([["starter", "isStarter", "started", "STARTER", "IS_STARTER"]])  # likely missing
 
+    # PHASE 1 FEATURES: Shot volume + efficiency
+    fga_col = resolve_any([["fieldGoalsAttempted", "fga", "FGA", "field_goals_attempted"]])
+    three_pa_col = resolve_any([["threePointersAttempted", "3pa", "FG3A", "three_pa", "three_point_attempts"]])
+    fta_col = resolve_any([["freeThrowsAttempted", "fta", "FTA", "free_throw_attempts"]])
+    fg_pct_col = resolve_any([["fieldGoalsPercentage", "fg_pct", "FG_PCT"]])
+    three_pct_col = resolve_any([["threePointersPercentage", "fg3_pct", "FG3_PCT", "three_pct"]])
+    ft_pct_col = resolve_any([["freeThrowsPercentage", "ft_pct", "FT_PCT"]])
+
     # Read all detected columns (avoid usecols mismatch)
     # FIXED: Include both fname_col and lname_col separately, not just name_col
     want_cols = [gid_col, date_col, pid_col, name_full_col, fname_col, lname_col, tid_col, home_col,
-                 min_col, pts_col, reb_col, ast_col, tpm_col, starter_col]
+                 min_col, pts_col, reb_col, ast_col, tpm_col, starter_col,
+                 fga_col, three_pa_col, fta_col, fg_pct_col, three_pct_col, ft_pct_col]  # PHASE 1
     usecols = [c for c in want_cols if c is not None]
     ps = pd.read_csv(player_path, low_memory=False, usecols=sorted(set(usecols)) if usecols else None)
 
@@ -1734,7 +1743,7 @@ def build_players_from_playerstats(
     ps["season_decade"]   = _decade_from_season(ps["season_end_year"]).astype("float32")
 
     # Numeric conversions
-    for stat_col in [min_col, pts_col, reb_col, ast_col, tpm_col]:
+    for stat_col in [min_col, pts_col, reb_col, ast_col, tpm_col, fga_col, three_pa_col, fta_col, fg_pct_col, three_pct_col, ft_pct_col]:
         if stat_col and stat_col in ps.columns:
             ps[stat_col] = pd.to_numeric(ps[stat_col], errors="coerce")
 
@@ -1801,6 +1810,46 @@ def build_players_from_playerstats(
     rolling_stats(ast_col)
     rolling_stats(tpm_col)
 
+    # PHASE 1.1: Shot volume rolling stats
+    rolling_stats(fga_col)
+    rolling_stats(three_pa_col)
+    rolling_stats(fta_col)
+
+    # PHASE 1.2: True Shooting % calculation
+    if pts_col and fga_col and fta_col:
+        if pts_col in ps.columns and fga_col in ps.columns and fta_col in ps.columns:
+            def calc_ts_pct_row(row):
+                """Calculate True Shooting % = PTS / (2 * (FGA + 0.44 * FTA))"""
+                pts = row[pts_col] if pd.notna(row[pts_col]) else 0
+                fga = row[fga_col] if pd.notna(row[fga_col]) else 0
+                fta = row[fta_col] if pd.notna(row[fta_col]) else 0
+                denominator = 2 * (fga + 0.44 * fta)
+                return pts / denominator if denominator > 0 else 0.56  # league average
+
+            ps['ts_pct'] = ps.apply(calc_ts_pct_row, axis=1)
+
+            # Rolling TS% (last 5, 10, season average)
+            ps['ts_pct_L5'] = ps.groupby(pid_col)['ts_pct'].transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean())
+            ps['ts_pct_L10'] = ps.groupby(pid_col)['ts_pct'].transform(lambda x: x.shift(1).rolling(10, min_periods=1).mean())
+            ps['ts_pct_season'] = ps.groupby(pid_col)['ts_pct'].transform(lambda x: x.shift(1).expanding(min_periods=1).mean())
+
+    # PHASE 1.2: Shooting percentage rolling averages
+    if three_pct_col and three_pct_col in ps.columns:
+        ps['three_pct_L5'] = ps.groupby(pid_col)[three_pct_col].transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean())
+
+    if ft_pct_col and ft_pct_col in ps.columns:
+        ps['ft_pct_L5'] = ps.groupby(pid_col)[ft_pct_col].transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean())
+
+    # DEBUG: Verify Phase 1 features created
+    if verbose:
+        phase1_expected = ["fieldGoalsAttempted_L5", "threePointersAttempted_L5", "freeThrowsAttempted_L5",
+                          "rate_fga", "rate_3pa", "rate_fta", "ts_pct_L5", "ts_pct_L10", "three_pct_L5"]
+        phase1_created = [f for f in phase1_expected if f in ps.columns]
+        phase1_missing = [f for f in phase1_expected if f not in ps.columns]
+        log(f"  [DEBUG] Phase 1 feature engineering: {len(phase1_created)}/{len(phase1_expected)} features created", True)
+        if phase1_missing:
+            log(f"    Missing: {phase1_missing}", True)
+
     # Home/Away performance splits (rolling averages split by location)
     if "is_home" in ps.columns:
         for stat_col in [pts_col, reb_col, ast_col, tpm_col]:
@@ -1832,6 +1881,18 @@ def build_players_from_playerstats(
     ps["rate_reb"] = rate(reb_col).fillna(0.2).astype("float32")
     ps["rate_ast"] = rate(ast_col).fillna(0.2).astype("float32")
     ps["rate_3pm"] = rate(tpm_col).fillna(0.1).astype("float32")
+
+    # PHASE 1.1: Shot volume per-minute rates
+    ps["rate_fga"] = rate(fga_col).fillna(0.3).astype("float32")
+    ps["rate_3pa"] = rate(three_pa_col).fillna(0.1).astype("float32")
+    ps["rate_fta"] = rate(fta_col).fillna(0.1).astype("float32")
+
+    # PHASE 3: Advanced rate stats (Usage, Rebound %, Assist %)
+    # These require team totals, calculated after merge with game context
+    # For now, create placeholders - will be filled in later
+    ps["usage_rate_L5"] = np.nan
+    ps["rebound_rate_L5"] = np.nan
+    ps["assist_rate_L5"] = np.nan
 
     # Build side-aware context keyed by (gid, is_home), including opponent context
     ctx = games_context.copy()
@@ -1909,7 +1970,15 @@ def build_players_from_playerstats(
     # 1) If teamId exists AND has valid data: join by (gid, tid)
     # 2) Else if home flag exists: join by (gid, is_home)
     # 3) Else: fallback to per-game average context (team_* and opp_*), plus matchup
-    if tid_col and tid_col in ps.columns and ps[tid_col].notna().any():
+    # Check if teamId has valid data (not NaN and not string 'nan')
+    has_valid_tid = False
+    if tid_col and tid_col in ps.columns:
+        tid_values = ps[tid_col].astype(str)
+        has_valid_tid = (ps[tid_col].notna().any() and
+                        (tid_values != 'nan').any() and
+                        (tid_values != '').any())
+
+    if has_valid_tid:
         ps_join = ps.merge(
             side_ctx_tid,
             left_on=[gid_col, tid_col],
@@ -1941,7 +2010,98 @@ def build_players_from_playerstats(
     if "is_home" not in ps_join.columns:
         ps_join["is_home"] = np.nan
 
-    # DEBUG: Log merge results
+    # ============================================================================
+    # PHASE 2: Matchup & Context Features
+    # ============================================================================
+    # Now that we have team/opponent context from merge, add matchup features
+
+    # Pace-adjusted opportunities (normalize stats by game pace)
+    if "team_recent_pace" in ps_join.columns and "opp_recent_pace" in ps_join.columns:
+        # Average pace of this matchup (both teams combined)
+        ps_join["matchup_pace"] = ((ps_join["team_recent_pace"] + ps_join["opp_recent_pace"]) / 2).fillna(100.0)
+        # Pace adjustment factor (>1.0 = faster pace = more opportunities)
+        ps_join["pace_factor"] = (ps_join["matchup_pace"] / 100.0).fillna(1.0)
+    else:
+        ps_join["matchup_pace"] = 100.0
+        ps_join["pace_factor"] = 1.0
+
+    # Defensive matchup quality (opponent's defensive strength)
+    if "opp_def_strength" in ps_join.columns:
+        # Higher opp_def_strength = tougher defense = harder to score
+        ps_join["def_matchup_difficulty"] = ps_join["opp_def_strength"].fillna(0.0)
+    else:
+        ps_join["def_matchup_difficulty"] = 0.0
+
+    # Offensive environment (team's offensive strength + opponent's defensive weakness)
+    if "team_off_strength" in ps_join.columns and "opp_def_strength" in ps_join.columns:
+        ps_join["offensive_environment"] = (ps_join["team_off_strength"] - ps_join["opp_def_strength"]).fillna(0.0)
+    else:
+        ps_join["offensive_environment"] = 0.0
+
+    # ============================================================================
+    # PHASE 3: Advanced Rate Stats (Usage, Rebound %, Assist %)
+    # ============================================================================
+    # These require team-level totals, which we'll approximate from player priors
+    # NOTE: Full implementation would need team totals from game-level data
+    # For now, use Basketball Reference priors if available
+
+    # Check if we have prior columns with usage/rebound/assist data
+    prior_usage_cols = [c for c in ps_join.columns if 'usg' in c.lower() or 'usage' in c.lower()]
+    prior_rebpct_cols = [c for c in ps_join.columns if 'trb%' in c.lower() or 'reb_pct' in c.lower() or 'rebounding_pct' in c.lower()]
+    prior_astpct_cols = [c for c in ps_join.columns if 'ast%' in c.lower() or 'ast_pct' in c.lower() or 'assist_pct' in c.lower()]
+
+    # If priors have usage rate, use it; otherwise estimate from FGA + FTA
+    if prior_usage_cols:
+        # Use first matching prior column
+        ps_join["usage_rate_prior"] = ps_join[prior_usage_cols[0]].fillna(15.0)  # league avg ~20%
+    else:
+        # Estimate usage rate from shot volume per minute
+        # Simple approximation: higher rate_fga + rate_fta = higher usage
+        if "rate_fga" in ps_join.columns and "rate_fta" in ps_join.columns:
+            ps_join["usage_rate_prior"] = ((ps_join["rate_fga"] + 0.44 * ps_join["rate_fta"]) * 5.0).fillna(15.0).clip(0, 40)
+        else:
+            ps_join["usage_rate_prior"] = 15.0
+
+    # If priors have rebound %, use it; otherwise keep placeholder
+    if prior_rebpct_cols:
+        ps_join["rebound_rate_prior"] = ps_join[prior_rebpct_cols[0]].fillna(10.0)
+    else:
+        # Keep placeholder NaN - will be filled with default in model training
+        pass
+
+    # If priors have assist %, use it; otherwise keep placeholder
+    if prior_astpct_cols:
+        ps_join["assist_rate_prior"] = ps_join[prior_astpct_cols[0]].fillna(10.0)
+    else:
+        # Keep placeholder NaN - will be filled with default in model training
+        pass
+
+    # Rolling averages of usage/rebound/assist rates (if we have them)
+    # Group by player and calculate L5 averages
+    if "usage_rate_prior" in ps_join.columns:
+        ps_join["usage_rate_L5"] = ps_join.groupby(pid_col)["usage_rate_prior"].transform(
+            lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+        ).fillna(15.0)
+
+    if "rebound_rate_prior" in ps_join.columns:
+        ps_join["rebound_rate_L5"] = ps_join.groupby(pid_col)["rebound_rate_prior"].transform(
+            lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+        ).fillna(10.0)
+    else:
+        # Keep existing NaN placeholder - will be filled later
+        if "rebound_rate_L5" not in ps_join.columns:
+            ps_join["rebound_rate_L5"] = 10.0
+
+    if "assist_rate_prior" in ps_join.columns:
+        ps_join["assist_rate_L5"] = ps_join.groupby(pid_col)["assist_rate_prior"].transform(
+            lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+        ).fillna(10.0)
+    else:
+        # Keep existing NaN placeholder - will be filled later
+        if "assist_rate_L5" not in ps_join.columns:
+            ps_join["assist_rate_L5"] = 10.0
+
+    # DEBUG: Log merge results and Phase 2+3 features
     if verbose:
         log(f"  DEBUG - AFTER MERGE:", True)
         log(f"    ps_join shape: {ps_join.shape}", True)
@@ -1955,6 +2115,20 @@ def build_players_from_playerstats(
                 log(f"    WARNING: season_end_year is all NaN - merge failed!", True)
         else:
             log(f"    WARNING: season_end_year column missing after merge!", True)
+
+        # Verify Phase 2+3 features created
+        phase2_expected = ["matchup_pace", "pace_factor", "def_matchup_difficulty", "offensive_environment"]
+        phase3_expected = ["usage_rate_L5", "rebound_rate_L5", "assist_rate_L5"]
+        phase2_created = [f for f in phase2_expected if f in ps_join.columns]
+        phase3_created = [f for f in phase3_expected if f in ps_join.columns]
+        log(f"  [DEBUG] Phase 2 features: {len(phase2_created)}/{len(phase2_expected)} created", True)
+        if len(phase2_created) < len(phase2_expected):
+            phase2_missing = [f for f in phase2_expected if f not in ps_join.columns]
+            log(f"    Missing: {phase2_missing}", True)
+        log(f"  [DEBUG] Phase 3 features: {len(phase3_created)}/{len(phase3_expected)} created", True)
+        if len(phase3_created) < len(phase3_expected):
+            phase3_missing = [f for f in phase3_expected if f not in ps_join.columns]
+            log(f"    Missing: {phase3_missing}", True)
 
     # Add OOF game predictions
     oof = oof_games.copy()
@@ -2069,15 +2243,45 @@ def build_players_from_playerstats(
                 if prior_cols_present:
                     ps_join = ps_join.drop(columns=prior_cols_present, errors="ignore")
 
-                # Merge by (name_key, season) - strict match first
-                ps_join = ps_join.merge(
-                    priors_players[["__name_key__", "season_for_game"] + merge_cols],
-                    left_on=["__name_key__", "season_end_year"],
-                    right_on=["__name_key__", "season_for_game"],
-                    how="left",
-                    suffixes=("", "_prior")
-                )
-                ps_join = ps_join.drop(columns=["season_for_game"], errors="ignore")
+                # Initialize prior columns
+                for col in merge_cols:
+                    if col not in ps_join.columns:
+                        ps_join[col] = np.nan
+
+                # Merge by (name_key, season) - strict match first (BATCHED to avoid memory explosion)
+                batch_size = 5000  # Process in smaller chunks
+                if verbose:
+                    log(f"  Merging priors in batches of {batch_size:,} rows to avoid memory issues", True)
+
+                for start_idx in range(0, len(ps_join), batch_size):
+                    end_idx = min(start_idx + batch_size, len(ps_join))
+                    batch = ps_join.iloc[start_idx:end_idx][["__name_key__", "season_end_year"]].copy()
+
+                    merged_batch = batch.merge(
+                        priors_players[["__name_key__", "season_for_game"] + merge_cols],
+                        left_on=["__name_key__", "season_end_year"],
+                        right_on=["__name_key__", "season_for_game"],
+                        how="left",
+                        suffixes=("", "_prior")
+                    )
+
+                    # Deduplicate if merge created duplicates (keep first)
+                    if len(merged_batch) > len(batch):
+                        merged_batch = merged_batch.drop_duplicates(subset=["__name_key__", "season_end_year"], keep="first")
+
+                    # Safety check: ensure merged_batch length matches batch length
+                    if len(merged_batch) != len(batch):
+                        # If lengths don't match, skip this batch
+                        continue
+
+                    # Update ps_join with merged columns
+                    for col in merge_cols:
+                        src_col = col if col in merged_batch.columns else (col + "_prior" if col + "_prior" in merged_batch.columns else None)
+                        if src_col and src_col in merged_batch.columns:
+                            # Ensure we're assigning the correct length
+                            values_to_assign = merged_batch[src_col].values
+                            if len(values_to_assign) == (end_idx - start_idx):
+                                ps_join.iloc[start_idx:end_idx, ps_join.columns.get_loc(col)] = values_to_assign
                 
                 # For unmatched rows, try +/- 1 season (handles off-by-one issues) — chunked to save memory
                 prior_cols_present = [c for c in merge_cols if c in ps_join.columns]
@@ -2099,6 +2303,7 @@ def build_players_from_playerstats(
                     for start_idx in range(0, len(unmatched_idx), batch_size):
                         idx_batch = unmatched_idx[start_idx:start_idx + batch_size]
                         batch = ps_join.iloc[idx_batch][["__name_key__", "season_end_year"]].copy()
+                        batch["_batch_idx"] = range(len(batch))  # Track original position
                         batch["_temp_season"] = pd.to_numeric(batch["season_end_year"], errors="coerce") + season_offset
                         fuzzy = batch.merge(
                             priors_players[["__name_key__", "season_for_game"] + merge_cols],
@@ -2107,6 +2312,15 @@ def build_players_from_playerstats(
                             how="left",
                             suffixes=("", "_fuzz")
                         )
+
+                        # Deduplicate: keep first match per batch index
+                        if "_batch_idx" in fuzzy.columns and len(fuzzy) > len(batch):
+                            fuzzy = fuzzy.drop_duplicates("_batch_idx", keep="first")
+                            fuzzy = fuzzy.sort_values("_batch_idx")
+
+                        # Safety check: ensure length matches
+                        if len(fuzzy) != len(idx_batch):
+                            continue  # Skip this batch if length mismatch
                         # Update only where ps_join is missing
                         for col in merge_cols:
                             src_col = col if col in fuzzy.columns else (col + "_fuzz" if col + "_fuzz" in fuzzy.columns else None)
@@ -2147,6 +2361,7 @@ def build_players_from_playerstats(
     # Build frames
     frames: Dict[str, pd.DataFrame] = {}
 
+    # Build base context columns - start with core columns
     base_ctx_cols = [
         "is_home",
         "season_end_year", "season_decade",
@@ -2154,7 +2369,35 @@ def build_players_from_playerstats(
         "opp_recent_pace",  "opp_off_strength",  "opp_def_strength",  "opp_recent_winrate",
         "match_off_edge", "match_def_edge", "match_pace_sum", "winrate_diff",
         "oof_ml_prob", "oof_spread_pred", "starter_flag",
+        # Player fatigue features
+        "days_rest", "player_b2b",
     ]
+
+    # Add dynamic rolling stats columns (use actual column names that were resolved)
+    for col in [pts_col, reb_col, ast_col, tpm_col]:
+        if col:
+            base_ctx_cols.extend([f"{col}_L3", f"{col}_L5", f"{col}_L10"])
+            base_ctx_cols.extend([f"{col}_home_avg", f"{col}_away_avg"])
+
+    # Add PHASE 1: Shot volume rolling stats (use actual column names)
+    for col in [fga_col, three_pa_col, fta_col]:
+        if col:
+            base_ctx_cols.extend([f"{col}_L3", f"{col}_L5", f"{col}_L10"])
+
+    # Add PHASE 1: Shot volume per-minute rates
+    base_ctx_cols.extend(["rate_fga", "rate_3pa", "rate_fta"])
+
+    # Add PHASE 1: Efficiency features
+    base_ctx_cols.extend(["ts_pct_L5", "ts_pct_L10", "ts_pct_season", "three_pct_L5", "ft_pct_L5"])
+
+    # Add PHASE 2: Matchup & context features
+    base_ctx_cols.extend(["matchup_pace", "pace_factor", "def_matchup_difficulty", "offensive_environment"])
+
+    # Add PHASE 3: Advanced rate stats
+    base_ctx_cols.extend(["usage_rate_L5", "rebound_rate_L5", "assist_rate_L5"])
+
+    # Filter to only columns that actually exist in ps_join
+    base_ctx_cols = [c for c in base_ctx_cols if c in ps_join.columns]
 
     # Minutes
     if min_col and min_col in ps_join.columns:
@@ -2221,7 +2464,19 @@ def _fit_minutes_model(df: pd.DataFrame, seed: int, verbose: bool) -> Tuple[obje
     ]
     features = [f for f in features if f in df.columns]
     X = df[features].apply(pd.to_numeric, errors="coerce").fillna(0.0).astype("float32")
-    y = pd.to_numeric(df.iloc[:, -1], errors="coerce").astype(float).values  # minutes column is last
+
+    # Find minutes column (could be numMinutes, minutes, mins, min, or MIN)
+    min_col_candidates = ["numMinutes", "minutes", "mins", "min", "MIN"]
+    min_col = None
+    for col in min_col_candidates:
+        if col in df.columns:
+            min_col = col
+            break
+
+    if min_col is None:
+        raise ValueError(f"Minutes column not found. Available columns: {list(df.columns)}")
+
+    y = pd.to_numeric(df[min_col], errors="coerce").astype(float).values
     w = pd.to_numeric(df.get("sample_weight", pd.Series(np.ones(len(df)))), errors="coerce").fillna(1.0).values
 
     n = len(X)
@@ -2274,6 +2529,20 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
         "rebounds_L3", "rebounds_L5", "rebounds_L10",
         "assists_L3", "assists_L5", "assists_L10",
         "threepoint_goals_L3", "threepoint_goals_L5", "threepoint_goals_L10",
+        # PHASE 1.1: shot volume rolling trends
+        "fieldGoalsAttempted_L3", "fieldGoalsAttempted_L5", "fieldGoalsAttempted_L10",
+        "threePointersAttempted_L3", "threePointersAttempted_L5", "threePointersAttempted_L10",
+        "freeThrowsAttempted_L3", "freeThrowsAttempted_L5", "freeThrowsAttempted_L10",
+        # PHASE 1.1: shot volume per-minute rates
+        "rate_fga", "rate_3pa", "rate_fta",
+        # PHASE 1.2: efficiency features (True Shooting % + shooting %s)
+        "ts_pct_L5", "ts_pct_L10", "ts_pct_season",
+        "three_pct_L5", "ft_pct_L5",
+        # PHASE 2: matchup & context features
+        "matchup_pace", "pace_factor",
+        "def_matchup_difficulty", "offensive_environment",
+        # PHASE 3: advanced rate stats
+        "usage_rate_L5", "rebound_rate_L5", "assist_rate_L5",
         # NEW: home/away splits
         "points_home_avg", "points_away_avg",
         "rebounds_home_avg", "rebounds_away_avg",
@@ -2285,6 +2554,29 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
         features.insert(0, "minutes_oof")
     elif "minutes" in df.columns:
         features.append("minutes")
+
+    # DEBUG: Log which Phase features are missing
+    if verbose:
+        phase1_requested = ["fieldGoalsAttempted_L5", "threePointersAttempted_L5", "freeThrowsAttempted_L5",
+                           "rate_fga", "rate_3pa", "rate_fta", "ts_pct_L5", "ts_pct_L10", "three_pct_L5"]
+        phase2_requested = ["matchup_pace", "pace_factor", "def_matchup_difficulty", "offensive_environment"]
+        phase3_requested = ["usage_rate_L5", "rebound_rate_L5", "assist_rate_L5"]
+
+        phase1_missing = [f for f in phase1_requested if f not in df.columns]
+        phase2_missing = [f for f in phase2_requested if f not in df.columns]
+        phase3_missing = [f for f in phase3_requested if f not in df.columns]
+
+        if phase1_missing or phase2_missing or phase3_missing:
+            log(f"  [DEBUG] Phase features MISSING from dataframe:", True)
+            if phase1_missing:
+                log(f"    Phase 1 missing ({len(phase1_missing)}): {phase1_missing}", True)
+            if phase2_missing:
+                log(f"    Phase 2 missing ({len(phase2_missing)}): {phase2_missing}", True)
+            if phase3_missing:
+                log(f"    Phase 3 missing ({len(phase3_missing)}): {phase3_missing}", True)
+        else:
+            log(f"  [DEBUG] ALL Phase 1+2+3 features present in dataframe!", True)
+
     features = [f for f in features if f in df.columns]
 
     X = df[features].apply(pd.to_numeric, errors="coerce").fillna(0.0).astype("float32")
@@ -2298,12 +2590,23 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
     w_tr, w_val = w[:split], w[split:]
 
     if _HAS_LGB:
+        # PHASE 1: Heavy regularization to prevent overfitting with volume+efficiency features
         reg = lgb.LGBMRegressor(
             objective="regression",
-            learning_rate=0.05, num_leaves=31, max_depth=-1,
-            colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
-            n_estimators=800, random_state=seed, n_jobs=N_JOBS,
-            force_col_wise=True, verbosity=-1
+            learning_rate=0.1,        # increased from 0.05
+            num_leaves=31,
+            max_depth=3,              # NEW - shallow trees (was -1)
+            min_child_samples=100,    # NEW - require more data per leaf
+            colsample_bytree=0.7,     # reduced from 0.9
+            subsample=0.7,            # reduced from 0.8
+            subsample_freq=5,
+            reg_alpha=0.5,            # NEW - L1 regularization
+            reg_lambda=0.5,           # NEW - L2 regularization
+            n_estimators=50,          # reduced from 800
+            random_state=seed,
+            n_jobs=N_JOBS,
+            force_col_wise=True,
+            verbosity=-1
         )
     else:
         reg = HistGradientBoostingRegressor(
@@ -3997,257 +4300,280 @@ def main():
         traceback.print_exc()
         ridge_model, elo_model, ff_model, ensembler = None, None, None, None
 
-    # Player models
+    # ========================================================================
+    # PLAYER MODELS (Per-Window Training for Memory Optimization)
+    # ========================================================================
     player_metrics: Dict[str, Dict[str, float]] = {}
     if players_path and players_path.exists():
-        print(_sec("Building player datasets"))
+        print(_sec("Training player models per window"))
 
-        # Augment player stats with current season data
+        # Define cache directory
+        cache_dir = "model_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Prepare current season data if available (merge once before loop)
         current_player_df = fetch_current_season_player_stats(season="2025-26", verbose=verbose)
+
         if current_player_df is not None and not current_player_df.empty:
-            # Save to temp CSV and append
             temp_player_csv = Path(".current_season_players_temp.csv")
             current_player_df.to_csv(temp_player_csv, index=False)
 
-            # Load historical players
             hist_players_df = pd.read_csv(players_path, low_memory=False)
-
-            # Append current season data
             combined_players_df = pd.concat([hist_players_df, current_player_df], ignore_index=True)
 
-            # Save combined to temp file
             temp_combined_csv = Path(".combined_players_temp.csv")
             combined_players_df.to_csv(temp_combined_csv, index=False)
+            player_data_path = temp_combined_csv
 
             print(f"- Added {len(current_player_df):,} player-game records from 2025-26 season")
-            print(f"- Total player-game records: {len(hist_players_df):,} -> {len(combined_players_df):,}")
-
-            # Use combined file for training
-            frames = build_players_from_playerstats(temp_combined_csv, context_map, oof_games, verbose=verbose, priors_players=priors_players)
-
-            # Clean up temp files
-            temp_player_csv.unlink(missing_ok=True)
-            temp_combined_csv.unlink(missing_ok=True)
         else:
-            # No current season data, use historical only
-            frames = build_players_from_playerstats(players_path, context_map, oof_games, verbose=verbose, priors_players=priors_players)
+            player_data_path = players_path
 
-        # Load and merge historical player prop odds
-        print(_sec("Loading historical player prop odds from The Odds API"))
-        player_props_cache = Path("data/historical_player_props_cache.csv")
+        # Get windows from game ensemble (should already exist from game training)
+        if 'windows_to_process' not in locals():
+            # Create windows if not already defined
+            all_seasons = sorted([int(s) for s in games_df["season_end_year"].dropna().unique()])
+            max_year = int(games_df["season_end_year"].max())
+            window_size = 5
+            windows_to_process = []
+            for i in range(0, len(all_seasons), window_size):
+                window_seasons = all_seasons[i:i+window_size]
+                start_year = int(window_seasons[0])
+                end_year = int(window_seasons[-1])
+                windows_to_process.append({
+                    'seasons': window_seasons,
+                    'start_year': start_year,
+                    'end_year': end_year,
+                    'is_current': max_year in window_seasons
+                })
 
-        # First, we need to load the raw player data to get dates for prop fetching
-        if current_player_df is not None and not current_player_df.empty:
-            raw_players_df = combined_players_df
-        else:
-            raw_players_df = pd.read_csv(players_path, low_memory=False)
+        # Process each window
+        for idx, window_info in enumerate(windows_to_process, 1):
+            window_seasons = set(window_info['seasons'])
+            start_year = window_info['start_year']
+            end_year = window_info['end_year']
+            cache_path = f"{cache_dir}/player_models_{start_year}_{end_year}.pkl"
+            cache_meta_path = f"{cache_dir}/player_models_{start_year}_{end_year}_meta.json"
+            is_current = window_info['is_current']
 
-        # Fetch/load player props (limit to 100 dates to control costs)
-        historical_player_props = load_or_fetch_historical_player_props(
-            players_df=raw_players_df,
-            api_key=THEODDS_API_KEY,
-            cache_path=player_props_cache,
-            verbose=verbose,
-            max_requests=100  # 1000 credits for player props
-        )
+            print(f"\n{'='*70}")
+            print(f"Training player models: Window {idx}/{len(windows_to_process)}")
+            print(f"Seasons: {start_year}-{end_year} ({'CURRENT' if is_current else 'historical'})")
+            print(f"{'='*70}")
 
-        # Merge player props into each stat frame
-        if not historical_player_props.empty:
-            for stat_name, stat_df in frames.items():
-                if stat_df is None or stat_df.empty:
-                    continue
-
-                # Determine the prop type for this stat
-                prop_type_map = {
-                    'points': 'points',
-                    'rebounds': 'rebounds',
-                    'assists': 'assists',
-                    'threes': 'threes',
-                    'minutes': None  # No market for minutes
-                }
-
-                prop_type = prop_type_map.get(stat_name)
-
-                if prop_type is None:
-                    continue  # Skip minutes (no prop market)
-
-                # Filter props for this stat type
-                stat_props = historical_player_props[historical_player_props['prop_type'] == prop_type].copy()
-
-                if stat_props.empty:
-                    log(f"- No historical props for {stat_name}", verbose)
-                    continue
-
-                # Prepare date columns for merging
-                if 'date' in stat_df.columns:
-                    stat_df['date_str'] = pd.to_datetime(stat_df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
-                else:
-                    log(f"Warning: No 'date' column in {stat_name} frame", verbose)
-                    continue
-
-                stat_props['date_str'] = stat_props['date'].astype(str)
-
-                # Normalize player names for matching
-                stat_df['player_name_norm'] = stat_df.get('playerName', stat_df.get('player_name', '')).str.lower().str.strip()
-                stat_props['player_name_norm'] = stat_props['player_name'].str.lower().str.strip()
-
-                # Merge props
-                before_merge = len(stat_df)
-                stat_df = stat_df.merge(
-                    stat_props[['date_str', 'player_name_norm', 'market_line', 'market_over_odds', 'market_under_odds']],
-                    on=['date_str', 'player_name_norm'],
-                    how='left'
-                )
-
-                # Count successful merges
-                props_matched = stat_df['market_line'].notna().sum()
-                print(f"- {stat_name}: merged {props_matched:,} / {before_merge:,} records with prop odds ({props_matched/before_merge*100:.1f}%)")
-
-                # Clean up merge columns
-                stat_df = stat_df.drop(columns=['date_str', 'player_name_norm'], errors='ignore')
-
-                # Update frame
-                frames[stat_name] = stat_df
-        else:
-            print("- No historical player props available (API may be unavailable or cache empty)")
-
-        # Era filter + weights per frame
-        player_cut = _parse_season_cutoff(args.player_season_cutoff, kind="player")
-        for k, df in list(frames.items()):
-            if df is None or df.empty:
+            # Check cache (skip historical windows if cached)
+            if os.path.exists(cache_path) and not is_current:
+                print(f"[SKIP] Using cached models from {cache_path}")
                 continue
-            if "season_end_year" in df.columns:
-                before = len(df)
-                df = df[(df["season_end_year"].fillna(player_cut)) >= player_cut].reset_index(drop=True)
-                frames[k] = df
-                print(f"- {k}: filtered by season >= {player_cut}: {before:,} -> {len(df):,}")
-                # weights
-                df["sample_weight"] = _compute_sample_weights(
-                    df["season_end_year"].to_numpy(dtype="float64"),
-                    decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
-                )
-                frames[k] = df
-            else:
-                df["sample_weight"] = 1.0
-                frames[k] = df
 
-        # Stacking: OOF minutes predictions to feed other models
-        if not frames["minutes"].empty:
-            mdf = frames["minutes"].copy()
-            # Build features as in _fit_minutes_model
-            min_features = [
-                "is_home","season_end_year","season_decade",
-                "team_recent_pace","team_off_strength","team_def_strength","team_recent_winrate",
-                "opp_recent_pace","opp_off_strength","opp_def_strength","opp_recent_winrate",
-                "match_off_edge","match_def_edge","match_pace_sum","winrate_diff",
-                "oof_ml_prob","oof_spread_pred","starter_flag",
-                "min_prev_mean5","min_prev_mean10","min_prev_last1",
-            ]
-            X_full = mdf[min_features].apply(pd.to_numeric, errors="coerce").fillna(0.0).astype("float32")
-            # Detect minutes label column from common aliases present in minutes_df
-            _min_aliases = ["numMinutes", "minutes", "mins", "min", "MIN"]
-            _min_cols = [c for c in mdf.columns if c in _min_aliases]
-            if _min_cols:
-                _min_col_name = _min_cols[0]
+            # Filter game context to window
+            context_window = context_map[context_map["season_end_year"].isin(window_seasons)].copy()
+
+            # Filter OOF games to window (oof_games only has gid, need to filter by gid from context)
+            window_gids = set(context_window['gid'].unique())
+            oof_window = oof_games[oof_games['gid'].isin(window_gids)].copy()
+
+            # Filter priors to window (±1 for context)
+            padded_seasons = window_seasons | {start_year-1, end_year+1}
+            priors_window = priors_players[
+                priors_players["season_for_game"].isin(padded_seasons)
+            ].copy() if priors_players is not None and not priors_players.empty else None
+
+            print(f"Window data: {len(context_window):,} games, {len(priors_window) if priors_window is not None else 0:,} player-season priors")
+
+            # Build frames for this window (window_seasons triggers internal filtering)
+            frames = build_players_from_playerstats(
+                player_data_path,
+                context_window,
+                oof_window,
+                verbose=verbose,
+                priors_players=priors_window,
+                window_seasons=window_seasons
+            )
+
+            # Load historical player props for this window
+            print(_sec(f"Loading player props for {start_year}-{end_year}"))
+            player_props_cache = Path("data/historical_player_props_cache.csv")
+
+            # Filter raw player data to window for prop fetching
+            raw_players_df = pd.read_csv(player_data_path, low_memory=False)
+            date_col = [c for c in raw_players_df.columns if 'date' in c.lower()][0] if any('date' in c.lower() for c in raw_players_df.columns) else None
+
+            if date_col:
+                raw_players_df[date_col] = pd.to_datetime(raw_players_df[date_col], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
+                raw_players_df['season_end_year'] = _season_from_date(raw_players_df[date_col])
+                raw_players_df_window = raw_players_df[raw_players_df["season_end_year"].isin(window_seasons)]
             else:
-                # Fallback: pick the last column not in features/keys
-                exclude = set(min_features + ["gid_key","pid_key","__order_date__","sample_weight"]) \
-                          | set([c for c in mdf.columns if c.lower() in ("gameid","gid","playerid","personid","pid")])
-                candidates = [c for c in mdf.columns if c not in exclude]
-                _min_col_name = candidates[-1] if candidates else mdf.columns[-1]
-            y_full = pd.to_numeric(mdf[_min_col_name], errors="coerce").astype(float).values
-            w_full = pd.to_numeric(mdf.get("sample_weight", pd.Series(np.ones(len(mdf)))), errors="coerce").fillna(1.0).values
-            order = pd.to_datetime(mdf.get("__order_date__", pd.NaT), errors='coerce')
-            idx_sorted = order.sort_values(na_position="last", kind="mergesort").index if order is not None else X_full.index
-            X_sorted = X_full.loc[idx_sorted]
-            y_sorted = y_full[idx_sorted]
-            w_sorted = w_full[idx_sorted]
-            n = len(X_sorted)
-            folds = 5
-            fold_sizes = [n // folds] * folds
-            for i in range(n % folds): fold_sizes[i] += 1
-            splits = []
-            start = 0
-            for fs in fold_sizes:
-                end = start + fs; splits.append((start, end)); start = end
-            oof = np.full(n, np.nan, dtype=np.float32)
-            for kf, (val_start, val_end) in enumerate(splits):
-                if val_start == 0: continue
-                tr = slice(0, val_start); vl = slice(val_start, val_end)
-                X_tr, y_tr, w_tr = X_sorted.iloc[tr,:], y_sorted[tr], w_sorted[tr]
-                X_vl = X_sorted.iloc[vl,:]
-                if _HAS_LGB:
-                    reg = lgb.LGBMRegressor(objective="regression", learning_rate=0.05, num_leaves=31,
-                                             n_estimators=800, random_state=seed + 100 + kf, n_jobs=-1,
-                                             colsample_bytree=0.9, subsample=0.8, subsample_freq=5,
-                                             force_col_wise=True, verbosity=-1)
+                raw_players_df_window = raw_players_df
+
+            historical_player_props = load_or_fetch_historical_player_props(
+                players_df=raw_players_df_window,
+                api_key=THEODDS_API_KEY,
+                cache_path=player_props_cache,
+                verbose=verbose,
+                max_requests=100
+            )
+
+            # Merge player props into frames
+            if not historical_player_props.empty:
+                for stat_name, stat_df in frames.items():
+                    if stat_df is None or stat_df.empty:
+                        continue
+
+                    prop_type_map = {
+                        'points': 'points',
+                        'rebounds': 'rebounds',
+                        'assists': 'assists',
+                        'threes': 'threes',
+                        'minutes': None
+                    }
+
+                    prop_type = prop_type_map.get(stat_name)
+                    if prop_type is None:
+                        continue
+
+                    stat_props = historical_player_props[historical_player_props['prop_type'] == prop_type].copy()
+                    if stat_props.empty:
+                        continue
+
+                    # Prepare merge columns
+                    if 'date' in stat_df.columns:
+                        stat_df['date_str'] = pd.to_datetime(stat_df['date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                    else:
+                        continue
+
+                    stat_props['date_str'] = stat_props['date'].astype(str)
+
+                    # Normalize names
+                    stat_df['player_name_norm'] = stat_df.get('playerName', stat_df.get('player_name', '')).str.lower().str.strip()
+                    stat_props['player_name_norm'] = stat_props['player_name'].str.lower().str.strip()
+
+                    # Merge
+                    before_merge = len(stat_df)
+                    stat_df = stat_df.merge(
+                        stat_props[['date_str', 'player_name_norm', 'market_line', 'market_over_odds', 'market_under_odds']],
+                        on=['date_str', 'player_name_norm'],
+                        how='left'
+                    )
+
+                    props_matched = stat_df['market_line'].notna().sum()
+                    print(f"- {stat_name}: merged {props_matched:,} / {before_merge:,} prop odds ({props_matched/before_merge*100:.1f}%)")
+
+                    # Clean up
+                    stat_df = stat_df.drop(columns=['date_str', 'player_name_norm'], errors='ignore')
+                    frames[stat_name] = stat_df
+
+            # Era filter + weights per frame
+            player_cut = _parse_season_cutoff(args.player_season_cutoff, kind="player")
+            for k, df in list(frames.items()):
+                if df is None or df.empty:
+                    continue
+                if "season_end_year" in df.columns:
+                    before = len(df)
+                    df = df[(df["season_end_year"].fillna(player_cut)) >= player_cut].reset_index(drop=True)
+                    frames[k] = df
+                    if verbose:
+                        print(f"- {k}: filtered by season >= {player_cut}: {before:,} -> {len(df):,}")
+                    # weights
+                    df["sample_weight"] = _compute_sample_weights(
+                        df["season_end_year"].to_numpy(dtype="float64"),
+                        decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+                    )
+                    frames[k] = df
                 else:
-                    reg = HistGradientBoostingRegressor(learning_rate=0.06, max_depth=None, max_iter=400,
-                                                         random_state=seed + 100 + kf, validation_fraction=0.2,
-                                                         early_stopping=True)
-                reg.fit(X_tr, y_tr, sample_weight=w_tr)
-                oof[val_start:val_end] = reg.predict(X_vl)
-            # Place back in original order
-            oof_full = pd.Series(np.nan, index=mdf.index, dtype="float32")
-            oof_full.loc[idx_sorted] = oof
-            mdf["minutes_oof"] = oof_full.fillna(mdf[_min_col_name].median() if len(mdf) else 24.0).astype("float32")
-            frames["minutes"] = mdf
-            # Merge minutes_oof into other frames
-            add_cols = mdf[["gid_key","pid_key","minutes_oof"]].dropna(subset=["gid_key","pid_key"]).copy()
-            for key in ["points","rebounds","assists","threes"]:
-                dfk = frames.get(key)
-                if dfk is None or dfk.empty: continue
-                frames[key] = dfk.merge(add_cols, on=["gid_key","pid_key"], how="left")
+                    df["sample_weight"] = 1.0
+                    frames[k] = df
 
-        print(_sec("Training player models"))
-        # Minutes
-        minutes_model, m_metrics = _fit_minutes_model(frames.get("minutes", pd.DataFrame()), seed=seed + 10, verbose=verbose)
-        with open(models_dir / "minutes_model.pkl", "wb") as f:
-            pickle.dump(minutes_model, f)
-        player_metrics["minutes"] = m_metrics
+            # Train models for this window
+            print(_sec(f"Training models for {start_year}-{end_year}"))
 
-        # If minutes missing in stat frames, inject a simple proxy for training convenience
-        for key in ["points", "rebounds", "assists", "threes"]:
-            df = frames.get(key, pd.DataFrame())
-            if not df.empty and "minutes" not in df.columns and not frames["minutes"].empty:
-                df["minutes"] = frames["minutes"]["min_prev_mean10"].median() if "min_prev_mean10" in frames["minutes"].columns else 24.0
-                frames[key] = df
+            minutes_model, m_metrics = _fit_minutes_model(frames.get("minutes", pd.DataFrame()), seed=seed + 10, verbose=verbose)
+            points_model, points_sigma_model, p_metrics = _fit_stat_model(frames.get("points", pd.DataFrame()), seed=seed + 20, verbose=verbose, name="points")
+            rebounds_model, rebounds_sigma_model, r_metrics = _fit_stat_model(frames.get("rebounds", pd.DataFrame()), seed=seed + 30, verbose=verbose, name="rebounds")
+            assists_model, assists_sigma_model, a_metrics = _fit_stat_model(frames.get("assists", pd.DataFrame()), seed=seed + 40, verbose=verbose, name="assists")
+            threes_model, threes_sigma_model, t_metrics = _fit_stat_model(frames.get("threes", pd.DataFrame()), seed=seed + 50, verbose=verbose, name="threes")
 
-        # Points
-        points_model, points_sigma_model, p_metrics = _fit_stat_model(frames.get("points", pd.DataFrame()), seed=seed + 20, verbose=verbose, name="points")
-        with open(models_dir / "points_model.pkl", "wb") as f:
-            pickle.dump(points_model, f)
-        if points_sigma_model is not None:
-            with open(models_dir / "points_sigma_model.pkl", "wb") as f:
-                pickle.dump(points_sigma_model, f)
-        player_metrics["points"] = p_metrics
+            # Save per-window models
+            window_models = {
+                'minutes': minutes_model,
+                'points': points_model,
+                'rebounds': rebounds_model,
+                'assists': assists_model,
+                'threes': threes_model,
+                'points_sigma': points_sigma_model,
+                'rebounds_sigma': rebounds_sigma_model,
+                'assists_sigma': assists_sigma_model,
+                'threes_sigma': threes_sigma_model,
+                'window_seasons': list(window_seasons),
+                'metrics': {
+                    'minutes': m_metrics,
+                    'points': p_metrics,
+                    'rebounds': r_metrics,
+                    'assists': a_metrics,
+                    'threes': t_metrics
+                }
+            }
 
-        # Rebounds
-        rebounds_model, rebounds_sigma_model, r_metrics = _fit_stat_model(frames.get("rebounds", pd.DataFrame()), seed=seed + 21, verbose=verbose, name="rebounds")
-        with open(models_dir / "rebounds_model.pkl", "wb") as f:
-            pickle.dump(rebounds_model, f)
-        if rebounds_sigma_model is not None:
-            with open(models_dir / "rebounds_sigma_model.pkl", "wb") as f:
-                pickle.dump(rebounds_sigma_model, f)
-        player_metrics["rebounds"] = r_metrics
+            with open(cache_path, 'wb') as f:
+                pickle.dump(window_models, f)
 
-        # Assists
-        assists_model, assists_sigma_model, a_metrics = _fit_stat_model(frames.get("assists", pd.DataFrame()), seed=seed + 22, verbose=verbose, name="assists")
-        with open(models_dir / "assists_model.pkl", "wb") as f:
-            pickle.dump(assists_model, f)
-        if assists_sigma_model is not None:
-            with open(models_dir / "assists_sigma_model.pkl", "wb") as f:
-                pickle.dump(assists_sigma_model, f)
-        player_metrics["assists"] = a_metrics
+            # Save metadata
+            meta = {
+                'seasons': list(map(int, window_seasons)),
+                'start_year': start_year,
+                'end_year': end_year,
+                'trained_date': datetime.now().isoformat(),
+                'num_player_games': sum(len(df) for df in frames.values() if df is not None and not df.empty),
+                'is_current_season': is_current,
+                'metrics': {k: {mk: float(mv) for mk, mv in v.items()} if v else {} for k, v in window_models['metrics'].items()}
+            }
 
-        # Threes
-        threes_model, threes_sigma_model, t_metrics = _fit_stat_model(frames.get("threes", pd.DataFrame()), seed=seed + 23, verbose=verbose, name="threes")
-        with open(models_dir / "threes_model.pkl", "wb") as f:
-            pickle.dump(threes_model, f)
-        if threes_sigma_model is not None:
-            with open(models_dir / "threes_sigma_model.pkl", "wb") as f:
-                pickle.dump(threes_sigma_model, f)
-        player_metrics["threes"] = t_metrics
+            with open(cache_meta_path, 'w') as f:
+                json.dump(meta, f, indent=2)
+
+            print(f"[OK] Player models for {start_year}-{end_year} saved to {cache_path}")
+
+            # Free memory before next window
+            del context_window, oof_window, priors_window, frames, raw_players_df, raw_players_df_window
+            del minutes_model, points_model, rebounds_model, assists_model, threes_model
+            del points_sigma_model, rebounds_sigma_model, assists_sigma_model, threes_sigma_model
+            gc.collect()
+
+            print(f"Memory freed for next window")
+
+        # Save global models using most recent window (backward compatibility)
+        print("\n" + "="*70)
+        print("Saving global models (using most recent window)")
+        print("="*70)
+
+        latest_window = max(windows_to_process, key=lambda x: x['end_year'])
+        latest_cache = f"{cache_dir}/player_models_{latest_window['start_year']}_{latest_window['end_year']}.pkl"
+
+        if os.path.exists(latest_cache):
+            with open(latest_cache, 'rb') as f:
+                latest_models = pickle.load(f)
+
+            for stat_name in ['minutes', 'points', 'rebounds', 'assists', 'threes']:
+                if stat_name in latest_models:
+                    model_path = models_dir / f"{stat_name}_model.pkl"
+                    with open(model_path, 'wb') as f:
+                        pickle.dump(latest_models[stat_name], f)
+                    print(f"  ✓ {stat_name}_model.pkl")
+
+                    if f"{stat_name}_sigma" in latest_models and latest_models[f"{stat_name}_sigma"] is not None:
+                        sigma_model_path = models_dir / f"{stat_name}_sigma_model.pkl"
+                        with open(sigma_model_path, 'wb') as f:
+                            pickle.dump(latest_models[f"{stat_name}_sigma"], f)
+                        print(f"  ✓ {stat_name}_sigma_model.pkl")
+
+            # Aggregate metrics from latest window
+            player_metrics = latest_models.get('metrics', {})
+
+        # Clean up temp files
+        if 'temp_player_csv' in locals():
+            temp_player_csv.unlink(missing_ok=True)
+        if 'temp_combined_csv' in locals():
+            temp_combined_csv.unlink(missing_ok=True)
     else:
         print(_sec("Player models"))
         print("- Skipped (PlayerStatistics.csv not found in Kaggle dataset).")
