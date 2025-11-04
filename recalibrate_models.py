@@ -25,7 +25,6 @@ import numpy as np
 from pathlib import Path
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import train_test_split
-import matplotlib.pyplot as plt
 
 print("=" * 70)
 print("MODEL RECALIBRATION - Fix Overconfidence")
