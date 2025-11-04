@@ -129,7 +129,7 @@ ELG_GATES = {
 # Odds filter
 MIN_ODDS = -500
 MAX_ODDS = +400  # Max odds for single legs
-MAX_PARLAY_ODDS = +1000  # Max combined odds for parlays
+MAX_PARLAY_ODDS = +600  # Max combined odds for parlays (avoid longshots)
 
 # Early-season blending
 PRIOR_GAMES_STRENGTH = 12.0
