@@ -169,9 +169,10 @@ unsettled = df[df['settled'] == False].copy()
 print(f"\n📊 Unsettled predictions: {len(unsettled):,}")
 
 if len(unsettled) > 0:
-    # Convert game_date to datetime
-    unsettled['game_datetime'] = pd.to_datetime(unsettled['game_date'])
-    unsettled['days_ago'] = (datetime.now() - unsettled['game_datetime']).dt.days
+    # Convert game_date to datetime (make timezone-naive to avoid comparison errors)
+    unsettled['game_datetime'] = pd.to_datetime(unsettled['game_date'], utc=False)
+    now_local = pd.Timestamp.now()
+    unsettled['days_ago'] = (now_local - unsettled['game_datetime']).dt.days
     
     # Group by age
     print(f"\n   Age of unsettled predictions:")

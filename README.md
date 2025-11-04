@@ -7,7 +7,9 @@ AI-powered NBA analytics platform using ensemble machine learning, Bayesian infe
 **A comprehensive data science pipeline** that analyzes NBA player performance across Points, Rebounds, Assists, and Three-Pointers using:
 
 ### 🤖 AI/Machine Learning Stack
-- **Multi-Window Ensemble Learning**: 5 temporal windows (3-game to 15-game) trained on 833,000+ player performances (2002-2026)
+- **Multi-Window Ensemble Learning**: 5 temporal windows (3-game to 15-game) with ensemble models for both games and players
+- **Game Models**: Moneyline classifier and spread regressor trained on 65,000+ games (2002-2026)
+- **Player Models**: Points, Rebounds, Assists, Threes models trained on 833,000+ box scores (2002-2026)
 - **Adaptive Meta-Learning**: Dynamic window selector using LightGBM that automatically chooses optimal historical context per prediction
 - **Bayesian Prior Integration**: Player-specific statistical priors incorporating career tendencies, usage rates, and efficiency metrics
 - **Isotonic Regression Calibration**: Real-time probability recalibration using 1,500+ tracked predictions
@@ -242,10 +244,12 @@ Output: Calibrated probability for Kelly sizing
 
 | Component | Dataset | Size | Time Range |
 |-----------|---------|------|------------|
-| **Team Statistics** | Kaggle NBA Historical | 65,000+ games | 2002-2026 seasons |
-| **Player Box Scores** | Kaggle NBA Historical | 833,000+ performances | 2002-2026 seasons |
+| **Team Statistics** | Kaggle NBA Historical | 65,000+ games | **2002-2026 seasons** |
+| **Player Box Scores** | Kaggle NBA Historical | 833,000+ performances | **2002-2026 seasons** |
 | **Bayesian Priors** | Basketball Reference | 7 statistical tables | Career aggregates |
 | **Live Stats** | NBA Official API | Real-time | Current season |
+
+**Note**: Default training uses `--game-season-cutoff 2002` and `--player-season-cutoff 2002` to balance data quality and league evolution.
 
 **Data Processing**:
 - **Memory Optimization**: ~1.2M rows filtered to 833k (2002+) saves ~800MB RAM
@@ -255,16 +259,18 @@ Output: Calibrated probability for Kelly sizing
 
 ### Full Training Pipeline (Monthly Recommended)
 
-**Script**: `train_auto.py` (primary training orchestrator)
+**Primary Script**: `train_auto.py` (main training orchestrator)
+
+This script orchestrates the complete training pipeline by calling `train_ensemble_enhanced.py` which trains ensemble models for both games and players.
 
 ```bash
 # Full training: game models + player ensembles + selectors
 python train_auto.py --verbose --lgb-log-period 50
 
 # What it trains:
-# 1. Game models (moneyline, spread) on 65k games
-# 2. Player models (20 ensemble models) on 833k box scores
-# 3. Meta-learners (4 dynamic selectors)
+# 1. Game models (moneyline classifier, spread regressor) on 65k games
+# 2. Player ensemble models (20 models: 5 windows × 4 stats) on 833k box scores
+# 3. Dynamic window selectors (4 meta-learners for adaptive window selection)
 ```
 
 **Training Specifications**:
