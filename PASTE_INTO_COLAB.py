@@ -147,7 +147,8 @@ print("\n📦 Preparing models for download...")
 !zip -r nba_models_trained.zip models/
 
 print("\n💾 Downloading models to your computer...")
-files.download('nba_models_trained.zip')
+from google.colab import files as colab_files
+colab_files.download('nba_models_trained.zip')
 
 print("\n" + "="*80)
 print("✅ ALL DONE!".center(80))
