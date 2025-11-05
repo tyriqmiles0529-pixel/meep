@@ -1691,6 +1691,7 @@ def build_players_from_playerstats(
     print(f"- gid: {gid_col}  date: {date_col}  pid: {pid_col}  name_full: {name_full_col}  first: {fname_col}  last: {lname_col}")
     print(f"- teamId: {tid_col}  home_flag: {home_col}")
     print(f"- minutes: {min_col}  points: {pts_col}  rebounds: {reb_col}  assists: {ast_col}  threes: {tpm_col}")
+    print(f"  DEBUG: Loaded {len(ps):,} player-game rows from CSV")
 
     # IDs to string (where present)
     for c in [gid_col, pid_col, tid_col]:
