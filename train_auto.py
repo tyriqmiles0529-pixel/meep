@@ -3756,8 +3756,8 @@ def main():
     ap.add_argument("--odds-dataset", type=str, default="cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024",
                     help="Path or Kaggle dataset ref for betting odds (default: cviaxmiwnptr/nba-betting-data-october-2007-to-june-2024)")
     ap.add_argument("--skip-odds", action="store_true", help="Do not load or merge betting odds; keep training independent of odds")
-    ap.add_argument("--priors-dataset", type=str, default="C:/Users/tmiles11/nba_predictor/priors_data",
-                    help="Path or Kaggle dataset ref for Basketball Reference priors bundle (local path or Kaggle dataset)")
+    ap.add_argument("--priors-dataset", type=str, default=None,
+                    help="Path or Kaggle dataset ref for Basketball Reference priors bundle (local path or Kaggle dataset). Optional - training works without priors.")
     ap.add_argument("--enable-window-ensemble", action="store_true", default=True,
                     help="Train 5-year window ensembles (default: enabled, use --no-window-ensemble to disable)")
     ap.add_argument("--no-window-ensemble", action="store_false", dest="enable_window_ensemble",
