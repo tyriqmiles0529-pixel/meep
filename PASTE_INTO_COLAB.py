@@ -36,20 +36,50 @@ try:
         if priors_file.endswith('.zip'):
             # Use Python's zipfile to avoid bash escaping issues with spaces
             import zipfile
-            with zipfile.ZipFile(priors_file, 'r') as zip_ref:
-                zip_ref.extractall('/content/priors_data')
-            priors_path = "/content/priors_data"
-            print(f"✅ Priors data uploaded and extracted to /content/priors_data!")
-            
-            # Show what was extracted
             import os
-            extracted_files = os.listdir('/content/priors_data')
-            print(f"   Extracted {len(extracted_files)} items: {extracted_files[:5]}")
+            
+            # Extract to temp location first
+            temp_extract = '/content/priors_temp'
+            with zipfile.ZipFile(priors_file, 'r') as zip_ref:
+                zip_ref.extractall(temp_extract)
+            
+            # Find CSV files (might be nested)
+            csv_files = []
+            for root, dirs, files in os.walk(temp_extract):
+                for file in files:
+                    if file.endswith('.csv'):
+                        csv_files.append(os.path.join(root, file))
+            
+            if csv_files:
+                # Get the directory containing the CSVs
+                csv_dir = os.path.dirname(csv_files[0])
+                
+                # Move to /content/priors_data
+                import shutil
+                if os.path.exists('/content/priors_data'):
+                    shutil.rmtree('/content/priors_data')
+                shutil.move(csv_dir, '/content/priors_data')
+                
+                priors_path = "/content/priors_data"
+                print(f"✅ Priors data uploaded and extracted!")
+                print(f"   Found {len(csv_files)} CSV files:")
+                for f in csv_files[:6]:
+                    fname = os.path.basename(f)
+                    print(f"     • {fname}")
+            else:
+                print("⚠️  No CSV files found in ZIP. Continuing without priors.")
+                
+            # Cleanup temp
+            if os.path.exists(temp_extract):
+                import shutil
+                shutil.rmtree(temp_extract)
         else:
             print("⚠️  Expected a ZIP file. Continuing without priors.")
 except Exception as e:
-    print(f"ℹ️  No priors uploaded. Training will use defaults (still works!)")
-    print(f"   Error: {e}")
+    print(f"ℹ️  Priors upload failed: {e}")
+    print("   Training will use defaults (still works!)")
+    import traceback
+    traceback.print_exc()
 
 # ==============================================================================
 # 3. DOWNLOAD CODE
