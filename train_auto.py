@@ -3419,21 +3419,31 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool, seasons_t
     """
     Load Basketball Reference priors bundle from 7 CSVs (2 team + 4 player + 1 mapping).
     Returns: (priors_players, priors_teams) with season_for_game = season + 1 (shifted for leakage safety)
-    
+
     Team Priors (2 CSVs):
     - Team Summaries.csv: O/D ratings, pace, SRS, four factors, W/L records
     - Team Abbrev.csv: Team name → abbreviation mapping (loaded separately by load_team_abbrev_map)
-    
+
     Player Priors (4 CSVs, ~60-65 features total):
     - Per 100 Poss.csv: Core rate stats, shooting %, O/D ratings
     - Advanced.csv: PER, TS%, USG%, Win Shares, BPM, VORP
     - Player Shooting.csv: Shot zones, corner 3%, dunks, assisted rates
     - Player Play By Play.csv: Position %, on-court +/-, fouls
-    
+
     These priors provide GENERAL STATISTICAL CONTEXT (O/D ratings, pace, SRS, advanced metrics)
     that augment the rolling game-level features. They are NOT betting odds.
     """
     log(_sec("Loading Basketball Reference priors"), verbose)
+    
+    # DEBUG: List all files in priors directory
+    if verbose:
+        all_files = list(priors_root.glob("**/*"))
+        log(f"DEBUG: Priors root contains {len(all_files)} total files/folders:", True)
+        for f in sorted(all_files)[:20]:  # Show first 20
+            if f.is_file():
+                log(f"  FILE: {f.relative_to(priors_root)} ({f.stat().st_size / 1024:.1f} KB)", True)
+            else:
+                log(f"  DIR:  {f.relative_to(priors_root)}/", True)
 
     # Helper: parse Basketball Reference season values to end-year integers
     def _parse_season_end_year(season_series: pd.Series) -> pd.Series:
