@@ -128,7 +128,7 @@ FEATURE_VERSION = "5.0"  # Phase 5 features: position, starter status, injury tr
 KAGGLE_KEY = "bcb440122af5ae76181e68d48ca728e6"
 
 # ---------------- The Odds API credentials ----------------
-THEODDS_API_KEY = "c98703301e8f89ef2c3648a4373939fd"  # 20K credits/month plan
+THEODDS_API_KEY = os.getenv("THEODDS_API_KEY") or ""  # Set in keys.py or environment
 KAGGLE_USERNAME = "tyriqmiles"
 
 if KAGGLE_KEY and KAGGLE_KEY != "YOUR_KEY_HERE":

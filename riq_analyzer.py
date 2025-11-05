@@ -66,9 +66,9 @@ RUN_TIME_BUDGET_SEC = None  # Disabled - no time limit for analysis
 
 # ========= CONFIG =========
 # API-Sports (schedule + player stats)
-API_KEY = "4979ac5e1f7ae10b1d6b58f1bba01140"
-if not API_KEY or API_KEY == "YOUR_KEY_HERE":
-    API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY")
+API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or ""
+if not API_KEY:
+    print("⚠️  Warning: API_SPORTS_KEY not set. Add to keys.py or environment variable.")
     if not API_KEY:
         raise ValueError("❌ API key not found. Set API_SPORTS_KEY or edit API_KEY in this file.")
 
@@ -102,9 +102,9 @@ SGO_SLEEP_BETWEEN_PAGES_SEC = 0.15
 APISPORTS_ODDS_ENABLED = False
 
 # The Odds API (third prop source)
-THEODDS_API_KEY = "c98703301e8f89ef2c3648a4373939fd"  # UPGRADED to 20K Plan - includes player props!
+THEODDS_API_KEY = os.getenv("THEODDS_API_KEY") or ""  # Set in keys.py or environment
 THEODDS_BASE_URL = "https://api.the-odds-api.com/v4"
-THEODDS_ENABLED = True  # Enable/disable The Odds API
+THEODDS_ENABLED = bool(THEODDS_API_KEY)  # Enable only if key is set
 THEODDS_SPORT = "basketball_nba"  # Sport key
 THEODDS_REGIONS = "us"  # us, uk, eu, au
 THEODDS_MARKETS = "h2h,spreads,totals,player_points,player_rebounds,player_assists,player_threes"  # NOW WITH PLAYER PROPS!
