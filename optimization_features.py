@@ -672,13 +672,26 @@ def add_opponent_strength_features(df: pd.DataFrame,
         std_def = result[col].std()
         result[f'{col}_zscore'] = ((result[col] - mean_def) / (std_def + 1e-6)).fillna(0.0)
         
-        # Categorize opponents (elite, strong, average, weak)
-        result[f'{col}_category'] = pd.cut(
-            result[col],
-            bins=[-np.inf, result[col].quantile(0.25), result[col].quantile(0.50),
-                  result[col].quantile(0.75), np.inf],
-            labels=['elite_def', 'strong_def', 'avg_def', 'weak_def']
-        ).astype(str)
+        # Categorize opponents (elite, strong, average, weak) - handle duplicate edges
+        try:
+            quantiles = [result[col].quantile(q) for q in [0.25, 0.50, 0.75]]
+            # Check if quantiles are unique (monotonically increasing)
+            if len(set(quantiles)) == len(quantiles) and quantiles == sorted(quantiles):
+                result[f'{col}_category'] = pd.cut(
+                    result[col],
+                    bins=[-np.inf] + quantiles + [np.inf],
+                    labels=['elite_def', 'strong_def', 'avg_def', 'weak_def'],
+                    duplicates='drop'
+                ).astype(str)
+            else:
+                # Not enough variance - use median split
+                median_val = result[col].median()
+                result[f'{col}_category'] = result[col].apply(
+                    lambda x: 'strong_def' if x > median_val else 'weak_def'
+                ).astype(str)
+        except (ValueError, TypeError):
+            # Fallback
+            result[f'{col}_category'] = 'avg_def'
     
     return result
 
