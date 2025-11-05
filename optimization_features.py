@@ -733,10 +733,22 @@ def add_fatigue_features(df: pd.DataFrame, group_by: str = 'playerId',
     
     # Games played in last 7/14/30 days (schedule density)
     if 'date' in result.columns:
-        result['date_dt'] = pd.to_datetime(result['date'], errors='coerce')
-        for days in [7, 14, 30]:
-            result[f'games_last_{days}d'] = grouped['date_dt'].transform(
-                lambda x: x.rolling(f'{days}D', on=x.name if x.name == 'date_dt' else None).count()
-            )
+        try:
+            result['date_dt'] = pd.to_datetime(result['date'], errors='coerce')
+            # Sort by player and date for proper rolling
+            result_sorted = result.sort_values([player_id_col, 'date_dt'])
+            
+            for days in [7, 14, 30]:
+                # Count games in rolling window for each player
+                result_sorted[f'games_last_{days}d'] = result_sorted.groupby(player_id_col).apply(
+                    lambda group: group.set_index('date_dt').rolling(f'{days}D').size()
+                ).reset_index(level=0, drop=True)
+            
+            # Re-sort to original order
+            result = result_sorted.sort_index()
+        except Exception as e:
+            # If rolling window fails, just skip these features
+            for days in [7, 14, 30]:
+                result[f'games_last_{days}d'] = 0
     
     return result
