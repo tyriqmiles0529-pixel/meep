@@ -20,11 +20,32 @@ uploaded = files.upload()
 print("✅ Kaggle configured!")
 
 # ==============================================================================
+# 2.5. OPTIONAL: UPLOAD PRIORS DATA (Basketball Reference stats)
+# ==============================================================================
+print("\n📊 OPTIONAL: Upload priors_data folder")
+print("   If you have it, upload the ZIP file now.")
+print("   If not, just skip this and press the cancel/X button.")
+print("   Training works fine without priors!\n")
+
+try:
+    priors_uploaded = files.upload()
+    if priors_uploaded:
+        # Extract priors zip
+        priors_file = list(priors_uploaded.keys())[0]
+        if priors_file.endswith('.zip'):
+            !unzip -q $priors_file -d priors_data
+            print("✅ Priors data uploaded and extracted!")
+        else:
+            print("⚠️  Expected a ZIP file. Continuing without priors.")
+except Exception as e:
+    print("ℹ️  No priors uploaded. Training will use defaults (still works!)")
+
+# ==============================================================================
 # 3. DOWNLOAD CODE
 # ==============================================================================
 print("\n📥 Downloading latest code from GitHub...")
 import os
-!rm -rf meep-main main.zip  # Clean up any old downloads
+!rm -rf meep-main main.zip
 !wget -q https://github.com/tyriqmiles0529-pixel/meep/archive/refs/heads/main.zip
 !unzip -q main.zip
 
@@ -32,7 +53,7 @@ import os
 os.chdir('meep-main')
 print("✅ Code downloaded!")
 print(f"📁 Working directory: {os.getcwd()}")
-print(f"📄 Files: {os.listdir('.')[:10]}")  # Show first 10 files
+print(f"📄 Files: {os.listdir('.')[:10]}")
 
 # ==============================================================================
 # 4. CHECK GPU
@@ -45,7 +66,7 @@ else:
     print("   ⚠️  No GPU - Go to Runtime → Change runtime type → GPU")
 
 # ==============================================================================
-# 5. TRAIN MODELS (This takes 10-15 minutes)
+# 5. TRAIN MODELS (This takes 20-30 minutes)
 # ==============================================================================
 
 # Verify we're in the right place
@@ -56,15 +77,17 @@ if not os.path.exists('train_auto.py'):
     raise FileNotFoundError("train_auto.py not found. Download may have failed.")
 
 print("\n🚀 Starting training...")
-print("⏱️  This will take 10-15 minutes with GPU")
+print("⏱️  This will take 20-30 minutes with GPU")
+print("   (Loading ALL player data for maximum accuracy)")
 print("☕ Get coffee!\n")
 
-!python train_auto.py \
-    --verbose \
-    --fresh \
-    --neural-device gpu \
-    --neural-epochs 50 \
-    --enable-window-ensemble
+# Build command with optional priors
+cmd = "python train_auto.py --verbose --fresh --neural-device gpu --neural-epochs 50 --enable-window-ensemble"
+if os.path.exists('../priors_data'):
+    cmd += " --priors-dataset ../priors_data"
+    print("📊 Using uploaded priors data!")
+
+!{cmd}
 
 print("\n✅ TRAINING COMPLETE!")
 
@@ -81,7 +104,6 @@ print("\n📦 Preparing models for download...")
 !zip -r nba_models_trained.zip models/
 
 print("\n💾 Downloading models to your computer...")
-from google.colab import files
 files.download('nba_models_trained.zip')
 
 print("\n" + "="*80)
