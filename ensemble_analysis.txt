@@ -1,16 +1,16 @@
 Enhanced Ensemble Analysis
 ==================================================
 
-Total Refits: 1621
+Total Refits: 1622
 Calibration Mode: global
 Refit Frequency: 20 games
 
 Coefficient Ranges (first 4 features: Ridge, Elo, FF, LGB):
-  Ridge          : [-0.3363,  0.7686], mean =  0.2688
-  Elo            : [-0.9072,  1.5438], mean = -0.0430
-  Four Factors   : [-0.3363,  0.7686], mean =  0.2688
-  LGB            : [-0.4211,  1.4425], mean =  0.6248
+  Ridge          : [-0.3544,  0.8177], mean =  0.3130
+  Elo            : [-0.9187,  1.6421], mean = -0.0405
+  Four Factors   : [-0.3544,  0.8177], mean =  0.3130
+  LGB            : [-0.4607,  1.2531], mean =  0.5530
 
 Coefficient Trends (Early vs Late Season):
-  Early season avg: ['0.2643', '-0.1121', '0.2643', '0.6361']
-  Late season avg:  ['0.2845', '0.0352', '0.2845', '0.5198']
+  Early season avg: ['0.3093', '-0.1137', '0.3093', '0.5729']
+  Late season avg:  ['0.3215', '0.0313', '0.3215', '0.4505']
