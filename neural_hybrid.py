@@ -340,7 +340,7 @@ class NeuralHybridPredictor:
         Make predictions using hybrid model.
         
         Args:
-            X: Input features (DataFrame)
+            X: Input features (DataFrame or numpy array)
             return_uncertainty: If True, also return sigma (uncertainty estimate)
         
         Returns:
@@ -348,6 +348,12 @@ class NeuralHybridPredictor:
         """
         if self.lgbm is None:
             raise ValueError("Model not trained yet. Call fit() first.")
+        
+        # Convert to DataFrame if numpy array
+        if isinstance(X, np.ndarray):
+            if self.feature_names is None:
+                raise ValueError("Cannot predict with numpy array - feature names not set")
+            X = pd.DataFrame(X, columns=self.feature_names)
         
         # If TabNet available, use hybrid prediction
         if self.tabnet is not None and TABNET_AVAILABLE:

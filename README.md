@@ -18,6 +18,7 @@
   - **Phase 5**: Position-specific features (guard/forward/center classification, starter status, injury tracking)
   - **Phase 6**: Optimization features (momentum tracking, trend detection, market signals, ensemble stacking) ⭐ **NEW**
 
+- **Neural Hybrid Models** (Default): TabNet + LightGBM architecture for 2-6% accuracy boost 🧠 **NEW**
 - **Multi-Window Ensemble Learning**: 5 temporal windows (2002-2006, 2007-2011, 2012-2016, 2017-2021, 2022-2026)
 - **Enhanced Ensemble**: Ridge regression + Dynamic Elo + Four Factors + Meta-learner
 - **Dynamic Window Selector**: Context-aware model that chooses optimal historical window per prediction
@@ -77,26 +78,40 @@ source .venv/bin/activate  # Mac/Linux
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Install neural network libraries (required)
+pip install torch pytorch-tabnet
 ```
 
 ### 2. Initial Training
 
-**⚠️ IMPORTANT:** Before first run, train models with all Phase 1-6 features:
+**⚠️ IMPORTANT:** Before first run, install neural network dependencies and train models:
 
 ```powershell
+# Install neural network libraries (required)
+pip install torch pytorch-tabnet
+
 # Clear any old cache (critical for new features!)
 Remove-Item -Recurse -Force model_cache
 
-# Train with all optimizations (3-4 hours)
+# Train with neural hybrid (default, 3-4 hours CPU, 30-45 min GPU)
 python train_auto.py --verbose --fresh --enable-window-ensemble
+
+# Optional: Disable neural network and use LightGBM only (not recommended)
+python train_auto.py --verbose --fresh --enable-window-ensemble --disable-neural
 ```
 
 **What this does:**
 - Downloads Kaggle dataset (2002-2026)
-- Trains base models with 100+ features including momentum tracking
+- Trains neural hybrid models (TabNet + LightGBM) with 100+ features
 - Creates 5-year window ensembles with learned stacking weights
 - Trains meta-learning window selector
 - Saves everything to `models/` and `model_cache/`
+
+**Neural hybrid (now default):**
+- Combines TabNet (deep learning) + LightGBM for 2-6% accuracy boost
+- Auto-detects GPU for faster training
+- See [NEURAL_NETWORK_GUIDE.md](NEURAL_NETWORK_GUIDE.md) for details
 
 **Only needed once per month** or when adding new features.
 

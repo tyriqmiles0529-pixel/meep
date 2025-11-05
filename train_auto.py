@@ -65,6 +65,8 @@ from optimization_features import (
     add_opponent_strength_features,
     add_fatigue_features
 )
+from neural_hybrid import NeuralHybridPredictor, TABNET_AVAILABLE, TORCH_AVAILABLE
+from phase7_features import add_phase7_features
 
 import numpy as np
 import pandas as pd
@@ -2827,6 +2829,54 @@ def build_players_from_playerstats(
     
     # Add market signal features (if available)
     base_ctx_cols.extend(["is_steam_spread", "is_steam_total"])
+    
+    # ===========================================================================
+    # ADD PHASE 7 FEATURES: Situational Context & Adaptive Temporal
+    # ===========================================================================
+    print("\n🚀 Adding Phase 7 features (situational context, opponent history, adaptive weights)...")
+    try:
+        ps_join = add_phase7_features(
+            ps_join,
+            stat_cols=[pts_col, reb_col, ast_col, three_col] if pts_col else [],
+            season_col='season_end_year',
+            date_col=date_col
+        )
+        
+        # Add Phase 7 feature names to base_ctx_cols
+        phase7_features = [
+            # Season context
+            'games_into_season', 'games_remaining_in_season', 'is_early_season',
+            'is_late_season', 'is_mid_season', 'season_fatigue_factor',
+            # Schedule density
+            'days_since_last_game', 'games_in_last_7_days', 'avg_rest_days_L5', 'is_compressed_schedule',
+            # Revenge games
+            'is_revenge_game'
+        ]
+        
+        # Opponent history features (per stat)
+        for stat in [pts_col, reb_col, ast_col, three_col]:
+            if stat:
+                phase7_features.extend([
+                    f'{stat}_vs_opponent_career',
+                    f'{stat}_vs_opponent_L3',
+                    f'{stat}_vs_opponent_trend'
+                ])
+        
+        # Adaptive temporal features (per stat, per window)
+        for stat in [pts_col, reb_col, ast_col, three_col]:
+            if stat:
+                for window in [5, 10, 15]:
+                    phase7_features.extend([
+                        f'{stat}_adaptive_L{window}',
+                        f'{stat}_consistency_L{window}'
+                    ])
+        
+        base_ctx_cols.extend(phase7_features)
+        print(f"✅ Phase 7 features added! Total new features: {len(phase7_features)}")
+        
+    except Exception as e:
+        print(f"⚠️ Phase 7 feature addition failed: {e}")
+        print("   Continuing without Phase 7 features...")
 
     # Filter to only columns that actually exist in ps_join
     base_ctx_cols = [c for c in base_ctx_cols if c in ps_join.columns]
@@ -2939,7 +2989,7 @@ def _fit_minutes_model(df: pd.DataFrame, seed: int, verbose: bool) -> Tuple[obje
     print(f"- RMSE={_fmt(rmse)}, MAE={_fmt(mae)}")
     return reg, {"rows": int(n), "rmse": rmse, "mae": mae}
 
-def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tuple[object, Optional[object], Dict[str, float]]:
+def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str, use_neural: bool = False, neural_epochs: int = 100, use_gpu: bool = False) -> Tuple[object, Optional[object], Dict[str, float]]:
     if df.empty:
         mdl = DummyRegressor(strategy="mean").fit([[0]], [0.0])
         return mdl, None, {"rows": 0, "rmse": float("nan"), "mae": float("nan")}
@@ -3026,9 +3076,30 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str) -> Tu
     n = len(X)
     split = max(1, min(int(n * 0.8), n - 1))
     X_tr, X_val = X.iloc[:split, :], X.iloc[split:, :]
-    y_tr, y_val = y[:split], y[split:]
+    y_tr, y_val = pd.Series(y[:split]), pd.Series(y[split:])
     w_tr, w_val = w[:split], w[split:]
 
+    # Use neural hybrid if requested and available
+    if use_neural and TABNET_AVAILABLE and TORCH_AVAILABLE:
+        print(f"\n{'='*60}")
+        print(f"Training Neural Hybrid Model for {name}")
+        print(f"{'='*60}")
+        
+        model = NeuralHybridPredictor(name, use_gpu=use_gpu)
+        model.fit(X_tr, y_tr, X_val, y_val, epochs=neural_epochs, batch_size=1024)
+        
+        y_pred = model.predict(X_val)
+        rmse = float(math.sqrt(mean_squared_error(y_val, y_pred))) if len(y_pred) else float("nan")
+        mae = float(mean_absolute_error(y_val, y_pred)) if len(y_pred) else float("nan")
+        
+        # Get sigma model from neural hybrid
+        reg_sig = model.sigma_model
+        
+        print(_sec(f"{name.capitalize()} neural hybrid metrics (validation)"))
+        print(f"- RMSE={_fmt(rmse)}, MAE={_fmt(mae)}")
+        return model, reg_sig, {"rows": int(n), "rmse": rmse, "mae": mae}
+
+    # Fallback to LightGBM
     if _HAS_LGB:
         # PHASE 1: Heavy regularization to prevent overfitting with volume+efficiency features
         reg = lgb.LGBMRegressor(
@@ -3664,6 +3735,9 @@ def main():
     ap.add_argument("--fresh", action="store_true", help="Copy CSVs into a new per-run folder to avoid any stale artifacts")
     ap.add_argument("--lgb-log-period", type=int, default=0, help="Print LightGBM eval metrics every N iterations (0 = silent)")
     ap.add_argument("--n-jobs", type=int, default=-1, help="Threads for LightGBM/HistGBM (-1=all cores). Reduce to lower RAM usage.")
+    ap.add_argument("--disable-neural", action="store_true", help="Disable neural hybrid and use only LightGBM (not recommended)")
+    ap.add_argument("--neural-epochs", type=int, default=100, help="Number of epochs for TabNet training (default: 100)")
+    ap.add_argument("--neural-device", type=str, default="auto", choices=["auto", "cpu", "gpu"], help="Device for neural training: auto (detect GPU), cpu, or gpu")
 
     # Era controls
     ap.add_argument("--game-season-cutoff", type=str, default="2002",
@@ -3749,6 +3823,39 @@ def main():
     print(f"  • Time-decay weights: {args.decay} decay, {args.min_weight} min, {args.lockout_weight}x lockout penalty")
     print(f"  • Rest/B2B features: {'Disabled' if args.skip_rest else 'Enabled'}")
     print(f"  • LightGBM logging: {'Silent' if args.lgb_log_period == 0 else f'Every {args.lgb_log_period} iterations'}")
+    
+    # Neural network configuration (now default)
+    use_neural = not args.disable_neural
+    
+    # Determine device
+    use_gpu = False
+    if args.neural_device == "gpu":
+        use_gpu = True
+    elif args.neural_device == "auto":
+        # Auto-detect GPU
+        if TORCH_AVAILABLE:
+            import torch
+            use_gpu = torch.cuda.is_available()
+    
+    if use_neural:
+        if TABNET_AVAILABLE and TORCH_AVAILABLE:
+            print(f"  • 🧠 Neural Hybrid: ENABLED (default)")
+            print(f"    - TabNet + LightGBM architecture")
+            print(f"    - Epochs: {args.neural_epochs}")
+            if TORCH_AVAILABLE:
+                import torch
+                device_info = "GPU (CUDA)" if use_gpu and torch.cuda.is_available() else "CPU"
+                print(f"    - Device: {device_info}")
+            else:
+                print(f"    - Device: CPU")
+        else:
+            print(f"  • 🧠 Neural Hybrid: ENABLED but libraries missing")
+            print(f"    - PyTorch: {'✓' if TORCH_AVAILABLE else '✗ (pip install torch)'}")
+            print(f"    - TabNet: {'✓' if TABNET_AVAILABLE else '✗ (pip install pytorch-tabnet)'}")
+            print(f"    - ⚠️  Falling back to LightGBM only")
+            use_neural = False  # Force disable if libraries missing
+    else:
+        print(f"  • Model: LightGBM only (neural disabled with --disable-neural)")
 
     if kagglehub is None:
         raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
@@ -5004,31 +5111,65 @@ def main():
             print(_sec(f"Training models for {start_year}-{end_year}"))
 
             minutes_model, m_metrics = _fit_minutes_model(frames.get("minutes", pd.DataFrame()), seed=seed + 10, verbose=verbose)
-            points_model, points_sigma_model, p_metrics = _fit_stat_model(frames.get("points", pd.DataFrame()), seed=seed + 20, verbose=verbose, name="points")
-            rebounds_model, rebounds_sigma_model, r_metrics = _fit_stat_model(frames.get("rebounds", pd.DataFrame()), seed=seed + 30, verbose=verbose, name="rebounds")
-            assists_model, assists_sigma_model, a_metrics = _fit_stat_model(frames.get("assists", pd.DataFrame()), seed=seed + 40, verbose=verbose, name="assists")
-            threes_model, threes_sigma_model, t_metrics = _fit_stat_model(frames.get("threes", pd.DataFrame()), seed=seed + 50, verbose=verbose, name="threes")
+            points_model, points_sigma_model, p_metrics = _fit_stat_model(frames.get("points", pd.DataFrame()), seed=seed + 20, verbose=verbose, name="points", use_neural=use_neural, neural_epochs=args.neural_epochs, use_gpu=use_gpu)
+            rebounds_model, rebounds_sigma_model, r_metrics = _fit_stat_model(frames.get("rebounds", pd.DataFrame()), seed=seed + 30, verbose=verbose, name="rebounds", use_neural=use_neural, neural_epochs=args.neural_epochs, use_gpu=use_gpu)
+            assists_model, assists_sigma_model, a_metrics = _fit_stat_model(frames.get("assists", pd.DataFrame()), seed=seed + 40, verbose=verbose, name="assists", use_neural=use_neural, neural_epochs=args.neural_epochs, use_gpu=use_gpu)
+            threes_model, threes_sigma_model, t_metrics = _fit_stat_model(frames.get("threes", pd.DataFrame()), seed=seed + 50, verbose=verbose, name="threes", use_neural=use_neural, neural_epochs=args.neural_epochs, use_gpu=use_gpu)
 
             # Save per-window models
-            window_models = {
-                'minutes': minutes_model,
-                'points': points_model,
-                'rebounds': rebounds_model,
-                'assists': assists_model,
-                'threes': threes_model,
-                'points_sigma': points_sigma_model,
-                'rebounds_sigma': rebounds_sigma_model,
-                'assists_sigma': assists_sigma_model,
-                'threes_sigma': threes_sigma_model,
-                'window_seasons': list(window_seasons),
-                'metrics': {
-                    'minutes': m_metrics,
-                    'points': p_metrics,
-                    'rebounds': r_metrics,
-                    'assists': a_metrics,
-                    'threes': t_metrics
+            # Check if we're using neural hybrid models
+            is_neural = isinstance(points_model, NeuralHybridPredictor)
+            
+            if is_neural:
+                # Save neural hybrid models using their own save method
+                cache_base = cache_path.with_suffix('')  # Remove .pkl
+                for prop, model in [('points', points_model), ('rebounds', rebounds_model), 
+                                    ('assists', assists_model), ('threes', threes_model)]:
+                    if isinstance(model, NeuralHybridPredictor):
+                        model.save(cache_base.parent / f"{cache_base.stem}_{prop}.pkl")
+                
+                # Save minutes model separately (not neural)
+                window_models = {
+                    'minutes': minutes_model,
+                    'points': None,  # Saved separately
+                    'rebounds': None,  # Saved separately
+                    'assists': None,  # Saved separately
+                    'threes': None,  # Saved separately
+                    'points_sigma': None,  # Included in neural model
+                    'rebounds_sigma': None,  # Included in neural model
+                    'assists_sigma': None,  # Included in neural model
+                    'threes_sigma': None,  # Included in neural model
+                    'window_seasons': list(window_seasons),
+                    'is_neural': True,
+                    'metrics': {
+                        'minutes': m_metrics,
+                        'points': p_metrics,
+                        'rebounds': r_metrics,
+                        'assists': a_metrics,
+                        'threes': t_metrics
+                    }
                 }
-            }
+            else:
+                window_models = {
+                    'minutes': minutes_model,
+                    'points': points_model,
+                    'rebounds': rebounds_model,
+                    'assists': assists_model,
+                    'threes': threes_model,
+                    'points_sigma': points_sigma_model,
+                    'rebounds_sigma': rebounds_sigma_model,
+                    'assists_sigma': assists_sigma_model,
+                    'threes_sigma': threes_sigma_model,
+                    'window_seasons': list(window_seasons),
+                    'is_neural': False,
+                    'metrics': {
+                        'minutes': m_metrics,
+                        'points': p_metrics,
+                        'rebounds': r_metrics,
+                        'assists': a_metrics,
+                        'threes': t_metrics
+                    }
+                }
 
             with open(cache_path, 'wb') as f:
                 pickle.dump(window_models, f)
@@ -5080,18 +5221,50 @@ def main():
                 with open(latest_cache, 'rb') as f:
                     latest_models = pickle.load(f)
 
-                for stat_name in ['minutes', 'points', 'rebounds', 'assists', 'threes']:
-                    if stat_name in latest_models:
-                        model_path = models_dir / f"{stat_name}_model.pkl"
+                is_neural = latest_models.get('is_neural', False)
+                
+                if is_neural:
+                    # Load neural hybrid models from their separate files
+                    cache_base = Path(latest_cache).with_suffix('')
+                    
+                    # Save minutes model (non-neural)
+                    if 'minutes' in latest_models and latest_models['minutes'] is not None:
+                        model_path = models_dir / "minutes_model.pkl"
                         with open(model_path, 'wb') as f:
-                            pickle.dump(latest_models[stat_name], f)
-                        print(f"  ✓ {stat_name}_model.pkl")
+                            pickle.dump(latest_models['minutes'], f)
+                        print(f"  ✓ minutes_model.pkl")
+                    
+                    # Copy neural hybrid models
+                    for stat_name in ['points', 'rebounds', 'assists', 'threes']:
+                        neural_path = cache_base.parent / f"{cache_base.stem}_{stat_name}.pkl"
+                        if neural_path.exists():
+                            # Load and re-save to models directory
+                            model = NeuralHybridPredictor.load(neural_path)
+                            model_path = models_dir / f"{stat_name}_model.pkl"
+                            model.save(model_path)
+                            print(f"  ✓ {stat_name}_model.pkl (neural hybrid)")
+                            
+                            # TabNet model is saved alongside
+                            tabnet_src = neural_path.parent / f"{neural_path.stem}_tabnet.zip"
+                            tabnet_dst = models_dir / f"{stat_name}_model_tabnet.zip"
+                            if tabnet_src.exists():
+                                import shutil
+                                shutil.copy(tabnet_src, tabnet_dst)
+                                print(f"  ✓ {stat_name}_model_tabnet.zip")
+                else:
+                    # Standard LightGBM models
+                    for stat_name in ['minutes', 'points', 'rebounds', 'assists', 'threes']:
+                        if stat_name in latest_models and latest_models[stat_name] is not None:
+                            model_path = models_dir / f"{stat_name}_model.pkl"
+                            with open(model_path, 'wb') as f:
+                                pickle.dump(latest_models[stat_name], f)
+                            print(f"  ✓ {stat_name}_model.pkl")
 
-                        if f"{stat_name}_sigma" in latest_models and latest_models[f"{stat_name}_sigma"] is not None:
-                            sigma_model_path = models_dir / f"{stat_name}_sigma_model.pkl"
-                            with open(sigma_model_path, 'wb') as f:
-                                pickle.dump(latest_models[f"{stat_name}_sigma"], f)
-                            print(f"  ✓ {stat_name}_sigma_model.pkl")
+                            if f"{stat_name}_sigma" in latest_models and latest_models[f"{stat_name}_sigma"] is not None:
+                                sigma_model_path = models_dir / f"{stat_name}_sigma_model.pkl"
+                                with open(sigma_model_path, 'wb') as f:
+                                    pickle.dump(latest_models[f"{stat_name}_sigma"], f)
+                                print(f"  ✓ {stat_name}_sigma_model.pkl")
 
                 # Aggregate metrics from latest window
                 player_metrics = latest_models.get('metrics', {})
@@ -5139,6 +5312,9 @@ def main():
     else:
         print(f"- { (models_dir / 'spread_model.pkl').as_posix() }")
     print(f"- { (models_dir / 'spread_sigma.json').as_posix() }")
+    
+    print(f"\n💡 View detailed metrics anytime:")
+    print(f"   python show_metrics.py")
     if player_metrics:
         print(f"- { (models_dir / 'minutes_model.pkl').as_posix() }")
         print(f"- { (models_dir / 'points_model.pkl').as_posix() }")
@@ -5148,8 +5324,19 @@ def main():
 
     print(_sec("Summary"))
     print(f"- Games: {len(games_df):,}")
-    print(f"- Moneyline: logloss={_fmt(game_metrics['ml_logloss'])}, Brier={_fmt(game_metrics['ml_brier'])}")
-    print(f"- Spread:    RMSE={_fmt(game_metrics['sp_rmse'])}, MAE={_fmt(game_metrics['sp_mae'])}, sigma={_fmt(game_metrics['spread_sigma'])}")
+    
+    # Display game metrics prominently
+    print(f"\n🏀 GAME PREDICTIONS:")
+    print(f"   Moneyline: logloss={_fmt(game_metrics['ml_logloss'])}, Brier={_fmt(game_metrics['ml_brier'])}")
+    if 'ml_accuracy' in game_metrics:
+        ml_acc = game_metrics['ml_accuracy']
+        print(f"   Moneyline Accuracy: {ml_acc*100:.1f}% {'🟢' if ml_acc >= 0.55 else '🟡' if ml_acc >= 0.52 else '🔴'}")
+    print(f"   Spread:    RMSE={_fmt(game_metrics['sp_rmse'])}, MAE={_fmt(game_metrics['sp_mae'])}, sigma={_fmt(game_metrics['spread_sigma'])}")
+    if 'sp_accuracy' in game_metrics:
+        sp_acc = game_metrics['sp_accuracy']
+        print(f"   Spread Accuracy: {sp_acc*100:.1f}% {'🟢' if sp_acc >= 0.53 else '🟡' if sp_acc >= 0.50 else '🔴'}")
+    
+    print(f"\n👤 PLAYER PROPS:")
     if player_metrics:
         for k, mm in player_metrics.items():
             print(f"- {k.capitalize()}: rows={mm.get('rows')}, RMSE={_fmt(mm.get('rmse'))}, MAE={_fmt(mm.get('mae'))}")

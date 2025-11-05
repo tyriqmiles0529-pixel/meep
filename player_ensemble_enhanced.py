@@ -312,9 +312,18 @@ class PlayerStatEnsemble:
         self.is_fitted = False
 
     def load_lgbm_model(self, model_path: str):
-        """Load pre-trained LightGBM model."""
-        with open(model_path, 'rb') as f:
-            self.lgbm_model = pickle.load(f)
+        """Load pre-trained LightGBM or Neural Hybrid model."""
+        try:
+            # Try loading as neural hybrid first
+            from neural_hybrid import NeuralHybridPredictor
+            if str(model_path).endswith('_tabnet.zip'):
+                # This is a TabNet file, load the corresponding pkl
+                model_path = str(model_path).replace('_tabnet.zip', '.pkl')
+            self.lgbm_model = NeuralHybridPredictor.load(model_path)
+        except:
+            # Fall back to standard pickle loading for LightGBM models
+            with open(model_path, 'rb') as f:
+                self.lgbm_model = pickle.load(f)
 
     def _get_base_predictions(self, features: Dict, player_id: str,
                              rolling_avg: float, baseline: float,
