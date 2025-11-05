@@ -53,6 +53,13 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
+from optimization_features import (
+    MomentumAnalyzer,
+    MetaWindowSelector,
+    MarketSignalAnalyzer,
+    EnsembleStacker,
+    add_all_optimization_features
+)
 
 import numpy as np
 import pandas as pd
