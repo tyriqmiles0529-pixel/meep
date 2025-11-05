@@ -2252,7 +2252,9 @@ def build_players_from_playerstats(
             home_pts = ps_join[ps_join["is_home"] == 1].groupby(pid_col)[pts_col].mean()
             away_pts = ps_join[ps_join["is_home"] == 0].groupby(pid_col)[pts_col].mean()
             home_adv_ratio = (home_pts / away_pts.replace(0, np.nan)).fillna(1.0).clip(0.5, 2.0)
-            ps_join["player_home_advantage"] = ps_join[pid_col].map(home_adv_ratio).fillna(1.0).astype("float32")
+            # Convert to float first to avoid categorical issues
+            ps_join["player_home_advantage"] = ps_join[pid_col].map(home_adv_ratio).astype("float32", errors='ignore')
+            ps_join["player_home_advantage"] = ps_join["player_home_advantage"].fillna(1.0).astype("float32")
         else:
             ps_join["player_home_advantage"] = 1.0
     else:
@@ -2312,7 +2314,9 @@ def build_players_from_playerstats(
         
         # Map back to ps_join
         position_map = dict(zip(player_avg_stats[pid_col], player_avg_stats['position_inferred']))
-        ps_join['position'] = ps_join[pid_col].map(position_map).fillna('forward')
+        # Map position (handle categorical dtype)
+        ps_join['position'] = ps_join[pid_col].map(position_map)
+        ps_join['position'] = ps_join['position'].astype(str).fillna('forward')
         
         # One-hot encode position
         ps_join['is_guard'] = (ps_join['position'] == 'guard').astype('float32')
