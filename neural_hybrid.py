@@ -69,12 +69,12 @@ class NeuralHybridPredictor:
             'lambda_sparse': 1e-4,        # Sparsity regularization
             'momentum': 0.3,              # Batch norm momentum
             'clip_value': 2.0,            # Gradient clipping
-            'optimizer_fn': None,         # Will use AdamW
+            'optimizer_fn': torch.optim.AdamW if TORCH_AVAILABLE else None,
             'optimizer_params': {
                 'lr': 2e-2,
                 'weight_decay': 1e-5
             },
-            'scheduler_fn': None,         # Will use ReduceLROnPlateau
+            'scheduler_fn': torch.optim.lr_scheduler.ReduceLROnPlateau if TORCH_AVAILABLE else None,
             'scheduler_params': {
                 'mode': 'min',
                 'patience': 5,

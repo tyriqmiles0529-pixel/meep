@@ -2860,8 +2860,8 @@ def build_players_from_playerstats(
             stat_cols.append(reb_col)
         if ast_col and ast_col in ps_join.columns:
             stat_cols.append(ast_col)
-        if threes_col and threes_col in ps_join.columns:
-            stat_cols.append(threes_col)
+        if tpm_col and tpm_col in ps_join.columns:
+            stat_cols.append(tpm_col)
         
         ps_join = add_phase7_features(
             ps_join,
