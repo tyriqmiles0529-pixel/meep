@@ -1656,8 +1656,9 @@ def build_players_from_playerstats(
 
     # MEMORY OPTIMIZATION 1: Filter to seasons >= 2002 immediately after loading
     # This reduces PlayerStatistics from ~1.6M rows (1946-2026) to ~833k rows (2002-2026)
-    # NOTE: season_end_year will be added from games merge, so check date instead
-    if date_col and date_col in ps.columns:
+    # NOTE: Temporarily disabled to debug Colab issue - will filter later after merge
+    # TODO: Re-enable after fixing date parsing for Kaggle dataset
+    if False and date_col and date_col in ps.columns:  # DISABLED FOR NOW
         ps[date_col] = pd.to_datetime(ps[date_col], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
         orig_len = len(ps)
         
