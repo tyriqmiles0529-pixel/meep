@@ -27,14 +27,16 @@ print("   If you have it, upload the ZIP file now.")
 print("   If not, just skip this and press the cancel/X button.")
 print("   Training works fine without priors!\n")
 
+priors_path = None
 try:
     priors_uploaded = files.upload()
     if priors_uploaded:
-        # Extract priors zip
+        # Extract priors zip to /content (before changing directory)
         priors_file = list(priors_uploaded.keys())[0]
         if priors_file.endswith('.zip'):
-            !unzip -q $priors_file -d priors_data
-            print("✅ Priors data uploaded and extracted!")
+            !unzip -q $priors_file -d /content/priors_data
+            priors_path = "/content/priors_data"
+            print("✅ Priors data uploaded and extracted to /content/priors_data!")
         else:
             print("⚠️  Expected a ZIP file. Continuing without priors.")
 except Exception as e:
@@ -83,9 +85,11 @@ print("☕ Get coffee!\n")
 
 # Build command with optional priors
 cmd = "python train_auto.py --verbose --fresh --neural-device gpu --neural-epochs 50 --enable-window-ensemble"
-if os.path.exists('../priors_data'):
-    cmd += " --priors-dataset ../priors_data"
-    print("📊 Using uploaded priors data!")
+if priors_path and os.path.exists(priors_path):
+    cmd += f" --priors-dataset {priors_path}"
+    print(f"📊 Using uploaded priors data from: {priors_path}")
+else:
+    print("ℹ️  No priors data - using defaults")
 
 !{cmd}
 
