@@ -550,3 +550,174 @@ def add_all_optimization_features(
         result = market.add_market_signals(result)
     
     return result
+
+
+# ============================================================================
+# 5. ADDITIONAL OPTIMIZATIONS
+# ============================================================================
+
+def add_variance_features(df: pd.DataFrame, stat_cols: List[str], 
+                         group_by: str = 'playerId', windows: List[int] = [5, 10, 20]) -> pd.DataFrame:
+    """
+    Add variance/consistency features to measure player reliability.
+    
+    High variance = unpredictable (riskier bets)
+    Low variance = consistent (safer bets)
+    """
+    result = df.copy()
+    
+    for stat in stat_cols:
+        if stat not in result.columns:
+            continue
+            
+        grouped = result.groupby(group_by)[stat]
+        
+        for window in windows:
+            # Coefficient of variation (std / mean)
+            rolling_mean = grouped.transform(lambda x: x.rolling(window, min_periods=2).mean())
+            rolling_std = grouped.transform(lambda x: x.rolling(window, min_periods=2).std())
+            result[f'{stat}_cv_{window}'] = (rolling_std / (rolling_mean + 1e-6)).fillna(0.0)
+            
+            # Stability score (inverse of CV, capped at 1.0)
+            result[f'{stat}_stability_{window}'] = (1.0 / (1.0 + result[f'{stat}_cv_{window}'])).fillna(0.5)
+    
+    return result
+
+
+def add_ceiling_floor_features(df: pd.DataFrame, stat_cols: List[str],
+                               group_by: str = 'playerId', window: int = 20) -> pd.DataFrame:
+    """
+    Add ceiling (max potential) and floor (minimum expected) features.
+    
+    Useful for prop betting to understand upside/downside risk.
+    """
+    result = df.copy()
+    
+    for stat in stat_cols:
+        if stat not in result.columns:
+            continue
+            
+        grouped = result.groupby(group_by)[stat]
+        
+        # Ceiling = 90th percentile over window
+        result[f'{stat}_ceiling'] = grouped.transform(
+            lambda x: x.rolling(window, min_periods=3).quantile(0.90)
+        ).fillna(0.0)
+        
+        # Floor = 10th percentile over window  
+        result[f'{stat}_floor'] = grouped.transform(
+            lambda x: x.rolling(window, min_periods=3).quantile(0.10)
+        ).fillna(0.0)
+        
+        # Range = ceiling - floor (upside potential)
+        result[f'{stat}_range'] = result[f'{stat}_ceiling'] - result[f'{stat}_floor']
+    
+    return result
+
+
+def add_context_weighted_averages(df: pd.DataFrame, stat_cols: List[str],
+                                  group_by: str = 'playerId',
+                                  context_col: str = 'home') -> pd.DataFrame:
+    """
+    Add context-specific averages (home vs away, vs strong/weak opponents, etc.).
+    
+    Players perform differently in different contexts.
+    """
+    result = df.copy()
+    
+    if context_col not in result.columns:
+        return result
+    
+    for stat in stat_cols:
+        if stat not in result.columns:
+            continue
+        
+        # Calculate context-specific rolling averages
+        for context_val in result[context_col].unique():
+            if pd.isna(context_val):
+                continue
+                
+            # Create mask for this context
+            mask = result[context_col] == context_val
+            
+            # Rolling average within context
+            context_avg = result.loc[mask].groupby(group_by)[stat].transform(
+                lambda x: x.shift(1).rolling(10, min_periods=2).mean()
+            )
+            
+            # Store in new column
+            col_name = f'{stat}_avg_{context_col}_{context_val}'
+            result.loc[mask, col_name] = context_avg
+            
+            # Fill missing with overall average
+            if col_name in result.columns:
+                result[col_name].fillna(result[stat].mean(), inplace=True)
+    
+    return result
+
+
+def add_opponent_strength_features(df: pd.DataFrame, 
+                                   opp_def_cols: List[str] = ['opp_def_rating']) -> pd.DataFrame:
+    """
+    Add features for opponent defensive strength and historical matchup performance.
+    """
+    result = df.copy()
+    
+    for col in opp_def_cols:
+        if col not in result.columns:
+            continue
+        
+        # Normalize opponent defense to z-score
+        mean_def = result[col].mean()
+        std_def = result[col].std()
+        result[f'{col}_zscore'] = ((result[col] - mean_def) / (std_def + 1e-6)).fillna(0.0)
+        
+        # Categorize opponents (elite, strong, average, weak)
+        result[f'{col}_category'] = pd.cut(
+            result[col],
+            bins=[-np.inf, result[col].quantile(0.25), result[col].quantile(0.50),
+                  result[col].quantile(0.75), np.inf],
+            labels=['elite_def', 'strong_def', 'avg_def', 'weak_def']
+        ).astype(str)
+    
+    return result
+
+
+def add_fatigue_features(df: pd.DataFrame, group_by: str = 'playerId',
+                        minutes_col: str = 'minutes') -> pd.DataFrame:
+    """
+    Add fatigue indicators based on recent workload.
+    
+    Heavy minutes + back-to-backs = fatigue risk
+    """
+    result = df.copy()
+    
+    if minutes_col not in result.columns:
+        return result
+    
+    grouped = result.groupby(group_by)
+    
+    # Cumulative minutes over last N games
+    for window in [3, 7, 14]:
+        result[f'cumulative_mins_{window}'] = grouped[minutes_col].transform(
+            lambda x: x.rolling(window, min_periods=1).sum()
+        )
+    
+    # Average minutes per game (recent workload)
+    result['avg_mins_last_7'] = grouped[minutes_col].transform(
+        lambda x: x.rolling(7, min_periods=1).mean()
+    )
+    
+    # Workload spike detector (recent >> season average)
+    season_avg_mins = grouped[minutes_col].transform('mean')
+    result['workload_spike'] = (result['avg_mins_last_7'] / (season_avg_mins + 1)).fillna(1.0)
+    
+    # Games played in last 7/14/30 days (schedule density)
+    if 'date' in result.columns:
+        result['date_dt'] = pd.to_datetime(result['date'], errors='coerce')
+        for days in [7, 14, 30]:
+            result[f'games_last_{days}d'] = grouped['date_dt'].transform(
+                lambda x: x.rolling(f'{days}D', on=x.name if x.name == 'date_dt' else None).count()
+            )
+    
+    return result

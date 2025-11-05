@@ -58,7 +58,12 @@ from optimization_features import (
     MetaWindowSelector,
     MarketSignalAnalyzer,
     EnsembleStacker,
-    add_all_optimization_features
+    add_all_optimization_features,
+    add_variance_features,
+    add_ceiling_floor_features,
+    add_context_weighted_averages,
+    add_opponent_strength_features,
+    add_fatigue_features
 )
 
 import numpy as np
@@ -2401,7 +2406,12 @@ def build_players_from_playerstats(
     # Expected improvement: +5-8% accuracy (trend detection, market signals)
     
     try:
-        from optimization_features import MomentumAnalyzer, MarketSignalAnalyzer
+        from optimization_features import (
+            MomentumAnalyzer, MarketSignalAnalyzer,
+            add_variance_features, add_ceiling_floor_features,
+            add_context_weighted_averages, add_opponent_strength_features,
+            add_fatigue_features
+        )
         
         # 6A. MOMENTUM FEATURES (trend detection across timeframes)
         if verbose:
@@ -2432,7 +2442,42 @@ def build_players_from_playerstats(
             stat_momentum_cols.extend([f'{min_col}_momentum_short', f'{min_col}_momentum_med', 
                                       f'{min_col}_momentum_long', f'{min_col}_acceleration'])
         
-        # 6B. MARKET SIGNAL FEATURES (if betting data available)
+        # 6B. VARIANCE/CONSISTENCY FEATURES (player reliability)
+        if verbose:
+            log("  Adding variance/consistency features...", True)
+        
+        stat_cols_for_variance = [c for c in [pts_col, reb_col, ast_col, min_col] if c and c in ps_join.columns]
+        ps_join = add_variance_features(ps_join, stat_cols_for_variance, pid_col, windows=[5, 10, 20])
+        
+        # 6C. CEILING/FLOOR FEATURES (upside/downside potential)
+        if verbose:
+            log("  Adding ceiling/floor (risk) features...", True)
+        
+        ps_join = add_ceiling_floor_features(ps_join, stat_cols_for_variance, pid_col, window=20)
+        
+        # 6D. CONTEXT-WEIGHTED AVERAGES (home/away splits)
+        if verbose:
+            log("  Adding context-weighted averages...", True)
+        
+        if home_col and home_col in ps_join.columns:
+            ps_join = add_context_weighted_averages(ps_join, stat_cols_for_variance, pid_col, home_col)
+        
+        # 6E. OPPONENT STRENGTH FEATURES
+        if verbose:
+            log("  Adding opponent strength normalization...", True)
+        
+        opp_def_cols = [c for c in ps_join.columns if 'opp_def' in c.lower()]
+        if opp_def_cols:
+            ps_join = add_opponent_strength_features(ps_join, opp_def_cols)
+        
+        # 6F. FATIGUE FEATURES (workload, schedule density)
+        if verbose:
+            log("  Adding fatigue/workload features...", True)
+        
+        if min_col and min_col in ps_join.columns:
+            ps_join = add_fatigue_features(ps_join, pid_col, min_col)
+        
+        # 6G. MARKET SIGNAL FEATURES (if betting data available)
         if 'spread_move' in ps_join.columns or 'total_move' in ps_join.columns:
             if verbose:
                 log("  Adding market signal features (line movement, steam moves)...", True)
@@ -2446,8 +2491,11 @@ def build_players_from_playerstats(
         
         if verbose:
             phase6_created = [c for c in stat_momentum_cols if c in ps_join.columns]
-            log(f"  [DEBUG] Phase 6 features: {len(phase6_created)} momentum features created", True)
+            log(f"  [DEBUG] Phase 6 features: {len(phase6_created)}+ optimization features created", True)
             log(f"    ✓ Momentum tracking for points, rebounds, assists, minutes", True)
+            log(f"    ✓ Variance/consistency + ceiling/floor analysis", True)
+            log(f"    ✓ Context-weighted averages + opponent strength normalization", True)
+            log(f"    ✓ Fatigue/workload tracking", True)
     
     except ImportError as e:
         if verbose:
@@ -2745,6 +2793,37 @@ def build_players_from_playerstats(
                 f"{stat}_acceleration", f"{stat}_hot_streak", f"{stat}_cold_streak"
             ])
     base_ctx_cols.extend(momentum_features)
+    
+    # Add PHASE 6: Variance/consistency features
+    variance_features = []
+    for stat in [pts_col, reb_col, ast_col, min_col]:
+        if stat:
+            for window in [5, 10, 20]:
+                variance_features.extend([f"{stat}_cv_{window}", f"{stat}_stability_{window}"])
+    base_ctx_cols.extend(variance_features)
+    
+    # Add PHASE 6: Ceiling/floor features
+    ceiling_floor_features = []
+    for stat in [pts_col, reb_col, ast_col, min_col]:
+        if stat:
+            ceiling_floor_features.extend([f"{stat}_ceiling", f"{stat}_floor", f"{stat}_range"])
+    base_ctx_cols.extend(ceiling_floor_features)
+    
+    # Add PHASE 6: Context-weighted averages (home/away specific)
+    context_features = []
+    for stat in [pts_col, reb_col, ast_col, min_col]:
+        if stat and home_col:
+            # These will be dynamically named based on home_col values
+            context_features.extend([f"{stat}_avg_{home_col}_0", f"{stat}_avg_{home_col}_1"])
+    base_ctx_cols.extend(context_features)
+    
+    # Add PHASE 6: Fatigue features
+    fatigue_features = [
+        "cumulative_mins_3", "cumulative_mins_7", "cumulative_mins_14",
+        "avg_mins_last_7", "workload_spike",
+        "games_last_7d", "games_last_14d", "games_last_30d"
+    ]
+    base_ctx_cols.extend(fatigue_features)
     
     # Add market signal features (if available)
     base_ctx_cols.extend(["is_steam_spread", "is_steam_total"])
