@@ -4613,23 +4613,42 @@ def main():
         else:
             player_data_path = players_path
 
-        # Get windows from game ensemble (should already exist from game training)
-        if 'windows_to_process' not in locals():
-            # Create windows if not already defined
-            all_seasons = sorted([int(s) for s in games_df["season_end_year"].dropna().unique()])
-            max_year = int(games_df["season_end_year"].max())
-            window_size = 5
-            windows_to_process = []
-            for i in range(0, len(all_seasons), window_size):
-                window_seasons = all_seasons[i:i+window_size]
-                start_year = int(window_seasons[0])
-                end_year = int(window_seasons[-1])
-                windows_to_process.append({
+        # ALWAYS rebuild windows for player models (game ensemble may have skipped some)
+        # Game ensemble caching can result in empty windows_to_process, but player models
+        # still need to check all windows for validity
+        all_seasons = sorted([int(s) for s in games_df["season_end_year"].dropna().unique()])
+        max_year = int(games_df["season_end_year"].max())
+        window_size = 5
+        player_windows_to_process = []
+        
+        for i in range(0, len(all_seasons), window_size):
+            window_seasons = all_seasons[i:i+window_size]
+            start_year = int(window_seasons[0])
+            end_year = int(window_seasons[-1])
+            cache_path_check = f"{cache_dir}/player_models_{start_year}_{end_year}.pkl"
+            is_current_window = max_year in window_seasons
+            
+            # Decide whether to train this window
+            if is_current_window:
+                # Always retrain current season
+                player_windows_to_process.append({
                     'seasons': window_seasons,
                     'start_year': start_year,
                     'end_year': end_year,
-                    'is_current': max_year in window_seasons
+                    'is_current': True
                 })
+            elif not os.path.exists(cache_path_check):
+                # Historical window not cached - need to train
+                player_windows_to_process.append({
+                    'seasons': window_seasons,
+                    'start_year': start_year,
+                    'end_year': end_year,
+                    'is_current': False
+                })
+            else:
+                print(f"[OK] Player window {start_year}-{end_year}: Using existing cache")
+        
+        windows_to_process = player_windows_to_process
 
         # Process each window
         for idx, window_info in enumerate(windows_to_process, 1):
