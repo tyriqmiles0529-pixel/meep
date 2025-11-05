@@ -2839,9 +2839,20 @@ def build_players_from_playerstats(
     # ===========================================================================
     print("\n🚀 Adding Phase 7 features (situational context, opponent history, adaptive weights)...")
     try:
+        # Build stat_cols list safely
+        stat_cols = []
+        if pts_col and pts_col in ps_join.columns:
+            stat_cols.append(pts_col)
+        if reb_col and reb_col in ps_join.columns:
+            stat_cols.append(reb_col)
+        if ast_col and ast_col in ps_join.columns:
+            stat_cols.append(ast_col)
+        if threes_col and threes_col in ps_join.columns:
+            stat_cols.append(threes_col)
+        
         ps_join = add_phase7_features(
             ps_join,
-            stat_cols=[pts_col, reb_col, ast_col, three_col] if pts_col else [],
+            stat_cols=stat_cols,
             season_col='season_end_year',
             date_col=date_col
         )
