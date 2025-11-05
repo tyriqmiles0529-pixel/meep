@@ -71,10 +71,13 @@ class MomentumAnalyzer:
         - cold_streak: consecutive games below threshold (negative)
         """
         def count_streak(x):
+            """Count consecutive values above/below threshold in rolling window."""
             if len(x) == 0:
                 return 0
+            # Convert to numpy array to avoid pandas indexing issues
+            x_arr = np.array(x)
             streak = 0
-            for val in reversed(x):
+            for val in reversed(x_arr):
                 if val > threshold:
                     streak += 1
                 else:
@@ -82,10 +85,13 @@ class MomentumAnalyzer:
             return streak
         
         def count_cold_streak(x):
+            """Count consecutive values below -threshold in rolling window."""
             if len(x) == 0:
                 return 0
+            # Convert to numpy array to avoid pandas indexing issues
+            x_arr = np.array(x)
             streak = 0
-            for val in reversed(x):
+            for val in reversed(x_arr):
                 if val < -threshold:
                     streak -= 1
                 else:
