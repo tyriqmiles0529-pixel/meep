@@ -34,13 +34,22 @@ try:
         # Extract priors zip to /content (before changing directory)
         priors_file = list(priors_uploaded.keys())[0]
         if priors_file.endswith('.zip'):
-            !unzip -q $priors_file -d /content/priors_data
+            # Use Python's zipfile to avoid bash escaping issues with spaces
+            import zipfile
+            with zipfile.ZipFile(priors_file, 'r') as zip_ref:
+                zip_ref.extractall('/content/priors_data')
             priors_path = "/content/priors_data"
-            print("✅ Priors data uploaded and extracted to /content/priors_data!")
+            print(f"✅ Priors data uploaded and extracted to /content/priors_data!")
+            
+            # Show what was extracted
+            import os
+            extracted_files = os.listdir('/content/priors_data')
+            print(f"   Extracted {len(extracted_files)} items: {extracted_files[:5]}")
         else:
             print("⚠️  Expected a ZIP file. Continuing without priors.")
 except Exception as e:
-    print("ℹ️  No priors uploaded. Training will use defaults (still works!)")
+    print(f"ℹ️  No priors uploaded. Training will use defaults (still works!)")
+    print(f"   Error: {e}")
 
 # ==============================================================================
 # 3. DOWNLOAD CODE
