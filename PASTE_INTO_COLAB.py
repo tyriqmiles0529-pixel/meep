@@ -23,13 +23,16 @@ print("✅ Kaggle configured!")
 # 3. DOWNLOAD CODE
 # ==============================================================================
 print("\n📥 Downloading latest code from GitHub...")
+import os
 !rm -rf meep-main main.zip  # Clean up any old downloads
 !wget -q https://github.com/tyriqmiles0529-pixel/meep/archive/refs/heads/main.zip
 !unzip -q main.zip
-%cd meep-main
 
+# Change to the downloaded directory
+os.chdir('meep-main')
 print("✅ Code downloaded!")
-print(f"📁 Working directory: {import os; os.getcwd()}")
+print(f"📁 Working directory: {os.getcwd()}")
+print(f"📄 Files: {os.listdir('.')[:10]}")  # Show first 10 files
 
 # ==============================================================================
 # 4. CHECK GPU
@@ -44,6 +47,14 @@ else:
 # ==============================================================================
 # 5. TRAIN MODELS (This takes 10-15 minutes)
 # ==============================================================================
+
+# Verify we're in the right place
+if not os.path.exists('train_auto.py'):
+    print("❌ ERROR: train_auto.py not found!")
+    print(f"Current directory: {os.getcwd()}")
+    print(f"Files: {os.listdir('.')}")
+    raise FileNotFoundError("train_auto.py not found. Download may have failed.")
+
 print("\n🚀 Starting training...")
 print("⏱️  This will take 10-15 minutes with GPU")
 print("☕ Get coffee!\n")
