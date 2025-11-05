@@ -1677,7 +1677,9 @@ def build_players_from_playerstats(
 
     # MEMORY OPTIMIZATION 2: Filter to window seasons if provided (per-window processing)
     # This reduces from ~833k rows (all seasons) to ~150k per 5-year window (82% reduction!)
-    if window_seasons is not None and date_col and date_col in ps.columns:
+    # NOTE: Also temporarily disabled - the issue is we filter BEFORE parsing dates properly
+    # TODO: Re-enable after fixing date column to have proper season_end_year
+    if False and window_seasons is not None and date_col and date_col in ps.columns:  # DISABLED FOR NOW
         # Compute season_end_year early for filtering
         ps["_temp_season"] = _season_from_date(ps[date_col])
 
