@@ -1660,6 +1660,15 @@ def build_players_from_playerstats(
     if date_col and date_col in ps.columns:
         ps[date_col] = pd.to_datetime(ps[date_col], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
         orig_len = len(ps)
+        
+        # DEBUG: Check date parsing
+        if verbose:
+            valid_dates = ps[date_col].notna().sum()
+            log(f"  DEBUG: Date column parsed - {valid_dates:,} valid dates out of {orig_len:,} rows", True)
+            if valid_dates > 0:
+                date_range = f"{ps[date_col].min()} to {ps[date_col].max()}"
+                log(f"  DEBUG: Date range: {date_range}", True)
+        
         ps = ps[ps[date_col] >= "2002-01-01"].copy()
         if verbose and len(ps) < orig_len:
             memory_saved = (orig_len - len(ps)) * 0.19  # ~0.19 KB per row for PlayerStatistics
