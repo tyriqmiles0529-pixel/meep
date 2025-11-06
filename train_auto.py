@@ -65,7 +65,7 @@ from optimization_features import (
     add_opponent_strength_features,
     add_fatigue_features
 )
-from neural_hybrid import NeuralHybridPredictor, TABNET_AVAILABLE, TORCH_AVAILABLE
+from neural_hybrid import NeuralHybridPredictor, GameNeuralHybrid, TABNET_AVAILABLE, TORCH_AVAILABLE
 from phase7_features import add_phase7_features
 
 import numpy as np
@@ -1413,6 +1413,9 @@ def _fit_game_models(
     folds: int = 5,
     lgb_log_period: int = 0,
     sample_weights: Optional[np.ndarray] = None,
+    use_neural: bool = False,
+    neural_device: str = 'cpu',
+    neural_epochs: int = 25,
 ) -> Tuple[object, Optional[CalibratedClassifierCV], object, float, pd.DataFrame, Dict[str, float]]:
     # Ensure all required GAME_FEATURES are present; add missing with sensible defaults
     missing_cols = [c for c in GAME_FEATURES if c not in games_df.columns]
@@ -1515,50 +1518,71 @@ def _fit_game_models(
     y_sp_tr, y_sp_val = y_sp_sorted[:split], y_sp_sorted[split:]
     w_tr, w_val = w_sorted[:split], w_sorted[split:]
 
-    # LightGBM callbacks for iteration logging (if requested)
-    lgb_callbacks = []
-    if _HAS_LGB and lgb_log_period and lgb_log_period > 0:
-        lgb_callbacks.append(lgb.log_evaluation(period=int(lgb_log_period)))
+    # Neural hybrid path (if enabled)
+    if use_neural and TABNET_AVAILABLE and TORCH_AVAILABLE:
+        # Train neural hybrid models
+        import torch
+        use_gpu = (neural_device == 'gpu') or (neural_device == 'auto' and torch.cuda.is_available())
 
-    if _HAS_LGB:
-        clf_final = lgb.LGBMClassifier(**{**clf_params, "n_estimators": 1000, "random_state": seed})
-        clf_final.fit(
-            X_tr, y_ml_tr, sample_weight=w_tr,
-            eval_set=[(X_val, y_ml_val)],
-            eval_metric="binary_logloss",
-            callbacks=[lgb.early_stopping(80, verbose=bool(lgb_callbacks))] + lgb_callbacks
-        )
-        p_val_raw = clf_final.predict_proba(X_val)[:, 1]
+        # Moneyline model
+        clf_final = GameNeuralHybrid(task='classification', use_gpu=use_gpu)
+        clf_final.fit(X_tr, y_ml_tr, X_val, y_ml_val,
+                     sample_weight=w_tr, epochs=neural_epochs, batch_size=512)
+        p_val_cal = clf_final.predict(X_val)
+        calibrator = None  # Already calibrated internally
 
-        calibrator = CalibratedClassifierCV(clf_final, cv="prefit", method="isotonic")
-        # Isotonic supports sample_weight
-        calibrator.fit(X_val, y_ml_val, sample_weight=w_val)
-        p_val_cal = calibrator.predict_proba(X_val)[:, 1]
-
-        reg_final = lgb.LGBMRegressor(**{**reg_params, "n_estimators": 1000, "random_state": seed})
-        reg_final.fit(
-            X_tr, y_sp_tr, sample_weight=w_tr,
-            eval_set=[(X_val, y_sp_val)],
-            eval_metric="l2",
-            callbacks=[lgb.early_stopping(80, verbose=bool(lgb_callbacks))] + lgb_callbacks
-        )
+        # Spread model
+        reg_final = GameNeuralHybrid(task='regression', use_gpu=use_gpu)
+        reg_final.fit(X_tr, y_sp_tr, X_val, y_sp_val,
+                     sample_weight=w_tr, epochs=neural_epochs, batch_size=512)
         y_pred_val = reg_final.predict(X_val)
+
+    # LightGBM-only path
     else:
-        clf_final = HistGradientBoostingClassifier(
-            learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
-            validation_fraction=0.2, early_stopping=True
-        )
-        clf_final.fit(X_tr, y_ml_tr, sample_weight=w_tr)
-        p_val_raw = clf_final.predict_proba(X_val)[:, 1]
-        calibrator = None
-        p_val_cal = p_val_raw
+        # LightGBM callbacks for iteration logging (if requested)
+        lgb_callbacks = []
+        if _HAS_LGB and lgb_log_period and lgb_log_period > 0:
+            lgb_callbacks.append(lgb.log_evaluation(period=int(lgb_log_period)))
 
-        reg_final = HistGradientBoostingRegressor(
-            learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
-            validation_fraction=0.2, early_stopping=True
-        )
-        reg_final.fit(X_tr, y_sp_tr, sample_weight=w_tr)
-        y_pred_val = reg_final.predict(X_val)
+        if _HAS_LGB:
+            clf_final = lgb.LGBMClassifier(**{**clf_params, "n_estimators": 1000, "random_state": seed})
+            clf_final.fit(
+                X_tr, y_ml_tr, sample_weight=w_tr,
+                eval_set=[(X_val, y_ml_val)],
+                eval_metric="binary_logloss",
+                callbacks=[lgb.early_stopping(80, verbose=bool(lgb_callbacks))] + lgb_callbacks
+            )
+            p_val_raw = clf_final.predict_proba(X_val)[:, 1]
+
+            calibrator = CalibratedClassifierCV(clf_final, cv="prefit", method="isotonic")
+            # Isotonic supports sample_weight
+            calibrator.fit(X_val, y_ml_val, sample_weight=w_val)
+            p_val_cal = calibrator.predict_proba(X_val)[:, 1]
+
+            reg_final = lgb.LGBMRegressor(**{**reg_params, "n_estimators": 1000, "random_state": seed})
+            reg_final.fit(
+                X_tr, y_sp_tr, sample_weight=w_tr,
+                eval_set=[(X_val, y_sp_val)],
+                eval_metric="l2",
+                callbacks=[lgb.early_stopping(80, verbose=bool(lgb_callbacks))] + lgb_callbacks
+            )
+            y_pred_val = reg_final.predict(X_val)
+        else:
+            clf_final = HistGradientBoostingClassifier(
+                learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
+                validation_fraction=0.2, early_stopping=True
+            )
+            clf_final.fit(X_tr, y_ml_tr, sample_weight=w_tr)
+            p_val_raw = clf_final.predict_proba(X_val)[:, 1]
+            calibrator = None
+            p_val_cal = p_val_raw
+
+            reg_final = HistGradientBoostingRegressor(
+                learning_rate=0.06, max_depth=None, max_iter=400, random_state=seed,
+                validation_fraction=0.2, early_stopping=True
+            )
+            reg_final.fit(X_tr, y_sp_tr, sample_weight=w_tr)
+            y_pred_val = reg_final.predict(X_val)
 
     # Metrics
     ml_logloss = float(log_loss(y_ml_val, p_val_cal)) if len(np.unique(y_ml_val)) == 2 else float("nan")
@@ -3807,6 +3831,7 @@ def main():
     ap.add_argument("--disable-neural", action="store_true", help="Disable neural hybrid and use only LightGBM (not recommended)")
     ap.add_argument("--neural-epochs", type=int, default=100, help="Number of epochs for TabNet training (default: 100)")
     ap.add_argument("--neural-device", type=str, default="auto", choices=["auto", "cpu", "gpu"], help="Device for neural training: auto (detect GPU), cpu, or gpu")
+    ap.add_argument("--game-neural", action="store_true", help="Enable neural hybrid for game models (TabNet + LightGBM ensemble)")
 
     # Era controls
     ap.add_argument("--game-season-cutoff", type=str, default="2002",
@@ -4707,18 +4732,27 @@ def main():
         game_weights = np.ones(len(games_df), dtype="float64")
 
     clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
-        games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights
+        games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights,
+        use_neural=args.game_neural, neural_device=args.neural_device, neural_epochs=25
     )
 
 # Save game models
     import pickle
-    with open(models_dir / "moneyline_model.pkl", "wb") as f:
-        pickle.dump(clf_final, f)
-    if calibrator is not None:
-        with open(models_dir / "moneyline_calibrator.pkl", "wb") as f:
-            pickle.dump(calibrator, f)
-    with open(models_dir / "spread_model.pkl", "wb") as f:
-        pickle.dump(reg_final, f)
+    # Neural hybrid models have built-in save() method
+    if isinstance(clf_final, GameNeuralHybrid):
+        clf_final.save(models_dir / "moneyline_model.pkl")
+    else:
+        with open(models_dir / "moneyline_model.pkl", "wb") as f:
+            pickle.dump(clf_final, f)
+        if calibrator is not None:
+            with open(models_dir / "moneyline_calibrator.pkl", "wb") as f:
+                pickle.dump(calibrator, f)
+
+    if isinstance(reg_final, GameNeuralHybrid):
+        reg_final.save(models_dir / "spread_model.pkl")
+    else:
+        with open(models_dir / "spread_model.pkl", "wb") as f:
+            pickle.dump(reg_final, f)
     with open(models_dir / "spread_sigma.json", "w", encoding="utf-8") as f:
         json.dump({"spread_sigma": spread_sigma}, f)
 

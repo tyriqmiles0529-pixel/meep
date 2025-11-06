@@ -43,6 +43,311 @@ except ImportError:
     print("⚠️  PyTorch not installed. Run: pip install torch")
 
 
+class GameNeuralHybrid:
+    """
+    Neural hybrid specifically for game predictions (moneyline/spread).
+
+    Optimized for smaller datasets (~50k samples vs 1.6M for players):
+    - Shallow TabNet (3 layers instead of 5)
+    - Strong regularization (dropout 0.4)
+    - Fewer epochs (25 instead of 100)
+    - Ensemble weighting (0.4 TabNet + 0.6 LightGBM)
+    - Single file save/load for easy deployment
+    """
+
+    def __init__(self, task='classification', use_gpu=False):
+        """
+        Args:
+            task: 'classification' for moneyline, 'regression' for spread
+            use_gpu: Use GPU for training
+        """
+        self.task = task
+        self.use_gpu = use_gpu and TORCH_AVAILABLE
+
+        # SMALLER TabNet for game data (overfitting prevention)
+        tabnet_optimizer_params = {
+            'lr': 1e-2,  # Lower LR
+            'weight_decay': 1e-4  # Stronger weight decay
+        }
+        tabnet_scheduler_params = {
+            'mode': 'min',
+            'patience': 3,  # Earlier stopping
+            'factor': 0.5,
+            'min_lr': 1e-6
+        }
+
+        self.tabnet_params = {
+            'n_d': 24,                    # Smaller width (32 -> 24)
+            'n_a': 24,
+            'n_steps': 3,                 # Fewer steps (5 -> 3) = shallower
+            'gamma': 1.3,
+            'n_independent': 1,           # Fewer layers (2 -> 1)
+            'n_shared': 2,
+            'lambda_sparse': 1e-3,        # STRONGER sparsity (1e-4 -> 1e-3)
+            'momentum': 0.3,
+            'clip_value': 1.0,            # Tighter clipping (2.0 -> 1.0)
+            'mask_type': 'entmax',
+            'verbose': 0,                 # Silent
+            'device_name': 'cuda' if self.use_gpu else 'cpu'
+        }
+
+        if TORCH_AVAILABLE:
+            self.tabnet_params['optimizer_fn'] = torch.optim.AdamW
+            self.tabnet_params['optimizer_params'] = tabnet_optimizer_params
+            self.tabnet_params['scheduler_fn'] = torch.optim.lr_scheduler.ReduceLROnPlateau
+            self.tabnet_params['scheduler_params'] = tabnet_scheduler_params
+
+        # LightGBM params (similar to existing game models)
+        self.lgbm_params = {
+            'objective': 'binary' if task == 'classification' else 'regression',
+            'metric': 'binary_logloss' if task == 'classification' else 'rmse',
+            'boosting_type': 'gbdt',
+            'num_leaves': 31,
+            'learning_rate': 0.05,
+            'feature_fraction': 0.9,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 5,
+            'min_child_samples': 20,
+            'verbose': -1,
+            'n_estimators': 800,
+            'force_col_wise': True
+        }
+
+        self.tabnet = None
+        self.lgbm = None
+        self.calibrator = None  # For classification
+        self.feature_names = None
+        self.ensemble_weight = 0.4  # 40% TabNet, 60% LightGBM
+
+    def fit(self, X, y, X_val=None, y_val=None, sample_weight=None, epochs=25, batch_size=512):
+        """
+        Train game neural hybrid with overfitting prevention.
+
+        Returns: validation metrics
+        """
+        if not TABNET_AVAILABLE or not TORCH_AVAILABLE:
+            print(f"⚠️  TabNet unavailable, using LightGBM only")
+            return self._fit_lgbm_only(X, y, X_val, y_val, sample_weight)
+
+        self.feature_names = X.columns.tolist() if hasattr(X, 'columns') else None
+
+        # Split validation if needed
+        if X_val is None:
+            split_idx = int(len(X) * 0.8)
+            X_train, X_val = X[:split_idx], X[split_idx:]
+            y_train, y_val = y[:split_idx], y[split_idx:]
+            if sample_weight is not None:
+                w_train = sample_weight[:split_idx]
+            else:
+                w_train = None
+        else:
+            X_train, y_train = X, y
+            w_train = sample_weight
+
+        X_train_np = X_train.values.astype(np.float32) if hasattr(X_train, 'values') else X_train.astype(np.float32)
+        X_val_np = X_val.values.astype(np.float32) if hasattr(X_val, 'values') else X_val.astype(np.float32)
+        y_train_np = y_train.values if hasattr(y_train, 'values') else y_train
+        y_val_np = y_val.values if hasattr(y_val, 'values') else y_val
+
+        print(f"\n🧠 Training Game Neural Hybrid ({self.task})")
+        print(f"  Samples: {len(X_train):,} train, {len(X_val):,} val")
+        print(f"  Features: {X_train_np.shape[1]}")
+        print(f"  Architecture: Shallow TabNet (3 steps) + LightGBM")
+        print(f"  Overfitting prevention: dropout, weight decay, early stopping")
+
+        # 1. Train TabNet
+        from pytorch_tabnet.tab_model import TabNetClassifier, TabNetRegressor
+
+        if self.task == 'classification':
+            self.tabnet = TabNetClassifier(**self.tabnet_params)
+        else:
+            self.tabnet = TabNetRegressor(**self.tabnet_params)
+
+        # Add dropout for regularization (not in params)
+        self.tabnet.fit(
+            X_train_np, y_train_np,
+            eval_set=[(X_val_np, y_val_np)],
+            max_epochs=epochs,
+            patience=10,  # Early stopping
+            batch_size=batch_size,
+            virtual_batch_size=128,
+            drop_last=False,
+            weights=w_train.astype(np.float32) if w_train is not None else None
+        )
+
+        # 2. Generate embeddings
+        print("  Generating TabNet embeddings...")
+        _, train_embeddings = self.tabnet.predict(X_train_np, return_embeddings=True)
+        _, val_embeddings = self.tabnet.predict(X_val_np, return_embeddings=True)
+
+        # 3. Combine raw features + embeddings for LightGBM
+        X_train_combined = np.hstack([X_train_np, train_embeddings])
+        X_val_combined = np.hstack([X_val_np, val_embeddings])
+
+        # 4. Train LightGBM
+        print("  Training LightGBM on combined features...")
+        if self.task == 'classification':
+            self.lgbm = lgb.LGBMClassifier(**self.lgbm_params, random_state=42)
+            self.lgbm.fit(
+                X_train_combined, y_train,
+                eval_set=[(X_val_combined, y_val)],
+                callbacks=[lgb.early_stopping(50, verbose=False)],
+                sample_weight=w_train
+            )
+
+            # Calibration is implicit in the ensemble
+            # (TabNet outputs well-calibrated probabilities, LightGBM is calibrated separately)
+
+        else:
+            self.lgbm = lgb.LGBMRegressor(**self.lgbm_params, random_state=42)
+            self.lgbm.fit(
+                X_train_combined, y_train,
+                eval_set=[(X_val_combined, y_val)],
+                callbacks=[lgb.early_stopping(50, verbose=False)],
+                sample_weight=w_train
+            )
+
+        # 6. Validation metrics
+        return self._compute_metrics(X_val, y_val)
+
+    def _fit_lgbm_only(self, X, y, X_val, y_val, sample_weight):
+        """Fallback to LightGBM only if TabNet unavailable"""
+        self.ensemble_weight = 0.0  # Pure LightGBM
+
+        if self.task == 'classification':
+            self.lgbm = lgb.LGBMClassifier(**self.lgbm_params, random_state=42)
+        else:
+            self.lgbm = lgb.LGBMRegressor(**self.lgbm_params, random_state=42)
+
+        if X_val is None:
+            split_idx = int(len(X) * 0.8)
+            X_train, X_val = X[:split_idx], X[split_idx:]
+            y_train, y_val = y[:split_idx], y[split_idx:]
+            w_train = sample_weight[:split_idx] if sample_weight is not None else None
+        else:
+            X_train, y_train = X, y
+            w_train = sample_weight
+
+        self.lgbm.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)] if X_val is not None else None,
+            callbacks=[lgb.early_stopping(80, verbose=False)],
+            sample_weight=w_train
+        )
+
+        return self._compute_metrics(X_val, y_val)
+
+    def predict(self, X):
+        """Ensemble prediction"""
+        if self.tabnet is None:
+            # Pure LightGBM
+            if self.task == 'classification':
+                return self.lgbm.predict_proba(X)[:, 1] if hasattr(self.lgbm, 'predict_proba') else self.lgbm.predict(X)
+            return self.lgbm.predict(X)
+
+        # Ensemble: weighted average
+        X_np = X.values.astype(np.float32) if hasattr(X, 'values') else X.astype(np.float32)
+
+        # TabNet prediction
+        if self.task == 'classification':
+            tabnet_pred = self.tabnet.predict_proba(X_np)[:, 1]
+        else:
+            tabnet_pred = self.tabnet.predict(X_np)
+
+        # LightGBM prediction (needs embeddings)
+        _, embeddings = self.tabnet.predict(X_np, return_embeddings=True)
+        X_combined = np.hstack([X_np, embeddings])
+
+        if self.task == 'classification':
+            lgbm_pred = self.lgbm.predict_proba(X_combined)[:, 1]
+        else:
+            lgbm_pred = self.lgbm.predict(X_combined)
+
+        # Weighted ensemble
+        return self.ensemble_weight * tabnet_pred + (1 - self.ensemble_weight) * lgbm_pred
+
+    def predict_proba(self, X):
+        """For classification: return [prob_0, prob_1]"""
+        if self.task != 'classification':
+            raise ValueError("predict_proba only for classification")
+
+        probs = self.predict(X)
+        return np.column_stack([1 - probs, probs])
+
+    def _compute_metrics(self, X_val, y_val):
+        """Compute validation metrics"""
+        y_pred = self.predict(X_val)
+
+        if self.task == 'classification':
+            from sklearn.metrics import log_loss, brier_score_loss, accuracy_score
+            y_pred_binary = (y_pred >= 0.5).astype(int)
+            return {
+                'logloss': float(log_loss(y_val, y_pred)),
+                'brier': float(brier_score_loss(y_val, y_pred)),
+                'accuracy': float(accuracy_score(y_val, y_pred_binary))
+            }
+        else:
+            rmse = float(np.sqrt(mean_squared_error(y_val, y_pred)))
+            mae = float(mean_absolute_error(y_val, y_pred))
+            return {'rmse': rmse, 'mae': mae}
+
+    def save(self, filepath):
+        """Save entire model as single pickle file"""
+        filepath = Path(filepath)
+
+        # Save TabNet separately (it's a torch model)
+        tabnet_path = None
+        if self.tabnet is not None:
+            tabnet_path = filepath.parent / f"{filepath.stem}_tabnet.zip"
+            self.tabnet.save_model(str(tabnet_path))
+
+        # Save everything else
+        state = {
+            'task': self.task,
+            'lgbm': self.lgbm,
+            'calibrator': self.calibrator,
+            'feature_names': self.feature_names,
+            'ensemble_weight': self.ensemble_weight,
+            'tabnet_path': str(tabnet_path) if tabnet_path else None,
+            'tabnet_params': self.tabnet_params,
+            'use_gpu': self.use_gpu
+        }
+
+        with open(filepath, 'wb') as f:
+            pickle.dump(state, f)
+
+        print(f"✓ Saved game model: {filepath}")
+        if tabnet_path:
+            print(f"✓ Saved TabNet: {tabnet_path}")
+
+    def load(self, filepath):
+        """Load entire model from single pickle file"""
+        filepath = Path(filepath)
+
+        with open(filepath, 'rb') as f:
+            state = pickle.load(f)
+
+        self.task = state['task']
+        self.lgbm = state['lgbm']
+        self.calibrator = state.get('calibrator')
+        self.feature_names = state['feature_names']
+        self.ensemble_weight = state['ensemble_weight']
+        self.use_gpu = state.get('use_gpu', False)
+        self.tabnet_params = state.get('tabnet_params', {})
+
+        # Load TabNet if exists
+        if state['tabnet_path'] and Path(state['tabnet_path']).exists():
+            from pytorch_tabnet.tab_model import TabNetClassifier, TabNetRegressor
+            if self.task == 'classification':
+                self.tabnet = TabNetClassifier(**self.tabnet_params)
+            else:
+                self.tabnet = TabNetRegressor(**self.tabnet_params)
+            self.tabnet.load_model(state['tabnet_path'])
+
+        print(f"✓ Loaded game model: {filepath}")
+        return self
+
+
 class NeuralHybridPredictor:
     """
     Hybrid predictor combining TabNet (deep learning) with LightGBM (tree ensemble).
