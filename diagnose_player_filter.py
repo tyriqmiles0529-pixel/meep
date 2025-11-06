@@ -72,9 +72,9 @@ if ps['_temp_season'].notna().any():
     print(f"   Sample season value: {sample_season} (type: {type(sample_season)})")
     print(f"   Sample padded value: {list(padded_seasons)[0]} (type: {type(list(padded_seasons)[0])})")
 
-    # Try conversion
-    ps['_temp_season_int'] = ps['_temp_season'].astype(int)
-    print(f"   After int conversion: {ps['_temp_season_int'].dtype}")
+    # Try conversion (use Int64 to handle NaN)
+    ps['_temp_season_int'] = ps['_temp_season'].astype('Int64')
+    print(f"   After Int64 conversion: {ps['_temp_season_int'].dtype}")
 
 # Perform filtering
 filtered = ps[ps['_temp_season'].isin(padded_seasons)].copy()
@@ -101,13 +101,13 @@ if len(filtered) == 0:
         print("     3. Type mismatch (float vs int in set comparison)")
 
         # Test type conversion fix
-        print("\n   Testing fix: Convert both to int...")
-        ps['_temp_season_int'] = ps['_temp_season'].astype(int)
+        print("\n   Testing fix: Convert to Int64 (nullable int)...")
+        ps['_temp_season_int64'] = ps['_temp_season'].astype('Int64')
         padded_seasons_int = {int(s) for s in padded_seasons}
-        filtered_fixed = ps[ps['_temp_season_int'].isin(padded_seasons_int)].copy()
+        filtered_fixed = ps[ps['_temp_season_int64'].isin(padded_seasons_int)].copy()
         print(f"     Result: {len(filtered_fixed):,} rows")
         if len(filtered_fixed) > 0:
-            print("     ✅ FIX CONFIRMED: Type conversion resolves the issue!")
+            print("     ✅ FIX CONFIRMED: Int64 conversion resolves the issue!")
 else:
     print(f"\n   ✅ Filtering works! Got {len(filtered):,} rows for 2007-2011")
     print(f"     Season distribution: {filtered['_temp_season'].value_counts().sort_index().to_dict()}")
@@ -124,8 +124,8 @@ if len(filtered) == 0:
     print("     padded_seasons = set(window_seasons) | {start_year-1, end_year+1}")
     print("     hist_players_df = hist_players_df[hist_players_df['_temp_season'].isin(padded_seasons)]")
     print("\n   To:")
-    print("     hist_players_df['_temp_season'] = _season_from_date(hist_players_df[date_col]).astype(int)")
-    print("     padded_seasons = {int(s) for s in window_seasons} | {start_year-1, end_year+1}")
+    print("     hist_players_df['_temp_season'] = _season_from_date(hist_players_df[date_col]).astype('Int64')")
+    print("     padded_seasons = set(window_seasons) | {start_year-1, end_year+1}")
     print("     hist_players_df = hist_players_df[hist_players_df['_temp_season'].isin(padded_seasons)]")
 else:
     print("\n✅ Filtering works correctly on this sample!")
