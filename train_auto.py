@@ -2899,62 +2899,67 @@ def build_players_from_playerstats(
     # ===========================================================================
     # ADD PHASE 7 FEATURES: Situational Context & Adaptive Temporal
     # ===========================================================================
-    print("\n🚀 Adding Phase 7 features (situational context, opponent history, adaptive weights)...")
-    try:
-        # Build stat_cols list safely
-        stat_cols = []
-        if pts_col and pts_col in ps_join.columns:
-            stat_cols.append(pts_col)
-        if reb_col and reb_col in ps_join.columns:
-            stat_cols.append(reb_col)
-        if ast_col and ast_col in ps_join.columns:
-            stat_cols.append(ast_col)
-        if tpm_col and tpm_col in ps_join.columns:
-            stat_cols.append(tpm_col)
-        
-        ps_join = add_phase7_features(
-            ps_join,
-            stat_cols=stat_cols,
-            season_col='season_end_year',
-            date_col=date_col,
-            player_id_col=pid_col
-        )
-        
-        # Add Phase 7 feature names to base_ctx_cols
-        phase7_features = [
-            # Season context
-            'games_into_season', 'games_remaining_in_season', 'is_early_season',
-            'is_late_season', 'is_mid_season', 'season_fatigue_factor',
-            # Schedule density
-            'days_since_last_game', 'games_in_last_7_days', 'avg_rest_days_L5', 'is_compressed_schedule',
-            # Revenge games
-            'is_revenge_game'
-        ]
-        
-        # Opponent history features (per stat)
-        for stat in [pts_col, reb_col, ast_col, tpm_col]:
-            if stat:
-                phase7_features.extend([
-                    f'{stat}_vs_opponent_career',
-                    f'{stat}_vs_opponent_L3',
-                    f'{stat}_vs_opponent_trend'
-                ])
-        
-        # Adaptive temporal features (per stat, per window)
-        for stat in [pts_col, reb_col, ast_col, tpm_col]:
-            if stat:
-                for window in [5, 10, 15]:
+    # DISABLED: Phase 7 features are slow (1+ min) and crash with datetime errors
+    # From HANDOFF_DOCUMENT.md: "Phase 7: Partially working (schedule density crashes on datetime comparison)"
+    # Impact: Low (non-critical features, models work fine without them)
+    print("\n⏭️  Skipping Phase 7 features (slow + buggy, see HANDOFF_DOCUMENT.md)")
+    if False:  # DISABLED - change to True to re-enable Phase 7
+        print("\n🚀 Adding Phase 7 features (situational context, opponent history, adaptive weights)...")
+        try:
+            # Build stat_cols list safely
+            stat_cols = []
+            if pts_col and pts_col in ps_join.columns:
+                stat_cols.append(pts_col)
+            if reb_col and reb_col in ps_join.columns:
+                stat_cols.append(reb_col)
+            if ast_col and ast_col in ps_join.columns:
+                stat_cols.append(ast_col)
+            if tpm_col and tpm_col in ps_join.columns:
+                stat_cols.append(tpm_col)
+
+            ps_join = add_phase7_features(
+                ps_join,
+                stat_cols=stat_cols,
+                season_col='season_end_year',
+                date_col=date_col,
+                player_id_col=pid_col
+            )
+
+            # Add Phase 7 feature names to base_ctx_cols
+            phase7_features = [
+                # Season context
+                'games_into_season', 'games_remaining_in_season', 'is_early_season',
+                'is_late_season', 'is_mid_season', 'season_fatigue_factor',
+                # Schedule density
+                'days_since_last_game', 'games_in_last_7_days', 'avg_rest_days_L5', 'is_compressed_schedule',
+                # Revenge games
+                'is_revenge_game'
+            ]
+
+            # Opponent history features (per stat)
+            for stat in [pts_col, reb_col, ast_col, tpm_col]:
+                if stat:
                     phase7_features.extend([
-                        f'{stat}_adaptive_L{window}',
-                        f'{stat}_consistency_L{window}'
+                        f'{stat}_vs_opponent_career',
+                        f'{stat}_vs_opponent_L3',
+                        f'{stat}_vs_opponent_trend'
                     ])
-        
-        base_ctx_cols.extend(phase7_features)
-        print(f"✅ Phase 7 features added! Total new features: {len(phase7_features)}")
-        
-    except Exception as e:
-        print(f"⚠️ Phase 7 feature addition failed: {e}")
-        print("   Continuing without Phase 7 features...")
+
+            # Adaptive temporal features (per stat, per window)
+            for stat in [pts_col, reb_col, ast_col, tpm_col]:
+                if stat:
+                    for window in [5, 10, 15]:
+                        phase7_features.extend([
+                            f'{stat}_adaptive_L{window}',
+                            f'{stat}_consistency_L{window}'
+                        ])
+
+            base_ctx_cols.extend(phase7_features)
+            print(f"✅ Phase 7 features added! Total new features: {len(phase7_features)}")
+
+        except Exception as e:
+            print(f"⚠️ Phase 7 feature addition failed: {e}")
+            print("   Continuing without Phase 7 features...")
 
     # Filter to only columns that actually exist in ps_join
     base_ctx_cols = [c for c in base_ctx_cols if c in ps_join.columns]
