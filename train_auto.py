@@ -5417,6 +5417,51 @@ def main():
     # Display game metrics prominently
     print(f"\n🏀 GAME PREDICTIONS:")
     print(f"   Moneyline: logloss={_fmt(game_metrics['ml_logloss'])}, Brier={_fmt(game_metrics['ml_brier'])}")
+    elif players_path and players_path.exists():
+        # Non-windowed training (train on ALL data at once - best for neural hybrid)
+        print(_sec("Training player models (ALL DATA - Neural Hybrid Mode)"))
+        print("🧠 Training on full historical dataset (1974-2025) - optimized for GPU/TabNet")
+        
+        # Build player frames (no window filtering)
+        frames = build_players_from_playerstats(
+            players_path,
+            games_df,
+            games_df,  # use same for OOF
+            verbose=verbose,
+            priors_players=priors_players,
+            window_seasons=None  # No window filtering
+        )
+        
+        # Train models
+        print(_sec("Training models"))
+        minutes_model, m_metrics = train_player_model_enhanced(frames['minutes'], 'minutes', verbose,
+                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        points_model, p_metrics = train_player_model_enhanced(frames['points'], 'points', verbose,
+                                                               neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        rebounds_model, r_metrics = train_player_model_enhanced(frames['rebounds'], 'rebounds', verbose,
+                                                                 neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        assists_model, a_metrics = train_player_model_enhanced(frames['assists'], 'assists', verbose,
+                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        threes_model, t_metrics = train_player_model_enhanced(frames['threes'], 'threes', verbose,
+                                                               neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        
+        # Save models
+        save_model(minutes_model, MODEL_DIR / "minutes_model.pkl")
+        save_model(points_model, MODEL_DIR / "points_model.pkl")
+        save_model(rebounds_model, MODEL_DIR / "rebounds_model.pkl")
+        save_model(assists_model, MODEL_DIR / "assists_model.pkl")
+        save_model(threes_model, MODEL_DIR / "threes_model.pkl")
+        
+        player_metrics = {
+            'minutes': m_metrics,
+            'points': p_metrics,
+            'rebounds': r_metrics,
+            'assists': a_metrics,
+            'threes': t_metrics
+        }
+        
+        print("\n✅ Player models saved (single unified models for all eras)")
+    
     if 'ml_accuracy' in game_metrics:
         ml_acc = game_metrics['ml_accuracy']
         print(f"   Moneyline Accuracy: {ml_acc*100:.1f}% {'🟢' if ml_acc >= 0.55 else '🟡' if ml_acc >= 0.52 else '🔴'}")
