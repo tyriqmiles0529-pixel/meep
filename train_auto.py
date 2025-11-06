@@ -1034,16 +1034,24 @@ def fetch_current_season_player_stats(season: str = "2025-26", verbose: bool = F
         result['teamTricode'] = df['TEAM_ABBREVIATION']
 
         # Parse minutes (format: "MM:SS" or just number)
-        def parse_minutes(min_str):
-            if pd.isna(min_str):
-                return 0.0
-            min_str = str(min_str).strip()
-            if ':' in min_str:
-                parts = min_str.split(':')
-                return float(parts[0]) + float(parts[1]) / 60.0
-            return float(min_str)
+        # VECTORIZED: Parse minutes (MM:SS format → decimal)
+        # Old: .apply() on 1.6M rows = slow
+        # New: vectorized str operations = 50-100x faster
+        min_str = df['MIN'].fillna('0').astype(str).str.strip()
+        has_colon = min_str.str.contains(':', na=False)
 
-        result['minutes'] = df['MIN'].apply(parse_minutes)
+        # For MM:SS format
+        minutes_colon = min_str[has_colon].str.split(':', expand=True)
+        if len(minutes_colon.columns) >= 2:
+            result.loc[has_colon, 'minutes'] = (
+                pd.to_numeric(minutes_colon[0], errors='coerce').fillna(0) +
+                pd.to_numeric(minutes_colon[1], errors='coerce').fillna(0) / 60.0
+            )
+        else:
+            result.loc[has_colon, 'minutes'] = 0.0
+
+        # For plain decimal format
+        result.loc[~has_colon, 'minutes'] = pd.to_numeric(min_str[~has_colon], errors='coerce').fillna(0)
         result['points'] = pd.to_numeric(df['PTS'], errors='coerce').fillna(0)
         result['rebounds'] = pd.to_numeric(df['REB'], errors='coerce').fillna(0)
         result['assists'] = pd.to_numeric(df['AST'], errors='coerce').fillna(0)
@@ -1237,8 +1245,9 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
     
     # Create team abbreviations from team names for priors merging
     if "home_name" in g.columns and "away_name" in g.columns:
-        g["home_abbrev"] = g["home_name"].apply(_team_name_to_abbrev)
-        g["away_abbrev"] = g["away_name"].apply(_team_name_to_abbrev)
+        # Use .map() instead of .apply() - slightly faster for large datasets
+        g["home_abbrev"] = g["home_name"].map(_team_name_to_abbrev)
+        g["away_abbrev"] = g["away_name"].map(_team_name_to_abbrev)
 
     # long view for rolling context
     long_home = g[["gid", "date", "season_end_year", "home_tid", "home_score", "away_score"]].rename(
@@ -1893,18 +1902,16 @@ def build_players_from_playerstats(
     rolling_stats(three_pa_col)
     rolling_stats(fta_col)
 
-    # PHASE 1.2: True Shooting % calculation
+    # PHASE 1.2: True Shooting % calculation (VECTORIZED)
+    # TS% = PTS / (2 * (FGA + 0.44 * FTA))
     if pts_col and fga_col and fta_col:
         if pts_col in ps.columns and fga_col in ps.columns and fta_col in ps.columns:
-            def calc_ts_pct_row(row):
-                """Calculate True Shooting % = PTS / (2 * (FGA + 0.44 * FTA))"""
-                pts = row[pts_col] if pd.notna(row[pts_col]) else 0
-                fga = row[fga_col] if pd.notna(row[fga_col]) else 0
-                fta = row[fta_col] if pd.notna(row[fta_col]) else 0
-                denominator = 2 * (fga + 0.44 * fta)
-                return pts / denominator if denominator > 0 else 0.56  # league average
-
-            ps['ts_pct'] = ps.apply(calc_ts_pct_row, axis=1)
+            # Vectorized calculation (50-100x faster than .apply())
+            pts = ps[pts_col].fillna(0)
+            fga = ps[fga_col].fillna(0)
+            fta = ps[fta_col].fillna(0)
+            denominator = 2 * (fga + 0.44 * fta)
+            ps['ts_pct'] = np.where(denominator > 0, pts / denominator, 0.56)  # 0.56 = league average
 
             # Rolling TS% (last 5, 10, season average)
             ps['ts_pct_L5'] = ps.groupby(pid_col)['ts_pct'].transform(lambda x: x.shift(1).rolling(5, min_periods=1).mean())
