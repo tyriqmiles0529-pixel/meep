@@ -2543,9 +2543,16 @@ def build_players_from_playerstats(
             log(f"  [WARNING] Could not import optimization_features: {e}", True)
             log(f"    Continuing without momentum features...", True)
 
-    # Add OOF game predictions
+    # Add OOF game predictions (optional - may not exist for non-windowed training)
     oof = oof_games.copy()
-    ps_join = ps_join.merge(oof[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
+    if "oof_ml_prob" in oof.columns and "oof_spread_pred" in oof.columns:
+        ps_join = ps_join.merge(oof[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
+    else:
+        # No OOF predictions available - fill with defaults
+        if verbose:
+            log("  No OOF predictions available - using defaults", True)
+        ps_join["oof_ml_prob"] = 0.5  # neutral probability
+        ps_join["oof_spread_pred"] = 0.0  # neutral spread
 
     # Merge Basketball Reference player priors (if provided)
     if priors_players is not None and not priors_players.empty:
