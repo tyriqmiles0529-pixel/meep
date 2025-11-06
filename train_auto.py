@@ -2899,11 +2899,8 @@ def build_players_from_playerstats(
     # ===========================================================================
     # ADD PHASE 7 FEATURES: Situational Context & Adaptive Temporal
     # ===========================================================================
-    # DISABLED: Phase 7 features are slow (1+ min) and crash with datetime errors
-    # From HANDOFF_DOCUMENT.md: "Phase 7: Partially working (schedule density crashes on datetime comparison)"
-    # Impact: Low (non-critical features, models work fine without them)
-    print("\n⏭️  Skipping Phase 7 features (slow + buggy, see HANDOFF_DOCUMENT.md)")
-    if False:  # DISABLED - change to True to re-enable Phase 7
+    # NOTE: Opponent history will be skipped (missing 'opponent' column), but other features work
+    if True:  # RE-ENABLED - adaptive temporal features are valuable for neural networks!
         print("\n🚀 Adding Phase 7 features (situational context, opponent history, adaptive weights)...")
         try:
             # Build stat_cols list safely
