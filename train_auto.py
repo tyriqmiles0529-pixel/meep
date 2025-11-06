@@ -4519,11 +4519,11 @@ def main():
                             col_with_fb = col + "_fb"
                             if col_with_fb in fallback_merge.columns:
                                 # Use the _fb suffixed column which has the actual merged data
-                                idx = games_df[unmatched_mask].index
-                                games_df.loc[idx, col] = fallback_merge[col_with_fb].values
+                                # CRITICAL: Must use .loc with index alignment, not .values
+                                games_df.loc[fallback_merge.index, col] = fallback_merge[col_with_fb]
                             elif col in fallback_merge.columns:
-                                idx = games_df[unmatched_mask].index
-                                games_df.loc[idx, col] = fallback_merge[col].values
+                                # Fallback didn't create _fb suffix (no conflict)
+                                games_df.loc[fallback_merge.index, col] = fallback_merge[col]
                         # Check if fallback worked
                         post_fallback_matched = games_df.loc[unmatched_mask, stat_cols[0]].notna().sum()
                         if verbose and post_fallback_matched > 0:
@@ -4589,11 +4589,10 @@ def main():
                         for col in stat_cols:
                             col_with_fb = col + "_fb"
                             if col_with_fb in fallback_merge.columns:
-                                idx = games_df[unmatched_mask].index
-                                games_df.loc[idx, col] = fallback_merge[col_with_fb].values
+                                # CRITICAL: Must use .loc with index alignment, not .values
+                                games_df.loc[fallback_merge.index, col] = fallback_merge[col_with_fb]
                             elif col in fallback_merge.columns:
-                                idx = games_df[unmatched_mask].index
-                                games_df.loc[idx, col] = fallback_merge[col].values
+                                games_df.loc[fallback_merge.index, col] = fallback_merge[col]
                 
                 away_matched = games_df["away_o_rtg_prior"].notna().sum()
                 log(f"  Away priors matched: {away_matched:,} / {len(games_df):,} ({away_matched/len(games_df)*100:.1f}%)", verbose)

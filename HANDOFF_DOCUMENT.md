@@ -42,33 +42,30 @@ Train NBA prediction models (game outcomes + player props) on Google Colab using
 
 ---
 
-## ⚠️ CURRENT ISSUE: Basketball Reference Priors Not Merging
+## ⚠️ CURRENT ISSUE: Basketball Reference Priors Not Merging - **DIAGNOSED**
 
 ### Problem Description
 The training script successfully:
 - ✅ Loads priors from `/content/priors_data` (6 CSV files, 185,226 player-seasons)
-- ✅ Merges team priors into games_df (51,586/62,085 games = 83.1% matched)
+- ✅ CSV has real data: ATL 2025 has o_rtg=114.6, d_rtg=115.7, pace=102.6
+- ✅ Merges team priors into games_df (51,586/62,085 games = 83.1% matched via fallback)
 - ❌ **BUT all merged values are defaults (110.0) instead of real data**
 
-### Evidence from Logs
+### Root Cause - **FOUND!**
+The fallback merge (line 4495) successfully matches rows but the stat columns have `_fb` suffix due to pandas merge conflict. The code at lines 4520-4526 tries to copy `_fb` values back, but something is failing.
+
+**The issue:** Looking at the debug logs from Colab:
 ```
-✓ 51,308 games (82.6%) have Basketball Reference statistical priors
-Fallback matched 51586 teams
-Home priors matched: 51,586 / 62,085 (83.1%)
-
-BUT THEN:
-
-Value ranges:
-  home_o_rtg_prior: 110.00 to 110.00  ← All defaults!
-  Default value: 110.0
-
-⚠️  WARNING: NO games have real Basketball Reference statistical priors
+home_o_rtg_prior: both versions exist! no_suffix=nan, with_suffix=105.5
 ```
 
-### Root Cause Analysis
-1. **Merge is happening** (83% match rate)
-2. **But values are NaN after merge** (then filled with defaults at line 4625)
-3. **Likely cause:** Column name mismatch in `Team Summaries.csv`
+This means the fallback merge creates BOTH `home_o_rtg_prior` (NaN) AND `home_o_rtg_prior_fb` (105.5), and the code successfully copies the `_fb` version back. BUT then at line 4625, `fillna(GAME_DEFAULTS)` runs and overwrites everything!
+
+**The REAL problem:** The `fillna` at line 4625 happens UNCONDITIONALLY, even for rows that successfully merged. This is because the initial exact-match merge (line 4462) returns NaN for most games (since games from 2004 try to match priors from 2004, but priors are season 2025=playoffs data). The fallback correctly uses season-1, but then fillna ruins it.
+
+### The Fix
+**Option 1 (Quick):** Only fillna for rows that are STILL NaN after fallback
+**Option 2 (Better):** Check data types - games_df season might be int while priors season_for_game is float
 
 ### Code Location
 - **Merge logic:** Lines 4408-4545 in `train_auto.py`
