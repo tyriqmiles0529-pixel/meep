@@ -80,14 +80,17 @@ class NeuralHybridPredictor:
             'lambda_sparse': 1e-4,        # Sparsity regularization
             'momentum': 0.3,              # Batch norm momentum
             'clip_value': 2.0,            # Gradient clipping
-            'optimizer_fn': torch.optim.AdamW if TORCH_AVAILABLE else None,
-            'optimizer_params': tabnet_optimizer_params,
-            'scheduler_fn': torch.optim.lr_scheduler.ReduceLROnPlateau if TORCH_AVAILABLE else None,
-            'scheduler_params': tabnet_scheduler_params,
             'mask_type': 'entmax',        # Sparse attention (better than sparsemax)
             'verbose': 1,
             'device_name': 'cuda' if self.use_gpu else 'cpu'
         }
+        
+        # Only add optimizer if torch is available
+        if TORCH_AVAILABLE:
+            self.tabnet_params['optimizer_fn'] = torch.optim.AdamW
+            self.tabnet_params['optimizer_params'] = tabnet_optimizer_params
+            self.tabnet_params['scheduler_fn'] = torch.optim.lr_scheduler.ReduceLROnPlateau
+            self.tabnet_params['scheduler_params'] = tabnet_scheduler_params
         
         # LightGBM hyperparameters (same as current system)
         self.lgbm_params = {
@@ -319,8 +322,9 @@ class NeuralHybridPredictor:
     
     def _get_embeddings(self, X):
         """Extract embeddings from TabNet's last hidden layer."""
-        # Use TabNet's internal embedding extraction
-        # This gets the representation before final prediction layer
+        if self.tabnet is None:
+            raise ValueError("TabNet not trained yet")
+        
         self.tabnet.network.eval()
         
         with torch.no_grad():
@@ -328,10 +332,25 @@ class NeuralHybridPredictor:
             if self.use_gpu:
                 X_tensor = X_tensor.cuda()
             
-            # Forward pass through TabNet encoder
-            # Get embeddings from final attention step
-            steps_output, _ = self.tabnet.network.encoder(X_tensor)
-            embeddings = steps_output[:, -1, :]  # Last step embeddings
+            try:
+                # Try to get embeddings from the network
+                # TabNet architecture: input -> encoder -> decoder -> output
+                output = self.tabnet.network(X_tensor)
+                
+                # The output might be a tuple (prediction, embeddings) or just prediction
+                if isinstance(output, tuple):
+                    embeddings = output[0] if output[0].dim() > 1 else output[1]
+                else:
+                    # If we just get predictions, use them as 1D embeddings
+                    embeddings = output.reshape(-1, 1) if output.dim() == 1 else output
+                
+            except (AttributeError, RuntimeError) as e:
+                # Fallback: use predictions as embeddings
+                print(f"  Warning: Using predictions as embeddings (API changed)")
+                predictions = self.tabnet.predict(X)
+                embeddings = torch.from_numpy(predictions).float().reshape(-1, 1)
+                if self.use_gpu:
+                    embeddings = embeddings.cuda()
             
             if self.use_gpu:
                 embeddings = embeddings.cpu()

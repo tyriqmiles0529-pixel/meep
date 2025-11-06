@@ -23,7 +23,7 @@ warnings.filterwarnings('ignore')
 # 1. SITUATIONAL CONTEXT FEATURES
 # ==============================================================================
 
-def add_season_context_features(df: pd.DataFrame, season_col: str = 'season_end_year') -> pd.DataFrame:
+def add_season_context_features(df: pd.DataFrame, season_col: str = 'season_end_year', player_id_col: str = 'playerId') -> pd.DataFrame:
     """
     Add features based on time within season.
     
@@ -38,9 +38,9 @@ def add_season_context_features(df: pd.DataFrame, season_col: str = 'season_end_
     
     # Calculate games into season
     if 'date' in df.columns:
-        df['games_into_season'] = df.sort_values('date').groupby(['playerId', season_col]).cumcount()
+        df['games_into_season'] = df.sort_values('date').groupby([player_id_col, season_col]).cumcount()
     else:
-        df['games_into_season'] = df.groupby(['playerId', season_col]).cumcount()
+        df['games_into_season'] = df.groupby([player_id_col, season_col]).cumcount()
     
     # Games remaining (assume 82 game season)
     df['games_remaining_in_season'] = 82 - df['games_into_season']
@@ -521,7 +521,8 @@ def add_adaptive_weighted_features(df: pd.DataFrame, stat_cols: list,
 def add_phase7_features(df: pd.DataFrame, 
                         stat_cols: list = ['points', 'rebounds', 'assists', 'threepoint_goals'],
                         season_col: str = 'season_end_year',
-                        date_col: str = 'date') -> pd.DataFrame:
+                        date_col: str = 'date',
+                        player_id_col: str = 'personId') -> pd.DataFrame:
     """
     Add all Phase 7 features to dataframe.
     
@@ -536,35 +537,51 @@ def add_phase7_features(df: pd.DataFrame,
         stat_cols: List of stat columns to process
         season_col: Name of season column
         date_col: Name of date column
+        player_id_col: Name of player ID column (default: 'personId')
     
     Returns:
         DataFrame with Phase 7 features added
     """
     print("🚀 Adding Phase 7 features...")
     
+    # Check if player_id_col exists
+    if player_id_col not in df.columns:
+        print(f"⚠️ Phase 7 feature addition failed: '{player_id_col}'")
+        print(f"   Available columns: {df.columns.tolist()[:10]}")
+        return df
+    
+    # Temporarily rename player column to playerId for compatibility
+    df_temp = df.copy()
+    if player_id_col != 'playerId':
+        df_temp['playerId'] = df_temp[player_id_col]
+    
     # 1. Season context
     print("  1/4: Season context features...")
-    df = add_season_context_features(df, season_col)
+    df_temp = add_season_context_features(df_temp, season_col, 'playerId')
     
     # 2. Opponent history
     print("  2/4: Opponent history features...")
-    df = add_opponent_history_features(df, stat_cols)
+    df_temp = add_opponent_history_features(df_temp, stat_cols)
     
     # 3. Schedule density
     print("  3/4: Schedule density features...")
-    df = add_schedule_density_features(df, date_col)
+    df_temp = add_schedule_density_features(df_temp, date_col)
     
     # 4. Adaptive temporal weighting
     print("  4/4: Adaptive temporal features...")
-    df = add_adaptive_weighted_features(df, stat_cols)
+    df_temp = add_adaptive_weighted_features(df_temp, stat_cols)
     
     # 5. Revenge games (placeholder)
-    df = add_revenge_game_indicator(df)
+    df_temp = add_revenge_game_indicator(df_temp)
+    
+    # Drop the temporary playerId column if we created it
+    if player_id_col != 'playerId' and 'playerId' in df_temp.columns:
+        df_temp = df_temp.drop(columns=['playerId'])
     
     print("✅ Phase 7 features added!")
     print(f"   Total new features: ~{len(stat_cols) * 10 + 8}")
     
-    return df
+    return df_temp
 
 
 # ==============================================================================

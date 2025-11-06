@@ -2877,7 +2877,8 @@ def build_players_from_playerstats(
             ps_join,
             stat_cols=stat_cols,
             season_col='season_end_year',
-            date_col=date_col
+            date_col=date_col,
+            player_id_col=pid_col
         )
         
         # Add Phase 7 feature names to base_ctx_cols
