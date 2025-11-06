@@ -59,6 +59,17 @@ class NeuralHybridPredictor:
         self.use_gpu = use_gpu and TORCH_AVAILABLE
         
         # TabNet hyperparameters (tuned for sports data)
+        tabnet_optimizer_params = {
+            'lr': 2e-2,
+            'weight_decay': 1e-5
+        }
+        tabnet_scheduler_params = {
+            'mode': 'min',
+            'patience': 5,
+            'factor': 0.5,
+            'min_lr': 1e-5
+        }
+        
         self.tabnet_params = {
             'n_d': 32,                    # Width of decision prediction layer
             'n_a': 32,                    # Width of attention embedding
@@ -70,17 +81,9 @@ class NeuralHybridPredictor:
             'momentum': 0.3,              # Batch norm momentum
             'clip_value': 2.0,            # Gradient clipping
             'optimizer_fn': torch.optim.AdamW if TORCH_AVAILABLE else None,
-            'optimizer_params': {
-                'lr': 2e-2,
-                'weight_decay': 1e-5
-            },
+            'optimizer_params': tabnet_optimizer_params,
             'scheduler_fn': torch.optim.lr_scheduler.ReduceLROnPlateau if TORCH_AVAILABLE else None,
-            'scheduler_params': {
-                'mode': 'min',
-                'patience': 5,
-                'factor': 0.5,
-                'min_lr': 1e-5
-            },
+            'scheduler_params': tabnet_scheduler_params,
             'mask_type': 'entmax',        # Sparse attention (better than sparsemax)
             'verbose': 1,
             'device_name': 'cuda' if self.use_gpu else 'cpu'

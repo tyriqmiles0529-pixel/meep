@@ -680,15 +680,32 @@ def add_opponent_strength_features(df: pd.DataFrame,
         
         # Categorize opponents (elite, strong, average, weak) - handle duplicate edges
         try:
+            # Get quantiles and ensure they're unique and increasing
             quantiles = [result[col].quantile(q) for q in [0.25, 0.50, 0.75]]
-            # Check if quantiles are unique (monotonically increasing)
-            if len(set(quantiles)) == len(quantiles) and quantiles == sorted(quantiles):
-                result[f'{col}_category'] = pd.cut(
-                    result[col],
-                    bins=[-np.inf] + quantiles + [np.inf],
-                    labels=['elite_def', 'strong_def', 'avg_def', 'weak_def'],
-                    duplicates='drop'
-                ).astype(str)
+            unique_quantiles = sorted(set(quantiles))
+            
+            # Need at least 2 unique values to create bins
+            if len(unique_quantiles) >= 2:
+                # Ensure monotonic increase by adding small increments if needed
+                bins = [-np.inf] + unique_quantiles + [np.inf]
+                # Remove duplicate bins
+                bins = sorted(set(bins))
+                
+                if len(bins) >= 3:  # Need at least 3 bins to create 2+ categories
+                    n_labels = len(bins) - 1
+                    labels = ['elite_def', 'strong_def', 'avg_def', 'weak_def'][:n_labels]
+                    result[f'{col}_category'] = pd.cut(
+                        result[col],
+                        bins=bins,
+                        labels=labels,
+                        duplicates='drop'
+                    ).astype(str)
+                else:
+                    # Not enough unique bins - use median split
+                    median_val = result[col].median()
+                    result[f'{col}_category'] = result[col].apply(
+                        lambda x: 'strong_def' if x > median_val else 'weak_def'
+                    ).astype(str)
             else:
                 # Not enough variance - use median split
                 median_val = result[col].median()
@@ -736,13 +753,13 @@ def add_fatigue_features(df: pd.DataFrame, group_by: str = 'playerId',
         try:
             result['date_dt'] = pd.to_datetime(result['date'], errors='coerce')
             # Sort by player and date for proper rolling
-            result_sorted = result.sort_values([player_id_col, 'date_dt'])
+            result_sorted = result.sort_values([group_by, 'date_dt'])
             
             for days in [7, 14, 30]:
-                # Count games in rolling window for each player
-                result_sorted[f'games_last_{days}d'] = result_sorted.groupby(player_id_col).apply(
-                    lambda group: group.set_index('date_dt').rolling(f'{days}D').size()
-                ).reset_index(level=0, drop=True)
+                # Count games in rolling window for each player using integer-based rolling
+                result_sorted[f'games_last_{days}d'] = grouped[minutes_col].transform(
+                    lambda x: x.rolling(min(days, 10), min_periods=1).count()
+                )
             
             # Re-sort to original order
             result = result_sorted.sort_index()

@@ -2882,7 +2882,7 @@ def build_players_from_playerstats(
         ]
         
         # Opponent history features (per stat)
-        for stat in [pts_col, reb_col, ast_col, three_col]:
+        for stat in [pts_col, reb_col, ast_col, tpm_col]:
             if stat:
                 phase7_features.extend([
                     f'{stat}_vs_opponent_career',
@@ -2891,7 +2891,7 @@ def build_players_from_playerstats(
                 ])
         
         # Adaptive temporal features (per stat, per window)
-        for stat in [pts_col, reb_col, ast_col, three_col]:
+        for stat in [pts_col, reb_col, ast_col, tpm_col]:
             if stat:
                 for window in [5, 10, 15]:
                     phase7_features.extend([
