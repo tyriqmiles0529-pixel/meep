@@ -5171,7 +5171,8 @@ def main():
             
             if is_neural:
                 # Save neural hybrid models using their own save method
-                cache_base = cache_path.with_suffix('')  # Remove .pkl
+                cache_path_obj = Path(cache_path)
+                cache_base = cache_path_obj.with_suffix('')  # Remove .pkl
                 for prop, model in [('points', points_model), ('rebounds', rebounds_model), 
                                     ('assists', assists_model), ('threes', threes_model)]:
                     if isinstance(model, NeuralHybridPredictor):
