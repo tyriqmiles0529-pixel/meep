@@ -3245,6 +3245,14 @@ def train_player_model_enhanced(df: pd.DataFrame, prop_name: str, verbose: bool,
     Returns:
         (model, metrics_dict)
     """
+    seed = 42
+
+    # Minutes uses a different training function (no 'label' column, no neural hybrid)
+    if prop_name == 'minutes':
+        model, metrics = _fit_minutes_model(df=df, seed=seed, verbose=verbose)
+        return model, metrics
+
+    # For other props (points, rebounds, assists, threes), use neural hybrid
     # Determine if GPU should be used
     use_gpu = False
     if neural_device == 'gpu':
@@ -3257,7 +3265,6 @@ def train_player_model_enhanced(df: pd.DataFrame, prop_name: str, verbose: bool,
     use_neural = True
 
     # Call the existing _fit_stat_model function
-    seed = 42
     model, sigma_model, metrics = _fit_stat_model(
         df=df,
         seed=seed,
