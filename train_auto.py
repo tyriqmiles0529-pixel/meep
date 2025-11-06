@@ -3777,6 +3777,7 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool, seasons_t
 def main():
     ap = argparse.ArgumentParser(description="Train NBA game and player models (always fetch from Kaggle).")
     ap.add_argument("--dataset", type=str, default="eoinamoore/historical-nba-data-and-player-box-scores", help="Kaggle dataset ref")
+    ap.add_argument("--player-csv", type=str, default=None, help="Path to local PlayerStatistics.csv (overrides Kaggle download for player data)")
     ap.add_argument("--models-dir", type=str, default="models", help="Output dir for models")
     ap.add_argument("--seed", type=int, default=42, help="Random seed")
     ap.add_argument("--verbose", action="store_true", help="Verbose logging")
@@ -3934,6 +3935,15 @@ def main():
             log("⚠️  WARNING: PlayerStatistics CSV not found in Kaggle dataset!", True)
             log("   Only game-level models will be trained. Player prop models require PlayerStatistics data.", True)
             log(f"   Files found in {ds_root}: {list(ds_root.glob('*.csv'))}", True)
+    
+    # Override with local PlayerStatistics.csv if provided
+    if args.player_csv:
+        local_player_path = Path(args.player_csv)
+        if local_player_path.exists():
+            players_path = local_player_path
+            log(f"✅ Using local PlayerStatistics.csv: {players_path} ({local_player_path.stat().st_size / 1024 / 1024:.1f} MB)", True)
+        else:
+            log(f"⚠️  WARNING: --player-csv specified but file not found: {local_player_path}", True)
 
     models_dir = Path(args.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
