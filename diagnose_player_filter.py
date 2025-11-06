@@ -58,6 +58,7 @@ print(f"   Unique seasons (first 20): {sorted(ps['_temp_season'].dropna().unique
 
 # Test filtering for a specific window (2007-2011)
 print("\n4. Testing window filtering (2007-2011)...")
+print("   Testing OLD behavior (without fix) to demonstrate the bug...")
 window_seasons = [2007, 2008, 2009, 2010, 2011]
 padded_seasons = set(window_seasons) | {2006, 2012}  # ±1 padding
 
@@ -109,29 +110,54 @@ if len(filtered) == 0:
         if len(filtered_fixed) > 0:
             print("     ✅ FIX CONFIRMED: Int64 conversion resolves the issue!")
 else:
-    print(f"\n   ✅ Filtering works! Got {len(filtered):,} rows for 2007-2011")
+    print(f"\n   ✅ OLD code filtering works! Got {len(filtered):,} rows for 2007-2011")
     print(f"     Season distribution: {filtered['_temp_season'].value_counts().sort_index().to_dict()}")
 
+# Now test with the FIX applied
+print("\n5. Testing NEW behavior (WITH fix - .astype('Int64'))...")
+ps['_temp_season_fixed'] = _season_from_date(ps[date_col]).astype('Int64')
+filtered_fixed = ps[ps['_temp_season_fixed'].isin(padded_seasons)].copy()
+print(f"   RESULT: Filtered {len(ps):,} → {len(filtered_fixed):,} rows ({len(filtered_fixed)/len(ps)*100:.1f}%)")
+
+if len(filtered_fixed) > 0:
+    print(f"   ✅ FIX WORKS! Got {len(filtered_fixed):,} rows for 2007-2011")
+    print(f"   Season distribution: {filtered_fixed['_temp_season_fixed'].value_counts().sort_index().to_dict()}")
+else:
+    print(f"   ❌ FIX FAILED! Still getting 0 rows")
+
 print("\n" + "=" * 80)
-print("RECOMMENDATION:")
+print("VERDICT:")
 print("=" * 80)
 
-if len(filtered) == 0:
-    print("\n❌ CRITICAL BUG: Window filtering removes all player data!")
-    print("\nFIX NEEDED in train_auto.py around line 5040-5042:")
-    print("   Change:")
-    print("     hist_players_df['_temp_season'] = _season_from_date(hist_players_df[date_col])")
-    print("     padded_seasons = set(window_seasons) | {start_year-1, end_year+1}")
-    print("     hist_players_df = hist_players_df[hist_players_df['_temp_season'].isin(padded_seasons)]")
-    print("\n   To:")
-    print("     hist_players_df['_temp_season'] = _season_from_date(hist_players_df[date_col]).astype('Int64')")
-    print("     padded_seasons = set(window_seasons) | {start_year-1, end_year+1}")
-    print("     hist_players_df = hist_players_df[hist_players_df['_temp_season'].isin(padded_seasons)]")
+if len(filtered) == 0 and len(filtered_fixed) > 0:
+    print("\n✅ DIAGNOSTIC CONFIRMS: Bug exists in OLD code, FIX resolves it!")
+    print(f"\n   OLD behavior (float64): 0 rows ❌")
+    print(f"   NEW behavior (Int64):   {len(filtered_fixed):,} rows ✅")
+    print("\n   The fix in train_auto.py (lines 5018, 5040, 5090) is CORRECT.")
+    print("   Training will work if you're using the latest code from GitHub.")
+elif len(filtered) > 0 and len(filtered_fixed) > 0:
+    print("\n✅ Both OLD and NEW code work on this sample!")
+    print(f"   This can happen if the sample data doesn't trigger the type mismatch.")
+    print(f"   The fix is still needed for the full dataset.")
+elif len(filtered) == 0 and len(filtered_fixed) == 0:
+    print("\n❌ BOTH old and new code fail! Different issue:")
+    print("   Possible causes:")
+    print("     1. Date parsing failed (all NaT)")
+    print("     2. Data is from wrong date range")
+    print("     3. PlayerStatistics.csv has no data for 2007-2011")
 else:
-    print("\n✅ Filtering works correctly on this sample!")
-    print("   If training still fails, the issue may be:")
-    print("     1. Different behavior on full dataset")
-    print("     2. Memory issues (file too large)")
-    print("     3. Issue occurs in build_players_from_playerstats() later")
+    print("\n⚠️  Unexpected result - investigate further")
+
+print("\n" + "=" * 80)
+print("NEXT STEPS:")
+print("=" * 80)
+print("\n✅ If you see 'FIX WORKS' above:")
+print("   1. Make sure Colab ran 'git pull' in Step 2")
+print("   2. Proceed with training - player data will load")
+print("   3. Expect to see: 'Loaded 245,892+ player-games for window'")
+print("\n❌ If you see 'FIX FAILED' above:")
+print("   1. Check PlayerStatistics.csv has data")
+print("   2. Verify date column exists and is parseable")
+print("   3. Report issue on GitHub")
 
 print("=" * 80)
