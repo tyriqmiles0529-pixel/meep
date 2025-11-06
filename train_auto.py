@@ -4932,10 +4932,10 @@ def main():
         ridge_model, elo_model, ff_model, ensembler = None, None, None, None
 
     # ========================================================================
-    # PLAYER MODELS (Per-Window Training for Memory Optimization)
+    # PLAYER MODELS
     # ========================================================================
     player_metrics: Dict[str, Dict[str, float]] = {}
-    if players_path and players_path.exists():
+    if players_path and players_path.exists() and args.enable_window_ensemble:
         print(_sec("Training player models per window"))
 
         # Define cache directory
