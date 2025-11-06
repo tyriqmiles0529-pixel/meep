@@ -23,7 +23,7 @@ warnings.filterwarnings('ignore')
 # 1. SITUATIONAL CONTEXT FEATURES
 # ==============================================================================
 
-def add_season_context_features(df: pd.DataFrame, season_col: str = 'season_end_year', player_id_col: str = 'playerId') -> pd.DataFrame:
+def add_season_context_features(df: pd.DataFrame, season_col: str = 'season_end_year', date_col: str = 'date', player_id_col: str = 'personId') -> pd.DataFrame:
     """
     Add features based on time within season.
     
@@ -36,9 +36,14 @@ def add_season_context_features(df: pd.DataFrame, season_col: str = 'season_end_
     """
     df = df.copy()
     
+    # Validate required columns
+    if player_id_col not in df.columns:
+        print(f"  Warning: {player_id_col} not in columns, skipping season context features")
+        return df
+    
     # Calculate games into season
-    if 'date' in df.columns:
-        df['games_into_season'] = df.sort_values('date').groupby([player_id_col, season_col]).cumcount()
+    if date_col in df.columns:
+        df['games_into_season'] = df.sort_values(date_col).groupby([player_id_col, season_col]).cumcount()
     else:
         df['games_into_season'] = df.groupby([player_id_col, season_col]).cumcount()
     
@@ -67,7 +72,7 @@ def add_season_context_features(df: pd.DataFrame, season_col: str = 'season_end_
     return df
 
 
-def add_opponent_history_features(df: pd.DataFrame, stat_cols: list) -> pd.DataFrame:
+def add_opponent_history_features(df: pd.DataFrame, stat_cols: list, player_id_col: str = 'personId') -> pd.DataFrame:
     """
     Add player performance history against specific opponents.
     
@@ -78,6 +83,11 @@ def add_opponent_history_features(df: pd.DataFrame, stat_cols: list) -> pd.DataF
     """
     df = df.copy()
     
+    # Check required columns
+    if player_id_col not in df.columns or 'opponent' not in df.columns:
+        print(f"  Warning: Missing {player_id_col} or opponent column, skipping opponent history features")
+        return df
+    
     for stat_col in stat_cols:
         if stat_col not in df.columns:
             continue
@@ -87,12 +97,12 @@ def add_opponent_history_features(df: pd.DataFrame, stat_cols: list) -> pd.DataF
             df = df.sort_values('date')
         
         # Career average vs opponent (shifted to avoid leakage)
-        df[f'{stat_col}_vs_opponent_career'] = df.groupby(['playerId', 'opponent'])[stat_col].transform(
+        df[f'{stat_col}_vs_opponent_career'] = df.groupby([player_id_col, 'opponent'])[stat_col].transform(
             lambda x: x.shift(1).expanding().mean()
         )
         
         # Last 3 games vs opponent
-        df[f'{stat_col}_vs_opponent_L3'] = df.groupby(['playerId', 'opponent'])[stat_col].transform(
+        df[f'{stat_col}_vs_opponent_L3'] = df.groupby([player_id_col, 'opponent'])[stat_col].transform(
             lambda x: x.shift(1).rolling(3, min_periods=1).mean()
         )
         
@@ -472,6 +482,7 @@ class AdaptiveTemporalWeighting:
 
 
 def add_adaptive_weighted_features(df: pd.DataFrame, stat_cols: list, 
+                                    player_id_col: str = 'personId',
                                     windows: list = [5, 10, 15]) -> pd.DataFrame:
     """
     Add features using adaptive temporal weighting.
@@ -482,6 +493,11 @@ def add_adaptive_weighted_features(df: pd.DataFrame, stat_cols: list,
     """
     df = df.copy()
     weighter = AdaptiveTemporalWeighting()
+    
+    # Check if player_id_col exists
+    if player_id_col not in df.columns:
+        print(f"  Warning: {player_id_col} not in columns, skipping adaptive features")
+        return df
     
     for stat_col in stat_cols:
         if stat_col not in df.columns:
@@ -502,12 +518,12 @@ def add_adaptive_weighted_features(df: pd.DataFrame, stat_cols: list,
                 return weighter.calculate_consistency(values)
             
             # Adaptive weighted average
-            df[f'{stat_col}_adaptive_L{window}'] = df.groupby('playerId')[stat_col].transform(
+            df[f'{stat_col}_adaptive_L{window}'] = df.groupby(player_id_col)[stat_col].transform(
                 lambda x: x.shift(1).rolling(window, min_periods=2).apply(adaptive_avg, raw=False)
             )
             
             # Consistency score
-            df[f'{stat_col}_consistency_L{window}'] = df.groupby('playerId')[stat_col].transform(
+            df[f'{stat_col}_consistency_L{window}'] = df.groupby(player_id_col)[stat_col].transform(
                 lambda x: x.shift(1).rolling(window, min_periods=3).apply(calc_consistency, raw=False)
             )
     
@@ -550,38 +566,29 @@ def add_phase7_features(df: pd.DataFrame,
         print(f"   Available columns: {df.columns.tolist()[:10]}")
         return df
     
-    # Temporarily rename player column to playerId for compatibility
-    df_temp = df.copy()
-    if player_id_col != 'playerId':
-        df_temp['playerId'] = df_temp[player_id_col]
-    
     # 1. Season context
     print("  1/4: Season context features...")
-    df_temp = add_season_context_features(df_temp, season_col, 'playerId')
+    df = add_season_context_features(df, season_col, date_col, player_id_col)
     
     # 2. Opponent history
     print("  2/4: Opponent history features...")
-    df_temp = add_opponent_history_features(df_temp, stat_cols)
+    df = add_opponent_history_features(df, stat_cols, player_id_col)
     
     # 3. Schedule density
     print("  3/4: Schedule density features...")
-    df_temp = add_schedule_density_features(df_temp, date_col)
+    df = add_schedule_density_features(df, date_col)
     
     # 4. Adaptive temporal weighting
     print("  4/4: Adaptive temporal features...")
-    df_temp = add_adaptive_weighted_features(df_temp, stat_cols)
+    df = add_adaptive_weighted_features(df, stat_cols, player_id_col)
     
     # 5. Revenge games (placeholder)
-    df_temp = add_revenge_game_indicator(df_temp)
-    
-    # Drop the temporary playerId column if we created it
-    if player_id_col != 'playerId' and 'playerId' in df_temp.columns:
-        df_temp = df_temp.drop(columns=['playerId'])
+    df = add_revenge_game_indicator(df)
     
     print("✅ Phase 7 features added!")
     print(f"   Total new features: ~{len(stat_cols) * 10 + 8}")
     
-    return df_temp
+    return df
 
 
 # ==============================================================================

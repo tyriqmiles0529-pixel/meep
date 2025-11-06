@@ -325,37 +325,42 @@ class NeuralHybridPredictor:
         if self.tabnet is None:
             raise ValueError("TabNet not trained yet")
         
-        self.tabnet.network.eval()
-        
-        with torch.no_grad():
-            X_tensor = torch.from_numpy(X).float()
-            if self.use_gpu:
-                X_tensor = X_tensor.cuda()
+        try:
+            self.tabnet.network.eval()
             
-            try:
-                # Try to get embeddings from the network
-                # TabNet architecture: input -> encoder -> decoder -> output
-                output = self.tabnet.network(X_tensor)
-                
-                # The output might be a tuple (prediction, embeddings) or just prediction
-                if isinstance(output, tuple):
-                    embeddings = output[0] if output[0].dim() > 1 else output[1]
-                else:
-                    # If we just get predictions, use them as 1D embeddings
-                    embeddings = output.reshape(-1, 1) if output.dim() == 1 else output
-                
-            except (AttributeError, RuntimeError) as e:
-                # Fallback: use predictions as embeddings
-                print(f"  Warning: Using predictions as embeddings (API changed)")
-                predictions = self.tabnet.predict(X)
-                embeddings = torch.from_numpy(predictions).float().reshape(-1, 1)
+            with torch.no_grad():
+                X_tensor = torch.from_numpy(X).float()
                 if self.use_gpu:
-                    embeddings = embeddings.cuda()
-            
-            if self.use_gpu:
-                embeddings = embeddings.cpu()
-            
-            return embeddings.numpy()
+                    X_tensor = X_tensor.cuda()
+                
+                # Try different TabNet API versions
+                if hasattr(self.tabnet.network, 'embedder'):
+                    # Newer pytorch-tabnet API
+                    embeddings = self.tabnet.network.embedder(X_tensor)
+                    steps_output, _ = self.tabnet.network.tabnet(embeddings)
+                    embeddings = steps_output[:, -1, :]
+                elif hasattr(self.tabnet.network, 'encoder'):
+                    # Older API
+                    steps_output, _ = self.tabnet.network.encoder(X_tensor)
+                    embeddings = steps_output[:, -1, :]
+                else:
+                    # Generic forward pass
+                    output = self.tabnet.network(X_tensor)
+                    if isinstance(output, tuple):
+                        embeddings = output[0] if output[0].dim() > 1 else output[1]
+                    else:
+                        embeddings = output.reshape(-1, 1) if output.dim() == 1 else output
+                
+                if self.use_gpu:
+                    embeddings = embeddings.cpu()
+                
+                return embeddings.numpy()
+                
+        except Exception as e:
+            # Ultimate fallback: use predictions as simple embeddings
+            print(f"  Warning: Using predictions as embeddings ({str(e)[:60]}...)")
+            predictions = self.tabnet.predict(X)
+            return predictions.reshape(-1, 1)
     
     def predict(self, X, return_uncertainty=False):
         """
