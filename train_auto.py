@@ -3229,6 +3229,49 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str, use_n
     print(f"- RMSE={_fmt(rmse)}, MAE={_fmt(mae)}")
     return reg, reg_sig, {"rows": int(n), "rmse": rmse, "mae": mae}
 
+
+def train_player_model_enhanced(df: pd.DataFrame, prop_name: str, verbose: bool,
+                                neural_device: str = 'cpu', neural_epochs: int = 50) -> Tuple[object, Dict[str, float]]:
+    """
+    Wrapper for training player models with neural hybrid support.
+
+    Args:
+        df: DataFrame with player data
+        prop_name: Name of the property (minutes, points, rebounds, assists, threes)
+        verbose: Whether to print detailed logs
+        neural_device: 'cpu', 'gpu', or 'auto'
+        neural_epochs: Number of TabNet training epochs
+
+    Returns:
+        (model, metrics_dict)
+    """
+    # Determine if GPU should be used
+    use_gpu = False
+    if neural_device == 'gpu':
+        use_gpu = True
+    elif neural_device == 'auto' and TORCH_AVAILABLE:
+        import torch
+        use_gpu = torch.cuda.is_available()
+
+    # Always use neural hybrid for player models (that's the point of this mode)
+    use_neural = True
+
+    # Call the existing _fit_stat_model function
+    seed = 42
+    model, sigma_model, metrics = _fit_stat_model(
+        df=df,
+        seed=seed,
+        verbose=verbose,
+        name=prop_name,
+        use_neural=use_neural,
+        neural_epochs=neural_epochs,
+        use_gpu=use_gpu
+    )
+
+    # Return just model and metrics (caller doesn't need sigma model separately)
+    return model, metrics
+
+
 # ---------------- Betting Odds and Priors Loaders ----------------
 
 def load_team_abbrev_map(source_root: Path, verbose: bool, source_name: str = "reference data") -> Dict[Tuple[int, str], str]:
