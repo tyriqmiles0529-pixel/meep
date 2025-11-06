@@ -1145,19 +1145,25 @@ def build_games_from_teamstats(teams_path: Path, verbose: bool, skip_rest: bool)
     # date (keep NaT) - use format='mixed' to handle both ISO8601 and simple datetime
     ts[date_c] = pd.to_datetime(ts[date_c], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
 
-    # MEMORY OPTIMIZATION: Filter to seasons >= 2002 immediately after loading
-    # This reduces TeamStatistics from ~144k rows (1946-2026) to ~65k rows (2002-2026)
+    # MEMORY OPTIMIZATION: Filter to seasons >= cutoff (default 2002, configurable via --game-season-cutoff)
+    # This reduces TeamStatistics from ~144k rows (1946-2026) to fewer rows based on cutoff
+    # Use global cutoff_year if available, otherwise default to 2002
+    try:
+        cutoff_year = globals().get('_GAME_SEASON_CUTOFF', 2002)
+    except:
+        cutoff_year = 2002
+
     if "season" in ts.columns:
         orig_len = len(ts)
-        ts = ts[ts["season"] >= 2002].copy()
+        ts = ts[ts["season"] >= cutoff_year].copy()
         if verbose:
-            log(f"  Filtered TeamStatistics by season: {orig_len:,} → {len(ts):,} rows (2002+, saved ~{(orig_len - len(ts)) * 0.3 / 1024:.1f} MB)", True)
+            log(f"  Filtered TeamStatistics by season: {orig_len:,} → {len(ts):,} rows ({cutoff_year}+, saved ~{(orig_len - len(ts)) * 0.3 / 1024:.1f} MB)", True)
     elif date_c in ts.columns:
         # Fallback: filter by date if no season column
         orig_len = len(ts)
-        ts = ts[ts[date_c] >= "2002-01-01"].copy()
+        ts = ts[ts[date_c] >= f"{cutoff_year}-01-01"].copy()
         if verbose and len(ts) < orig_len:
-            log(f"  Filtered TeamStatistics by date: {orig_len:,} → {len(ts):,} rows (2002+, saved ~{(orig_len - len(ts)) * 0.3 / 1024:.1f} MB)", True)
+            log(f"  Filtered TeamStatistics by date: {orig_len:,} → {len(ts):,} rows ({cutoff_year}+, saved ~{(orig_len - len(ts)) * 0.3 / 1024:.1f} MB)", True)
 
     # scores
     ts[tscore_c] = pd.to_numeric(ts[tscore_c], errors="coerce")
@@ -1680,10 +1686,16 @@ def build_players_from_playerstats(
                 date_range = f"{ps[date_col].min()} to {ps[date_col].max()}"
                 log(f"  DEBUG: Date range: {date_range}", True)
         
-        ps = ps[ps[date_col] >= "2002-01-01"].copy()
+        # Use global cutoff if available, otherwise default to 2002
+        try:
+            player_cutoff_year = globals().get('_PLAYER_SEASON_CUTOFF', 2002)
+        except:
+            player_cutoff_year = 2002
+
+        ps = ps[ps[date_col] >= f"{player_cutoff_year}-01-01"].copy()
         if verbose and len(ps) < orig_len:
             memory_saved = (orig_len - len(ps)) * 0.19  # ~0.19 KB per row for PlayerStatistics
-            log(f"  Filtered PlayerStatistics by date: {orig_len:,} → {len(ps):,} rows (2002+, saved ~{memory_saved / 1024:.1f} MB)", True)
+            log(f"  Filtered PlayerStatistics by date: {orig_len:,} → {len(ps):,} rows ({player_cutoff_year}+, saved ~{memory_saved / 1024:.1f} MB)", True)
 
     # MEMORY OPTIMIZATION 2: Filter to window seasons if provided (per-window processing)
     # This reduces from ~833k rows (all seasons) to ~150k per 5-year window (82% reduction!)
@@ -3808,6 +3820,8 @@ def main():
                     help="Train 5-year window ensembles (default: enabled, use --no-window-ensemble to disable)")
     ap.add_argument("--no-window-ensemble", action="store_false", dest="enable_window_ensemble",
                     help="Disable window ensemble training")
+    ap.add_argument("--start-year", type=int, default=None,
+                    help="Start training from this year (e.g., 1974 for earliest priors data). Auto-determined if not set.")
 
     args = ap.parse_args()
 
@@ -3816,6 +3830,11 @@ def main():
     # Apply global threads limit for learners
     global N_JOBS
     N_JOBS = int(args.n_jobs)
+
+    # Set global cutoff variables for data loading functions
+    global _GAME_SEASON_CUTOFF, _PLAYER_SEASON_CUTOFF
+    _GAME_SEASON_CUTOFF = _parse_season_cutoff(args.game_season_cutoff, "game")
+    _PLAYER_SEASON_CUTOFF = _parse_season_cutoff(args.player_season_cutoff, "player")
 
     print(_sec("🏀 NBA Training Pipeline Configuration"))
     print("\n📊 DATASETS (auto-cached):")
