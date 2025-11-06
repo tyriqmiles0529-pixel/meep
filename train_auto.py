@@ -5087,7 +5087,7 @@ def main():
 
             if date_col:
                 raw_players_df[date_col] = pd.to_datetime(raw_players_df[date_col], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
-                raw_players_df['season_end_year'] = _season_from_date(raw_players_df[date_col])
+                raw_players_df['season_end_year'] = _season_from_date(raw_players_df[date_col]).astype('Int64')
                 raw_players_df_window = raw_players_df[raw_players_df["season_end_year"].isin(window_seasons)]
             else:
                 raw_players_df_window = raw_players_df
