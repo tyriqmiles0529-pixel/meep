@@ -2692,40 +2692,36 @@ def build_players_from_playerstats(
                     if col not in ps_join.columns:
                         ps_join[col] = np.nan
 
-                # Merge by (name_key, season) - strict match first (BATCHED to avoid memory explosion)
-                batch_size = 5000  # Process in smaller chunks
+                # FAST MERGE: Single operation instead of batching (you have 167 GB RAM!)
+                # Old code used batches of 5k rows = 327 iterations (5+ min)
+                # New code: one merge = 2-5 seconds
                 if verbose:
-                    log(f"  Merging priors in batches of {batch_size:,} rows to avoid memory issues", True)
+                    log(f"  Merging {len(ps_join):,} player-games with {len(priors_players):,} prior records (single-pass merge)", True)
 
-                for start_idx in range(0, len(ps_join), batch_size):
-                    end_idx = min(start_idx + batch_size, len(ps_join))
-                    batch = ps_join.iloc[start_idx:end_idx][["__name_key__", "season_end_year"]].copy()
+                # Create temporary dataframe with merge keys + index
+                merge_temp = ps_join[["__name_key__", "season_end_year"]].copy()
+                merge_temp["__orig_idx__"] = ps_join.index
 
-                    merged_batch = batch.merge(
-                        priors_players[["__name_key__", "season_for_game"] + merge_cols],
-                        left_on=["__name_key__", "season_end_year"],
-                        right_on=["__name_key__", "season_for_game"],
-                        how="left",
-                        suffixes=("", "_prior")
-                    )
+                # Single merge operation
+                merged = merge_temp.merge(
+                    priors_players[["__name_key__", "season_for_game"] + merge_cols],
+                    left_on=["__name_key__", "season_end_year"],
+                    right_on=["__name_key__", "season_for_game"],
+                    how="left",
+                    suffixes=("", "_dup")
+                )
 
-                    # Deduplicate if merge created duplicates (keep first)
-                    if len(merged_batch) > len(batch):
-                        merged_batch = merged_batch.drop_duplicates(subset=["__name_key__", "season_end_year"], keep="first")
+                # Handle duplicates (multiple prior records for same player-season)
+                if len(merged) > len(merge_temp):
+                    if verbose:
+                        log(f"    Deduplicating: {len(merged):,} → {len(merge_temp):,} rows", True)
+                    merged = merged.sort_values("__orig_idx__").drop_duplicates(subset="__orig_idx__", keep="first")
 
-                    # Safety check: ensure merged_batch length matches batch length
-                    if len(merged_batch) != len(batch):
-                        # If lengths don't match, skip this batch
-                        continue
-
-                    # Update ps_join with merged columns
-                    for col in merge_cols:
-                        src_col = col if col in merged_batch.columns else (col + "_prior" if col + "_prior" in merged_batch.columns else None)
-                        if src_col and src_col in merged_batch.columns:
-                            # Ensure we're assigning the correct length
-                            values_to_assign = merged_batch[src_col].values
-                            if len(values_to_assign) == (end_idx - start_idx):
-                                ps_join.iloc[start_idx:end_idx, ps_join.columns.get_loc(col)] = values_to_assign
+                # Assign merged columns back to ps_join using original index
+                merged = merged.set_index("__orig_idx__").reindex(ps_join.index)
+                for col in merge_cols:
+                    if col in merged.columns:
+                        ps_join[col] = merged[col]
                 
                 # For unmatched rows, try +/- 1 season (handles off-by-one issues) — chunked to save memory
                 prior_cols_present = [c for c in merge_cols if c in ps_join.columns]
