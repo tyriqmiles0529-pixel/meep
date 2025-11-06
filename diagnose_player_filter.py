@@ -56,13 +56,30 @@ print(f"   Non-null seasons: {ps['_temp_season'].notna().sum()} / {len(ps)} ({ps
 print(f"   Season range: {ps['_temp_season'].min()} to {ps['_temp_season'].max()}")
 print(f"   Unique seasons (first 20): {sorted(ps['_temp_season'].dropna().unique())[:20]}")
 
-# Test filtering for a specific window (2007-2011)
-print("\n4. Testing window filtering (2007-2011)...")
+# Test filtering - use seasons that actually exist in the data
+print("\n4. Testing window filtering...")
 print("   Testing OLD behavior (without fix) to demonstrate the bug...")
-window_seasons = [2007, 2008, 2009, 2010, 2011]
-padded_seasons = set(window_seasons) | {2006, 2012}  # ±1 padding
 
-print(f"   Window seasons: {window_seasons}")
+# Determine which seasons exist in the data
+available_seasons = sorted([int(s) for s in ps['_temp_season'].dropna().unique()])
+if len(available_seasons) == 0:
+    print("   ⚠️  No valid seasons in data - cannot test filtering")
+    window_seasons = [2007, 2008, 2009, 2010, 2011]  # fallback
+else:
+    # Use the actual seasons in data for testing
+    if len(available_seasons) >= 5:
+        window_seasons = available_seasons[:5]
+    else:
+        # If less than 5 seasons, use what we have + nearby years
+        window_seasons = available_seasons + list(range(available_seasons[-1]+1, available_seasons[-1]+6-len(available_seasons)))
+
+print(f"   Seasons in data: {available_seasons}")
+print(f"   Testing with window: {window_seasons}")
+
+padded_seasons = set(window_seasons)
+if len(window_seasons) > 0:
+    padded_seasons = padded_seasons | {window_seasons[0]-1, window_seasons[-1]+1}  # ±1 padding
+
 print(f"   Padded seasons (±1): {sorted(padded_seasons)}")
 print(f"   Padded seasons dtype: {type(list(padded_seasons)[0])}")
 print(f"   _temp_season dtype: {type(ps['_temp_season'].iloc[0]) if ps['_temp_season'].notna().any() else 'all NaN'}")
@@ -110,17 +127,28 @@ if len(filtered) == 0:
         if len(filtered_fixed) > 0:
             print("     ✅ FIX CONFIRMED: Int64 conversion resolves the issue!")
 else:
-    print(f"\n   ✅ OLD code filtering works! Got {len(filtered):,} rows for 2007-2011")
+    print(f"\n   ✅ OLD code filtering works! Got {len(filtered):,} rows for {window_seasons}")
     print(f"     Season distribution: {filtered['_temp_season'].value_counts().sort_index().to_dict()}")
 
 # Now test with the FIX applied
 print("\n5. Testing NEW behavior (WITH fix - .astype('Int64'))...")
-ps['_temp_season_fixed'] = _season_from_date(ps[date_col]).astype('Int64')
+try:
+    # Try pd.Int64Dtype() first (correct way)
+    ps['_temp_season_fixed'] = _season_from_date(ps[date_col]).astype(pd.Int64Dtype())
+except:
+    # Fallback to 'Int64' string (older pandas)
+    try:
+        ps['_temp_season_fixed'] = _season_from_date(ps[date_col]).astype('Int64')
+    except:
+        # Last resort: convert to float then to nullable int
+        temp_float = _season_from_date(ps[date_col])
+        ps['_temp_season_fixed'] = temp_float.astype('int64', errors='ignore')
+
 filtered_fixed = ps[ps['_temp_season_fixed'].isin(padded_seasons)].copy()
 print(f"   RESULT: Filtered {len(ps):,} → {len(filtered_fixed):,} rows ({len(filtered_fixed)/len(ps)*100:.1f}%)")
 
 if len(filtered_fixed) > 0:
-    print(f"   ✅ FIX WORKS! Got {len(filtered_fixed):,} rows for 2007-2011")
+    print(f"   ✅ FIX WORKS! Got {len(filtered_fixed):,} rows for {window_seasons}")
     print(f"   Season distribution: {filtered_fixed['_temp_season_fixed'].value_counts().sort_index().to_dict()}")
 else:
     print(f"   ❌ FIX FAILED! Still getting 0 rows")
