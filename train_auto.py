@@ -1559,6 +1559,14 @@ def _fit_game_models(
     ml_brier = float(brier_score_loss(y_ml_val, p_val_cal))
     sp_rmse = float(math.sqrt(mean_squared_error(y_sp_val, y_pred_val)))
     sp_mae = float(mean_absolute_error(y_sp_val, y_pred_val))
+    
+    # Accuracy metrics (binary predictions)
+    ml_pred_binary = (p_val_cal >= 0.5).astype(int)
+    ml_accuracy = float(np.mean(ml_pred_binary == y_ml_val))
+    
+    # Spread accuracy (correct side of spread - within spread_sigma tolerance)
+    sp_correct_side = (np.sign(y_pred_val) == np.sign(y_sp_val)).astype(int)
+    sp_accuracy = float(np.mean(sp_correct_side))
 
     # Spread sigma from validation residuals
     spread_sigma = float(np.std(y_sp_val - y_pred_val, ddof=1))
@@ -1572,16 +1580,18 @@ def _fit_game_models(
 
     # Pretty summary
     print(_sec("Game model metrics (validation)"))
-    print(f"- Moneyline: logloss={_fmt(ml_logloss)}, Brier={_fmt(ml_brier)}")
-    print(f"- Spread:    RMSE={_fmt(sp_rmse)}, MAE={_fmt(sp_mae)}, sigma={_fmt(spread_sigma)}")
+    print(f"- Moneyline: logloss={_fmt(ml_logloss)}, Brier={_fmt(ml_brier)}, Accuracy={ml_accuracy*100:.1f}%")
+    print(f"- Spread:    RMSE={_fmt(sp_rmse)}, MAE={_fmt(sp_mae)}, sigma={_fmt(spread_sigma)}, Accuracy={sp_accuracy*100:.1f}%")
 
     metrics = {
         "train_size": int(len(X_tr)),
         "val_size": int(len(X_val)),
         "ml_logloss": ml_logloss,
         "ml_brier": ml_brier,
+        "ml_accuracy": ml_accuracy,
         "sp_rmse": sp_rmse,
         "sp_mae": sp_mae,
+        "sp_accuracy": sp_accuracy,
         "spread_sigma": spread_sigma,
     }
     return clf_final, calibrator, reg_final, spread_sigma, oof_df, metrics
