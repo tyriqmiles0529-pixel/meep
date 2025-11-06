@@ -4325,8 +4325,21 @@ def main():
             except Exception:
                 seasons_to_keep = None
         priors_path_str = args.priors_dataset
-        # Check if Kaggle dataset or local path
-        if "/" in priors_path_str and not os.path.exists(priors_path_str):
+        # Check if local path exists first, then try Kaggle
+        if os.path.exists(priors_path_str):
+            # Local path exists - use it directly
+            priors_root = Path(priors_path_str)
+            log(f"Loading priors from local path: {priors_root}", verbose)
+            
+            # List all CSV files found
+            csv_files = list(priors_root.glob("*.csv"))
+            log(f"Found {len(csv_files)} CSV files in priors directory:", verbose)
+            for f in csv_files:
+                log(f"  - {f.name} ({f.stat().st_size / 1024 / 1024:.1f} MB)", verbose)
+            
+            priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
+        elif "/" in priors_path_str:
+            # Looks like a Kaggle handle - try to download
             if not kagglehub:
                 log("Warning: kagglehub not available, skipping priors dataset", verbose)
                 priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
@@ -4349,20 +4362,9 @@ def main():
                     log(f"Traceback: {traceback.format_exc()}", verbose)
                     priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
         else:
-            priors_root = Path(priors_path_str)
-            if priors_root.exists():
-                log(f"Loading priors from local path: {priors_root}", verbose)
-                
-                # List all CSV files found
-                csv_files = list(priors_root.glob("*.csv"))
-                log(f"Found {len(csv_files)} CSV files in priors directory:", verbose)
-                for f in csv_files:
-                    log(f"  - {f.name} ({f.stat().st_size / 1024 / 1024:.1f} MB)", verbose)
-                
-                priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
-            else:
-                log(f"Warning: Priors dataset path does not exist: {priors_root}", verbose)
-                priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
+            # Not a Kaggle handle and doesn't exist
+            log(f"Warning: Priors dataset path does not exist: {priors_path_str}", verbose)
+            priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
         
     # Diagnostic: Check what we loaded
         if not priors_teams.empty:
