@@ -3930,6 +3930,10 @@ def main():
         teams_path, players_path = _find_dataset_files(ds_root)
         if not teams_path:
             raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
+        if not players_path:
+            log("⚠️  WARNING: PlayerStatistics CSV not found in Kaggle dataset!", True)
+            log("   Only game-level models will be trained. Player prop models require PlayerStatistics data.", True)
+            log(f"   Files found in {ds_root}: {list(ds_root.glob('*.csv'))}", True)
 
     models_dir = Path(args.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
