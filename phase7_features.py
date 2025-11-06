@@ -114,7 +114,7 @@ def add_opponent_history_features(df: pd.DataFrame, stat_cols: list, player_id_c
     return df
 
 
-def add_schedule_density_features(df: pd.DataFrame, date_col: str = 'date') -> pd.DataFrame:
+def add_schedule_density_features(df: pd.DataFrame, date_col: str = 'date', player_id_col: str = 'personId') -> pd.DataFrame:
     """
     Add features related to schedule density and travel.
     
@@ -125,8 +125,8 @@ def add_schedule_density_features(df: pd.DataFrame, date_col: str = 'date') -> p
     """
     df = df.copy()
     
-    if date_col not in df.columns:
-        # Can't calculate without dates
+    if date_col not in df.columns or player_id_col not in df.columns:
+        # Can't calculate without dates or player IDs
         df['games_in_last_7_days'] = 1
         df['avg_rest_days_L5'] = 1.5
         df['is_compressed_schedule'] = 0
@@ -137,11 +137,11 @@ def add_schedule_density_features(df: pd.DataFrame, date_col: str = 'date') -> p
     df = df.sort_values([date_col])
     
     # Calculate days since last game
-    df['days_since_last_game'] = df.groupby('playerId')[date_col].diff().dt.days
+    df['days_since_last_game'] = df.groupby(player_id_col)[date_col].diff().dt.days
     df['days_since_last_game'] = df['days_since_last_game'].fillna(2)  # Default: 2 days rest
     
     # Average rest days in last 5 games
-    df['avg_rest_days_L5'] = df.groupby('playerId')['days_since_last_game'].transform(
+    df['avg_rest_days_L5'] = df.groupby(player_id_col)['days_since_last_game'].transform(
         lambda x: x.rolling(5, min_periods=1).mean()
     )
     
@@ -163,7 +163,7 @@ def add_schedule_density_features(df: pd.DataFrame, date_col: str = 'date') -> p
                 result.append(1)
         return pd.Series(result, index=group_df.index)
     
-    df['games_in_last_7_days'] = df.groupby('playerId')[date_col].apply(
+    df['games_in_last_7_days'] = df.groupby(player_id_col)[date_col].apply(
         count_games_in_window
     ).reset_index(level=0, drop=True)
     
@@ -576,7 +576,7 @@ def add_phase7_features(df: pd.DataFrame,
     
     # 3. Schedule density
     print("  3/4: Schedule density features...")
-    df = add_schedule_density_features(df, date_col)
+    df = add_schedule_density_features(df, date_col, player_id_col)
     
     # 4. Adaptive temporal weighting
     print("  4/4: Adaptive temporal features...")
