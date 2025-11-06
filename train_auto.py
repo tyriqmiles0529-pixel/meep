@@ -5015,8 +5015,9 @@ def main():
                 # Filter historical to window immediately (before concat to save memory)
                 date_col = [c for c in hist_players_df.columns if 'date' in c.lower()][0]
                 hist_players_df[date_col] = pd.to_datetime(hist_players_df[date_col], errors="coerce")
-                # Convert to int for type-safe comparison (fillna handles NaN gracefully across all pandas versions)
-                hist_players_df['_temp_season'] = _season_from_date(hist_players_df[date_col]).fillna(-1).astype(int)
+                # Convert to int for type-safe comparison (pd.Series wrapper allows fillna)
+                temp_seasons = pd.Series(_season_from_date(hist_players_df[date_col]))
+                hist_players_df['_temp_season'] = temp_seasons.fillna(-1).astype(int)
                 padded_seasons = set(window_seasons) | {start_year-1, end_year+1}
                 hist_players_df = hist_players_df[hist_players_df['_temp_season'].isin(padded_seasons)].copy()
                 hist_players_df = hist_players_df.drop(columns=['_temp_season'])
@@ -5038,8 +5039,9 @@ def main():
                 # Filter to window
                 date_col = [c for c in hist_players_df.columns if 'date' in c.lower()][0]
                 hist_players_df[date_col] = pd.to_datetime(hist_players_df[date_col], errors="coerce")
-                # Convert to int for type-safe comparison (fillna handles NaN gracefully across all pandas versions)
-                hist_players_df['_temp_season'] = _season_from_date(hist_players_df[date_col]).fillna(-1).astype(int)
+                # Convert to int for type-safe comparison (pd.Series wrapper allows fillna)
+                temp_seasons = pd.Series(_season_from_date(hist_players_df[date_col]))
+                hist_players_df['_temp_season'] = temp_seasons.fillna(-1).astype(int)
                 padded_seasons = set(window_seasons) | {start_year-1, end_year+1}
                 hist_players_df = hist_players_df[hist_players_df['_temp_season'].isin(padded_seasons)].copy()
                 hist_players_df = hist_players_df.drop(columns=['_temp_season'])
@@ -5089,8 +5091,9 @@ def main():
 
             if date_col:
                 raw_players_df[date_col] = pd.to_datetime(raw_players_df[date_col], errors="coerce", format='mixed', utc=True).dt.tz_convert(None)
-                # Convert to int for type-safe comparison (fillna handles NaN gracefully across all pandas versions)
-                raw_players_df['season_end_year'] = _season_from_date(raw_players_df[date_col]).fillna(-1).astype(int)
+                # Convert to int for type-safe comparison (pd.Series wrapper allows fillna)
+                temp_seasons = pd.Series(_season_from_date(raw_players_df[date_col]))
+                raw_players_df['season_end_year'] = temp_seasons.fillna(-1).astype(int)
                 raw_players_df_window = raw_players_df[raw_players_df["season_end_year"].isin(window_seasons)]
             else:
                 raw_players_df_window = raw_players_df
