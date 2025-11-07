@@ -667,44 +667,19 @@ class NeuralHybridPredictor:
                         x = X_tensor
 
                     # Pass through TabNet encoder to get LATENT representation
-                    # BEFORE final linear layer (this is the key fix!)
+                    # Use encoder.forward() which returns (output, M_loss, M_explain, masks)
+                    # The output is the final aggregated representation
                     if hasattr(self.tabnet.network, 'tabnet') and hasattr(self.tabnet.network.tabnet, 'encoder'):
-                        # Access TabNet's internal encoder
                         encoder = self.tabnet.network.tabnet.encoder
 
-                        # Forward pass through encoder to get decision step outputs
-                        # These are the rich multi-dimensional representations!
-                        M_loss = 0
-                        prior_scales = torch.ones(x.shape).to(x.device)
-                        steps_output_list = []
+                        # Call encoder forward - returns (steps_output, M_loss, M_explain, masks)
+                        # steps_output has shape (batch, n_d) - the final aggregation
+                        steps_output, _, _, _ = encoder(x)
 
-                        # Collect outputs from each decision step (BEFORE final aggregation)
-                        for step_idx in range(self.tabnet_params.get('n_steps', 4)):
-                            # Get attention mask (att_transformers, not attentive_transformer)
-                            M = encoder.att_transformers[step_idx](prior_scales)
-                            M_loss += torch.mean(torch.sum(M * prior_scales, dim=1))
-                            prior_scales = prior_scales * (encoder.gamma - M)
+                        # Use the final encoder output as embeddings
+                        batch_embeddings = steps_output.cpu().numpy()
 
-                            # Get decision output from this step's transformer
-                            # This is the latent representation we want!
-                            masked_x = M * x
-                            step_output = encoder.feat_transformers[step_idx](masked_x)
-                            steps_output_list.append(step_output)
-
-                        # Aggregate step outputs into final embedding
-                        # Option 1: Concatenate all steps (n_steps * n_d dimensions)
-                        if len(steps_output_list) >= 4:
-                            # Take n_d dimensions from each step for full 24-dim
-                            # (4 steps × 6 dims = 24 total)
-                            dims_per_step = self.tabnet_params['n_d'] // self.tabnet_params['n_steps']
-                            batch_embeddings = torch.cat([
-                                step[:, :dims_per_step] for step in steps_output_list
-                            ], dim=1).cpu().numpy()
-                            print(f"  [DEBUG] Extracted {batch_embeddings.shape[1]}-dim embeddings from {len(steps_output_list)} decision steps")
-                        else:
-                            # Fallback: use mean pooling across steps
-                            batch_embeddings = torch.stack(steps_output_list, dim=1).mean(dim=1).cpu().numpy()
-                            print(f"  [DEBUG] Mean-pooled embeddings: {batch_embeddings.shape[1]} dims")
+                        print(f"  [DEBUG] Extracted {batch_embeddings.shape[1]}-dim embeddings from TabNet encoder")
 
                     elif hasattr(self.tabnet.network, 'encoder'):
                         # Older API
