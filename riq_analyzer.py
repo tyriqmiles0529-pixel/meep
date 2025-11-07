@@ -3774,17 +3774,29 @@ def build_parlays(props: List[dict], max_legs: int = 3, min_legs: int = 2, max_p
         return []
     
     parlays = []
-    
+    seen_combos = set()  # Track unique combinations
+
     # Generate combinations
     for num_legs in range(min_legs, max_legs + 1):
         for combo in combinations(quality_props, num_legs):
             # Check for correlation (same player, same game)
             players = [p.get("player", "") for p in combo]
             games = [p.get("game_id", "") for p in combo]
-            
+
             # Skip if same player appears multiple times
             if len(set(players)) != len(players):
                 continue
+
+            # Create unique signature for this combination
+            combo_sig = tuple(sorted([
+                f"{p.get('player')}_{p.get('prop_type')}_{p.get('pick')}"
+                for p in combo
+            ]))
+
+            # Skip if we've seen this exact combination
+            if combo_sig in seen_combos:
+                continue
+            seen_combos.add(combo_sig)
             
             # Calculate parlay metrics
             parlay_prob = 1.0
