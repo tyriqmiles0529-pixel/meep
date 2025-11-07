@@ -5588,16 +5588,17 @@ def main():
     print(_sec("Summary"))
     print(f"- Games: {len(games_df):,}")
     
-    # Display game metrics prominently
-    print(f"\n🏀 GAME PREDICTIONS:")
-    print(f"   Moneyline: logloss={_fmt(game_metrics['ml_logloss'])}, Brier={_fmt(game_metrics['ml_brier'])}")
-    if 'ml_accuracy' in game_metrics:
-        ml_acc = game_metrics['ml_accuracy']
-        print(f"   Moneyline Accuracy: {ml_acc*100:.1f}% {'🟢' if ml_acc >= 0.55 else '🟡' if ml_acc >= 0.52 else '🔴'}")
-    print(f"   Spread:    RMSE={_fmt(game_metrics['sp_rmse'])}, MAE={_fmt(game_metrics['sp_mae'])}, sigma={_fmt(game_metrics['spread_sigma'])}")
-    if 'sp_accuracy' in game_metrics:
-        sp_acc = game_metrics['sp_accuracy']
-        print(f"   Spread Accuracy: {sp_acc*100:.1f}% {'🟢' if sp_acc >= 0.53 else '🟡' if sp_acc >= 0.50 else '🔴'}")
+    # Display game metrics prominently (if available)
+    if game_metrics:
+        print(f"\n🏀 GAME PREDICTIONS:")
+        print(f"   Moneyline: logloss={_fmt(game_metrics['ml_logloss'])}, Brier={_fmt(game_metrics['ml_brier'])}")
+        if 'ml_accuracy' in game_metrics:
+            ml_acc = game_metrics['ml_accuracy']
+            print(f"   Moneyline Accuracy: {ml_acc*100:.1f}% {'🟢' if ml_acc >= 0.55 else '🟡' if ml_acc >= 0.52 else '🔴'}")
+        print(f"   Spread:    RMSE={_fmt(game_metrics['sp_rmse'])}, MAE={_fmt(game_metrics['sp_mae'])}, sigma={_fmt(game_metrics['spread_sigma'])}")
+        if 'sp_accuracy' in game_metrics:
+            sp_acc = game_metrics['sp_accuracy']
+            print(f"   Spread Accuracy: {sp_acc*100:.1f}% {'🟢' if sp_acc >= 0.53 else '🟡' if sp_acc >= 0.50 else '🔴'}")
     
     print(f"\n👤 PLAYER PROPS:")
     if player_metrics:
