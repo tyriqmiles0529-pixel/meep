@@ -500,28 +500,39 @@ class NeuralHybridPredictor:
         # Get embeddings from last layer before prediction
         train_embeddings = self._get_embeddings(X_train_np)
         val_embeddings = self._get_embeddings(X_val_np)
-        
+
         print(f"  - Embedding dimension: {train_embeddings.shape[1]}")
         print(f"  - Train embeddings: {train_embeddings.shape}")
         print(f"  - Val embeddings: {val_embeddings.shape}")
-        
+
+        # ============================================================
+        # STEP 2.5: Normalize embeddings (recommended by ChatGPT)
+        # ============================================================
+        # Standardize embeddings so LightGBM interprets them evenly
+        from sklearn.preprocessing import StandardScaler
+        self.embedding_scaler = StandardScaler()
+        train_embeddings_normalized = self.embedding_scaler.fit_transform(train_embeddings)
+        val_embeddings_normalized = self.embedding_scaler.transform(val_embeddings)
+
+        print(f"  ✓ Embeddings normalized (mean=0, std=1)")
+
         # ============================================================
         # STEP 3: Create hybrid features (raw + embeddings)
         # ============================================================
         print(f"\n{'─'*60}")
         print("Step 3: Creating Hybrid Feature Set")
         print(f"{'─'*60}")
-        
-        # Combine raw features with deep embeddings
+
+        # Combine raw features with normalized deep embeddings
         embedding_cols = [f'tabnet_emb_{i}' for i in range(train_embeddings.shape[1])]
-        
+
         X_train_hybrid = pd.DataFrame(
-            np.hstack([X_train.values, train_embeddings]),
+            np.hstack([X_train.values, train_embeddings_normalized]),
             columns=self.feature_names + embedding_cols
         )
-        
+
         X_val_hybrid = pd.DataFrame(
-            np.hstack([X_val.values, val_embeddings]),
+            np.hstack([X_val.values, val_embeddings_normalized]),
             columns=self.feature_names + embedding_cols
         )
         
@@ -655,30 +666,45 @@ class NeuralHybridPredictor:
                     else:
                         x = X_tensor
 
-                    # Pass through TabNet encoder to get feature representation
+                    # Pass through TabNet encoder to get LATENT representation
+                    # BEFORE final linear layer (this is the key fix!)
                     if hasattr(self.tabnet.network, 'tabnet'):
-                        # Get output from TabNet encoder
-                        steps_output, M_loss = self.tabnet.network.tabnet(x)
+                        # Access TabNet's internal encoder
+                        encoder = self.tabnet.network.tabnet
 
-                        # Try to extract multi-dimensional embeddings
-                        if steps_output.ndim == 3:
-                            # Shape: (batch_size, n_steps, n_d)
-                            # Create 4-dim embedding by taking first output from each of 4 steps
-                            n_steps = min(steps_output.shape[1], 4)
-                            batch_embeddings = steps_output[:, :n_steps, 0].cpu().numpy()  # (batch, 4)
-                            print(f"  [DEBUG] Extracted {batch_embeddings.shape[1]}-dim embeddings from {steps_output.shape[1]} steps")
-                        elif steps_output.ndim == 2:
-                            # Shape: (batch_size, n_d) - try to split into multiple dims
-                            if steps_output.shape[1] >= 4:
-                                # Take first 4 dimensions
-                                batch_embeddings = steps_output[:, :4].cpu().numpy()
-                                print(f"  [DEBUG] Extracted 4-dim embeddings from {steps_output.shape[1]}-dim output")
-                            else:
-                                # Use all available dimensions
-                                batch_embeddings = steps_output.cpu().numpy()
-                                print(f"  [DEBUG] Using all {batch_embeddings.shape[1]} dimensions")
+                        # Forward pass through encoder to get decision step outputs
+                        # These are the rich multi-dimensional representations!
+                        M_loss = 0
+                        prior_scales = torch.ones(x.shape).to(x.device)
+                        steps_output_list = []
+
+                        # Collect outputs from each decision step (BEFORE final aggregation)
+                        for step_idx in range(self.tabnet_params.get('n_steps', 4)):
+                            # Get attention mask
+                            M = encoder.attentive_transformer(x, prior_scales)
+                            M_loss += torch.mean(torch.sum(M * prior_scales, dim=1))
+                            prior_scales = prior_scales * (1 - M)
+
+                            # Get decision output from this step's transformer
+                            # This is the latent representation we want!
+                            masked_x = M * x
+                            step_output = encoder.feat_transformers[step_idx](masked_x)
+                            steps_output_list.append(step_output)
+
+                        # Aggregate step outputs into final embedding
+                        # Option 1: Concatenate all steps (n_steps * n_d dimensions)
+                        if len(steps_output_list) >= 4:
+                            # Take n_d dimensions from each step for full 24-dim
+                            # (4 steps × 6 dims = 24 total)
+                            dims_per_step = self.tabnet_params['n_d'] // self.tabnet_params['n_steps']
+                            batch_embeddings = torch.cat([
+                                step[:, :dims_per_step] for step in steps_output_list
+                            ], dim=1).cpu().numpy()
+                            print(f"  [DEBUG] Extracted {batch_embeddings.shape[1]}-dim embeddings from {len(steps_output_list)} decision steps")
                         else:
-                            raise ValueError(f"Unexpected steps_output shape: {steps_output.shape}")
+                            # Fallback: use mean pooling across steps
+                            batch_embeddings = torch.stack(steps_output_list, dim=1).mean(dim=1).cpu().numpy()
+                            print(f"  [DEBUG] Mean-pooled embeddings: {batch_embeddings.shape[1]} dims")
 
                     elif hasattr(self.tabnet.network, 'encoder'):
                         # Older API
@@ -731,6 +757,10 @@ class NeuralHybridPredictor:
         if self.tabnet is not None and TABNET_AVAILABLE:
             X_np = X.values.astype(np.float32)
             embeddings = self._get_embeddings(X_np)
+
+            # Normalize embeddings using fitted scaler
+            if hasattr(self, 'embedding_scaler'):
+                embeddings = self.embedding_scaler.transform(embeddings)
             
             embedding_cols = [f'tabnet_emb_{i}' for i in range(embeddings.shape[1])]
             X_hybrid = pd.DataFrame(
