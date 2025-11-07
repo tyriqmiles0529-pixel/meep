@@ -4062,11 +4062,21 @@ def run_analysis():
             print(f"   Bookmaker: {p.get('bookmaker', 'Unknown')}")
             
             if key in ["points","assists","rebounds","threes"]:
-                print(f"   Line:     {p['line']:.1f}")
                 if SAFE_MODE:
-                    safe_marker = "🛡️ " if SAFE_MARGIN > 0 else ""
-                    print(f"   {safe_marker}Projection: {p['projection']:.2f} (Δ: {p['disparity']:+.2f}, σ: {p['std_dev']:.2f}) [Safe Mode]")
+                    # Show original line and effective safe line
+                    projection = p['projection']
+                    original_line = p['line']
+                    # Recalculate effective line for display
+                    if projection < original_line:
+                        effective_line = original_line + SAFE_MARGIN  # UNDER - need higher line
+                    else:
+                        effective_line = original_line - SAFE_MARGIN  # OVER - need lower line
+                    
+                    print(f"   Original Line: {original_line:.1f}")
+                    print(f"   🛡️ Safe Line:   {effective_line:.1f} (requires this line or better)")
+                    print(f"   Projection: {projection:.2f} (Δ: {p['disparity']:+.2f}, σ: {p['std_dev']:.2f}) [Safe Mode]")
                 else:
+                    print(f"   Line:     {p['line']:.1f}")
                     print(f"   Projection: {p['projection']:.2f} (Δ: {p['disparity']:+.2f}, σ: {p['std_dev']:.2f})")
                 print(f"   Pace:     {p.get('pace_factor',1.0):.3f}x | Defense: {p.get('defense_factor',1.0):.3f}x")
                 print(f"   Pick:     {p['pick'].upper()} @ {p['odds']:+d}")
