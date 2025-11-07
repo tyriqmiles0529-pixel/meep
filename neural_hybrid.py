@@ -659,12 +659,27 @@ class NeuralHybridPredictor:
                     if hasattr(self.tabnet.network, 'tabnet'):
                         # Newer API: network.tabnet returns (steps_output, M_loss)
                         steps_output, _ = self.tabnet.network.tabnet(x)
-                        # Take the final step's output (shape: batch_size, n_d)
-                        batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+
+                        # Handle different output shapes
+                        if steps_output.ndim == 3:
+                            # Shape: (batch_size, n_steps, n_d) - take final step
+                            batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+                        elif steps_output.ndim == 2:
+                            # Shape: (batch_size, n_d) - already final representation
+                            batch_embeddings = steps_output.cpu().numpy()
+                        else:
+                            raise ValueError(f"Unexpected steps_output shape: {steps_output.shape}")
+
                     elif hasattr(self.tabnet.network, 'encoder'):
                         # Older API
                         steps_output, _ = self.tabnet.network.encoder(x)
-                        batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+
+                        if steps_output.ndim == 3:
+                            batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+                        elif steps_output.ndim == 2:
+                            batch_embeddings = steps_output.cpu().numpy()
+                        else:
+                            raise ValueError(f"Unexpected steps_output shape: {steps_output.shape}")
                     else:
                         # Fallback: use predictions
                         raise AttributeError("Cannot find encoder in TabNet network")
