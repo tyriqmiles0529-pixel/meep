@@ -3231,7 +3231,7 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str, use_n
 
 
 def train_player_model_enhanced(df: pd.DataFrame, prop_name: str, verbose: bool,
-                                neural_device: str = 'cpu', neural_epochs: int = 50) -> Tuple[object, Dict[str, float]]:
+                                neural_device: str = 'cpu', neural_epochs: int = 30) -> Tuple[object, Dict[str, float]]:
     """
     Wrapper for training player models with neural hybrid support.
 
