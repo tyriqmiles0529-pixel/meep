@@ -634,36 +634,47 @@ class NeuralHybridPredictor:
             import torch
             self.tabnet.network.eval()
 
+            # Process in batches to avoid memory issues
+            batch_size = 10000
+            all_embeddings = []
+
             with torch.no_grad():
-                X_tensor = torch.from_numpy(X).float()
-                if self.use_gpu:
-                    X_tensor = X_tensor.cuda()
+                for i in range(0, len(X), batch_size):
+                    batch = X[i:i + batch_size]
+                    X_tensor = torch.from_numpy(batch).float()
+                    if self.use_gpu:
+                        X_tensor = X_tensor.cuda()
 
-                # Process in batches to avoid memory issues
-                batch_size = 10000
-                all_embeddings = []
+                    # Access TabNet's internal forward pass to get embeddings
+                    # TabNet architecture: input -> embedder -> encoder -> final layer
+                    # We want the output from the encoder (before final prediction layer)
 
-                for i in range(0, len(X_tensor), batch_size):
-                    batch = X_tensor[i:i + batch_size]
+                    # Get embedding from the input layer
+                    if hasattr(self.tabnet.network, 'embedder'):
+                        x = self.tabnet.network.embedder(X_tensor)
+                    else:
+                        x = X_tensor
 
-                    # Call predict with return_embeddings=True (correct API)
-                    # This returns (predictions, embeddings) tuple
-                    _, batch_embeddings = self.tabnet.predict(
-                        batch.cpu().numpy() if self.use_gpu else batch.numpy(),
-                        return_embeddings=True
-                    )
+                    # Pass through TabNet encoder to get feature representation
+                    if hasattr(self.tabnet.network, 'tabnet'):
+                        # Newer API: network.tabnet returns (steps_output, M_loss)
+                        steps_output, _ = self.tabnet.network.tabnet(x)
+                        # Take the final step's output (shape: batch_size, n_d)
+                        batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+                    elif hasattr(self.tabnet.network, 'encoder'):
+                        # Older API
+                        steps_output, _ = self.tabnet.network.encoder(x)
+                        batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+                    else:
+                        # Fallback: use predictions
+                        raise AttributeError("Cannot find encoder in TabNet network")
 
                     all_embeddings.append(batch_embeddings)
 
-                # Concatenate all batches
-                embeddings = np.vstack(all_embeddings)
+            # Concatenate all batches
+            embeddings = np.vstack(all_embeddings)
 
-                # TabNet embeddings should be (n_samples, n_d) from final layer
-                # If it's still 1D, reshape properly
-                if embeddings.ndim == 1:
-                    embeddings = embeddings.reshape(-1, 1)
-
-                return embeddings
+            return embeddings
 
         except Exception as e:
             # Ultimate fallback: use predictions as simple embeddings
