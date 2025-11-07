@@ -5052,12 +5052,18 @@ def main():
         threes_model, t_metrics = train_player_model_enhanced(frames['threes'], 'threes', verbose,
                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs)
         
-        # Save models
-        save_model(minutes_model, MODEL_DIR / "minutes_model.pkl")
-        save_model(points_model, MODEL_DIR / "points_model.pkl")
-        save_model(rebounds_model, MODEL_DIR / "rebounds_model.pkl")
-        save_model(assists_model, MODEL_DIR / "assists_model.pkl")
-        save_model(threes_model, MODEL_DIR / "threes_model.pkl")
+        # Save models using pickle
+        import pickle
+        with open(MODEL_DIR / "minutes_model.pkl", 'wb') as f:
+            pickle.dump(minutes_model, f)
+        with open(MODEL_DIR / "points_model.pkl", 'wb') as f:
+            pickle.dump(points_model, f)
+        with open(MODEL_DIR / "rebounds_model.pkl", 'wb') as f:
+            pickle.dump(rebounds_model, f)
+        with open(MODEL_DIR / "assists_model.pkl", 'wb') as f:
+            pickle.dump(assists_model, f)
+        with open(MODEL_DIR / "threes_model.pkl", 'wb') as f:
+            pickle.dump(threes_model, f)
         
         player_metrics = {
             'minutes': m_metrics,
