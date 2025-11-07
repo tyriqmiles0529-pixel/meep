@@ -3877,9 +3877,10 @@ def main():
     ap.add_argument("--lgb-log-period", type=int, default=0, help="Print LightGBM eval metrics every N iterations (0 = silent)")
     ap.add_argument("--n-jobs", type=int, default=-1, help="Threads for LightGBM/HistGBM (-1=all cores). Reduce to lower RAM usage.")
     ap.add_argument("--disable-neural", action="store_true", help="Disable neural hybrid and use only LightGBM (not recommended)")
-    ap.add_argument("--neural-epochs", type=int, default=100, help="Number of epochs for TabNet training (default: 100)")
+    ap.add_argument("--neural-epochs", type=int, default=30, help="Number of epochs for TabNet training (default: 30)")
     ap.add_argument("--neural-device", type=str, default="auto", choices=["auto", "cpu", "gpu"], help="Device for neural training: auto (detect GPU), cpu, or gpu")
     ap.add_argument("--game-neural", action="store_true", help="Enable neural hybrid for game models (TabNet + LightGBM ensemble)")
+    ap.add_argument("--skip-game-models", action="store_true", help="Skip game model training (useful if you already have trained game models)")
 
     # Era controls
     ap.add_argument("--game-season-cutoff", type=str, default="2002",
@@ -4768,47 +4769,58 @@ def main():
                 print(f"\n✓ {with_priors:,} games ({with_priors/len(games_df)*100:.1f}%) have Basketball Reference statistical priors")
 
     # Train game models + OOF
-    print(_sec("Training game models"))
+    if args.skip_game_models:
+        print(_sec("Skipping game models (--skip-game-models flag set)"))
+        print("   Game models will not be trained or saved")
+        clf_final = None
+        calibrator = None
+        reg_final = None
+        spread_sigma = None
+        oof_games = None
+        game_metrics = None
+    else:
+        print(_sec("Training game models"))
 
-    # Compute sample weights for games (era-decay), even if window ensemble is disabled
-    if "season_end_year" in games_df.columns:
-        game_weights = _compute_sample_weights(
-            games_df["season_end_year"].to_numpy(dtype="float64"),
-            decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+        # Compute sample weights for games (era-decay), even if window ensemble is disabled
+        if "season_end_year" in games_df.columns:
+            game_weights = _compute_sample_weights(
+                games_df["season_end_year"].to_numpy(dtype="float64"),
+                decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
+            )
+        else:
+            game_weights = np.ones(len(games_df), dtype="float64")
+
+        clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
+            games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights,
+            use_neural=args.game_neural, neural_device=args.neural_device, neural_epochs=25
         )
-    else:
-        game_weights = np.ones(len(games_df), dtype="float64")
 
-    clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
-        games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights,
-        use_neural=args.game_neural, neural_device=args.neural_device, neural_epochs=25
-    )
+    # Save game models
+    if not args.skip_game_models:
+        import pickle
+        # Neural hybrid models have built-in save() method
+        if isinstance(clf_final, GameNeuralHybrid):
+            clf_final.save(models_dir / "moneyline_model.pkl")
+        else:
+            with open(models_dir / "moneyline_model.pkl", "wb") as f:
+                pickle.dump(clf_final, f)
+            if calibrator is not None:
+                with open(models_dir / "moneyline_calibrator.pkl", "wb") as f:
+                    pickle.dump(calibrator, f)
 
-# Save game models
-    import pickle
-    # Neural hybrid models have built-in save() method
-    if isinstance(clf_final, GameNeuralHybrid):
-        clf_final.save(models_dir / "moneyline_model.pkl")
-    else:
-        with open(models_dir / "moneyline_model.pkl", "wb") as f:
-            pickle.dump(clf_final, f)
-        if calibrator is not None:
-            with open(models_dir / "moneyline_calibrator.pkl", "wb") as f:
-                pickle.dump(calibrator, f)
-
-    if isinstance(reg_final, GameNeuralHybrid):
-        reg_final.save(models_dir / "spread_model.pkl")
-    else:
-        with open(models_dir / "spread_model.pkl", "wb") as f:
-            pickle.dump(reg_final, f)
-    with open(models_dir / "spread_sigma.json", "w", encoding="utf-8") as f:
-        json.dump({"spread_sigma": spread_sigma}, f)
+        if isinstance(reg_final, GameNeuralHybrid):
+            reg_final.save(models_dir / "spread_model.pkl")
+        else:
+            with open(models_dir / "spread_model.pkl", "wb") as f:
+                pickle.dump(reg_final, f)
+        with open(models_dir / "spread_sigma.json", "w", encoding="utf-8") as f:
+            json.dump({"spread_sigma": spread_sigma}, f)
 
     # ========================================================================
     # AUTOMATED 5-YEAR WINDOW TRAINING (RAM-efficient with smart caching)
     # ========================================================================
     # Now that clf_final is trained, we can use it for window ensemble training
-    if args.enable_window_ensemble:
+    if args.enable_window_ensemble and not args.skip_game_models:
         if "season_end_year" in games_df.columns:
             import pickle
             cache_dir = "model_cache"
