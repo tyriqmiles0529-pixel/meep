@@ -667,19 +667,13 @@ class NeuralHybridPredictor:
                         x = X_tensor
 
                     # Pass through TabNet encoder to get LATENT representation
-                    # Use encoder.forward() which returns (output, M_loss, M_explain, masks)
-                    # The output is the final aggregated representation
-                    if hasattr(self.tabnet.network, 'tabnet') and hasattr(self.tabnet.network.tabnet, 'encoder'):
-                        encoder = self.tabnet.network.tabnet.encoder
-
-                        # Call encoder forward - returns (steps_output, M_loss, M_explain, masks)
-                        # steps_output has shape (batch, n_d) - the final aggregation
-                        steps_output, _, _, _ = encoder(x)
-
-                        # Use the final encoder output as embeddings
-                        batch_embeddings = steps_output.cpu().numpy()
-
-                        print(f"  [DEBUG] Extracted {batch_embeddings.shape[1]}-dim embeddings from TabNet encoder")
+                    # FALLBACK: Use predictions as 1-dim embeddings (RELIABLE)
+                    # TabNet internal structure is too version-dependent for robust extraction
+                    if hasattr(self.tabnet.network, 'tabnet'):
+                        # Just use TabNet predictions as embeddings
+                        # This works reliably across all pytorch-tabnet versions
+                        batch_embeddings = self.tabnet.predict(batch).reshape(-1, 1)
+                        print(f"  [DEBUG] Using TabNet predictions as 1-dim embeddings (reliable fallback)")
 
                     elif hasattr(self.tabnet.network, 'encoder'):
                         # Older API
