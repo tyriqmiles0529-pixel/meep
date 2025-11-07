@@ -5053,29 +5053,40 @@ def main():
         
         # Train models
         print(_sec("Training models"))
+        import pickle
+
+        # Train and save INCREMENTALLY (so models are saved even if later ones fail)
         minutes_model, m_metrics = train_player_model_enhanced(frames['minutes'], 'minutes', verbose,
                                                                 neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        with open(models_dir / "minutes_model.pkl", 'wb') as f:
+            pickle.dump(minutes_model, f)
+        print("   💾 Minutes model saved immediately")
+
         points_model, p_metrics = train_player_model_enhanced(frames['points'], 'points', verbose,
                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        with open(models_dir / "points_model.pkl", 'wb') as f:
+            pickle.dump(points_model, f)
+        print("   💾 Points model saved immediately")
+
         rebounds_model, r_metrics = train_player_model_enhanced(frames['rebounds'], 'rebounds', verbose,
                                                                  neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        with open(models_dir / "rebounds_model.pkl", 'wb') as f:
+            pickle.dump(rebounds_model, f)
+        print("   💾 Rebounds model saved immediately")
+
         assists_model, a_metrics = train_player_model_enhanced(frames['assists'], 'assists', verbose,
                                                                 neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+        with open(models_dir / "assists_model.pkl", 'wb') as f:
+            pickle.dump(assists_model, f)
+        print("   💾 Assists model saved immediately")
+
         threes_model, t_metrics = train_player_model_enhanced(frames['threes'], 'threes', verbose,
                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs)
-        
-        # Save models using pickle
-        import pickle
-        with open(MODEL_DIR / "minutes_model.pkl", 'wb') as f:
-            pickle.dump(minutes_model, f)
-        with open(MODEL_DIR / "points_model.pkl", 'wb') as f:
-            pickle.dump(points_model, f)
-        with open(MODEL_DIR / "rebounds_model.pkl", 'wb') as f:
-            pickle.dump(rebounds_model, f)
-        with open(MODEL_DIR / "assists_model.pkl", 'wb') as f:
-            pickle.dump(assists_model, f)
-        with open(MODEL_DIR / "threes_model.pkl", 'wb') as f:
+        with open(models_dir / "threes_model.pkl", 'wb') as f:
             pickle.dump(threes_model, f)
+        print("   💾 Threes model saved immediately")
+
+        print("\n✅ All player models saved successfully!")
         
         player_metrics = {
             'minutes': m_metrics,
