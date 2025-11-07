@@ -667,13 +667,20 @@ class NeuralHybridPredictor:
                         x = X_tensor
 
                     # Pass through TabNet encoder to get LATENT representation
-                    # FALLBACK: Use predictions as 1-dim embeddings (RELIABLE)
-                    # TabNet internal structure is too version-dependent for robust extraction
+                    # Use 2-dim embeddings: predictions + mean attention importance
+                    # This is reliable across pytorch-tabnet versions
                     if hasattr(self.tabnet.network, 'tabnet'):
-                        # Just use TabNet predictions as embeddings
-                        # This works reliably across all pytorch-tabnet versions
-                        batch_embeddings = self.tabnet.predict(batch).reshape(-1, 1)
-                        print(f"  [DEBUG] Using TabNet predictions as 1-dim embeddings (reliable fallback)")
+                        # Dim 1: TabNet predictions (learned target approximation)
+                        predictions = self.tabnet.predict(batch).reshape(-1, 1)
+
+                        # Dim 2: Mean attention weights (feature importance for this sample)
+                        # explain_matrix has shape (batch, n_features) - aggregated attention
+                        M_explain, _ = self.tabnet.explain(batch)
+                        mean_attention = M_explain.mean(axis=1, keepdims=True)
+
+                        # Concatenate for 2-dim embeddings
+                        batch_embeddings = np.hstack([predictions, mean_attention])
+                        print(f"  [DEBUG] Using 2-dim embeddings: predictions + attention weights")
 
                     elif hasattr(self.tabnet.network, 'encoder'):
                         # Older API
