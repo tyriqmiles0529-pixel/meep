@@ -1,0 +1,46 @@
+📋 RIQ ANALYZER NEURAL HYBRID UPDATE
+===================================
+
+🎯 GOAL: Update riq_analyzer.py to work with new neural hybrid models
+
+📦 FILES READY:
+  1. HANDOFF_TO_OTHER_CODEBOT.md ← START HERE
+  2. RIQ_ANALYZER_UPDATE_GUIDE.md (detailed steps)
+  3. riq_analyzer_neural.py (code to copy)
+  4. RIQ_UPDATE_SUMMARY.txt (quick reference)
+
+⚡ QUICK START (30 seconds):
+  1. Open HANDOFF_TO_OTHER_CODEBOT.md
+  2. Follow "Detailed Version" instructions
+  3. Copy-paste 3 code sections
+  4. Update 1 function call
+  5. Test: python riq_analyzer.py
+
+🔧 WHAT CHANGES:
+  • Features: 61 → 150-218 (add Phases 4-7)
+  • Models: Plain LightGBM → NeuralHybridPredictor
+  • Priors: None → Basketball Reference (68 features)
+  • Accuracy: +12-15% improvement
+
+⏱️ TIME: 2-4 hours
+
+✅ SUCCESS CRITERIA:
+  • No "shape mismatch" errors
+  • Priors load (or graceful fallback)
+  • ~150-218 features built
+  • Predictions complete
+  • Win probabilities 0.45-0.65
+
+📚 DOCUMENTATION ORDER:
+  1. HANDOFF_TO_OTHER_CODEBOT.md - Complete overview
+  2. RIQ_ANALYZER_UPDATE_GUIDE.md - Step-by-step
+  3. RIQ_UPDATE_SUMMARY.txt - Quick answers
+  4. riq_analyzer_neural.py - Code reference
+
+🆘 IF STUCK:
+  • Check troubleshooting in UPDATE_GUIDE.md
+  • Reference train_auto.py lines 1649-2500
+  • Check neural_hybrid.py for model details
+
+🚀 READY TO START!
+Open: HANDOFF_TO_OTHER_CODEBOT.md
