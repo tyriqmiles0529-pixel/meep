@@ -668,9 +668,9 @@ class NeuralHybridPredictor:
 
                     # Pass through TabNet encoder to get LATENT representation
                     # BEFORE final linear layer (this is the key fix!)
-                    if hasattr(self.tabnet.network, 'tabnet'):
+                    if hasattr(self.tabnet.network, 'tabnet') and hasattr(self.tabnet.network.tabnet, 'encoder'):
                         # Access TabNet's internal encoder
-                        encoder = self.tabnet.network.tabnet
+                        encoder = self.tabnet.network.tabnet.encoder
 
                         # Forward pass through encoder to get decision step outputs
                         # These are the rich multi-dimensional representations!
@@ -680,10 +680,10 @@ class NeuralHybridPredictor:
 
                         # Collect outputs from each decision step (BEFORE final aggregation)
                         for step_idx in range(self.tabnet_params.get('n_steps', 4)):
-                            # Get attention mask
-                            M = encoder.attentive_transformer(x, prior_scales)
+                            # Get attention mask (att_transformers, not attentive_transformer)
+                            M = encoder.att_transformers[step_idx](prior_scales)
                             M_loss += torch.mean(torch.sum(M * prior_scales, dim=1))
-                            prior_scales = prior_scales * (1 - M)
+                            prior_scales = prior_scales * (encoder.gamma - M)
 
                             # Get decision output from this step's transformer
                             # This is the latent representation we want!
