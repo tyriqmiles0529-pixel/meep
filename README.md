@@ -1,6 +1,6 @@
 # NBA Player Performance Predictor
 
-**State-of-the-art NBA prediction system** using neural networks, advanced machine learning, 150+ engineered features, and 7-phase feature engineering to predict player & game performance with 23-year historical context (2002-2026).
+**State-of-the-art NBA prediction system** using neural networks, advanced machine learning, 150-218 engineered features, and 7-phase feature engineering to predict player & game performance with **complete NBA history since 1947**.
 
 **Latest Update (Nov 7, 2025):** 
 - ✅ **Neural Hybrid Models** - TabNet + LightGBM with 24-dim embeddings (default, +12-15% accuracy)
@@ -31,19 +31,19 @@
   - **Phase 7**: Basketball Reference priors (career stats, advanced metrics, 68 features) 🆕 **NEW**
 
 - **Neural Hybrid Models** (Default): TabNet + LightGBM + 24-dim embeddings for 12-15% accuracy boost 🧠
-- **Multi-Window Ensemble Learning**: 5 temporal windows (2002-2006, 2007-2011, 2012-2016, 2017-2021, 2022-2026)
-- **Enhanced Ensemble**: Ridge regression + Dynamic Elo + Four Factors + Meta-learner
-- **Dynamic Window Selector**: Context-aware model that chooses optimal historical window per prediction
+- **Full Historical Training**: Complete NBA dataset from 1947-present (no windowing)
+- **Time-Decay Weighting**: Recent seasons weighted higher (exponential decay)
 - **Isotonic Calibration**: Real-time probability recalibration from tracked outcomes
 - **Confidence Filtering**: 56% minimum threshold for high-quality predictions only
 
 ### 📊 Training Data
 
-- **Historical Dataset**: 23 NBA seasons (2002-2026)
-- **Game Data**: 50,000+ games with team statistics
-- **Player Data**: 833,000+ box scores with granular performance metrics
+- **Historical Dataset**: Complete NBA history (1947-present)
+- **Game Data**: 70,000+ games with team statistics
+- **Player Data**: 1,000,000+ player box scores with granular performance metrics
+- **Basketball Reference Priors**: Career stats for 5,400+ players (49% match rate)
 - **Live Integration**: Real-time NBA API, team stats, injury reports
-- **Feature Space**: 80+ features including position-specific adjustments, opponent defense by stat type, rest patterns
+- **Feature Space**: 150-218 features including priors, position-specific adjustments, momentum, shot volume
 
 ## 📊 Performance Metrics
 
@@ -134,19 +134,19 @@ pip install torch pytorch-tabnet
 Remove-Item -Recurse -Force model_cache
 
 # Train with neural hybrid (default, 1.5-2 hours on L4 GPU, 3-4 hours CPU)
-python train_auto.py --verbose --fresh --enable-window-ensemble --epochs 30
+# Uses full NBA history (1947-present) with time-decay weighting
+python train_auto.py --verbose --fresh --epochs 30
 
 # Optional: Disable neural network and use LightGBM only (not recommended)
-python train_auto.py --verbose --fresh --enable-window-ensemble --disable-neural
+python train_auto.py --verbose --fresh --disable-neural
 ```
 
 **What this does:**
-- Downloads Kaggle dataset (2002-2026)
+- Downloads Kaggle dataset (1947-present)
 - Loads Basketball Reference priors from priors_data/
 - Trains neural hybrid models (TabNet + LightGBM) with 150-218 features
-- Creates 5-year window ensembles with learned stacking weights
-- Trains meta-learning window selector
-- Saves everything to `models/` and `model_cache/`
+- Uses full historical data with time-decay weighting (recent games weighted higher)
+- Saves everything to `models/`
 
 **Neural hybrid (now default):**
 - Combines TabNet (deep learning) + LightGBM + 24-dim embeddings
@@ -187,13 +187,12 @@ python train_auto.py --verbose
 
 ```
 nba_predictor/
-├── train_auto.py              # Master training pipeline (Phase 1-7 features)
+├── train_auto.py              # Master training pipeline (Phase 1-7 features, full history)
 ├── neural_hybrid.py           # Neural hybrid architecture (TabNet + LightGBM) 🆕 NEW
-├── optimization_features.py   # Phase 6: Momentum, meta-learning, market signals
+├── optimization_features.py   # Phase 6: Momentum, trend detection
 ├── riq_analyzer.py            # Daily predictions with Phase 7 + neural models 🆕 UPDATED
 ├── evaluate.py                # Automated evaluation pipeline (fetch + recalibrate + analyze)
 ├── models/                    # Trained neural hybrid models
-├── model_cache/               # 5-year window ensembles
 ├── priors_data/               # Basketball Reference priors (68 features) 🆕 NEW
 ├── bets_ledger.pkl            # Prediction history & tracking
 ├── data/                      # Downloaded NBA data
@@ -256,10 +255,11 @@ nba_predictor/
 
 The system trains on **all available historical data (2002-2026)** to maximize pattern recognition:
 
-1. **Data Ingestion** (833k player box scores, 50k games from 2002-2026)
+1. **Data Ingestion** (1M+ player box scores, 70k+ games from 1947-present)
    - Kaggle dataset: `eoinamoore/historical-nba-data-and-player-box-scores`
-   - Basketball Reference priors (career statistics)
+   - Basketball Reference priors (career statistics for 5,400+ players)
    - Team statistics and pace adjustments
+   - Full NBA history with no temporal filtering
 
 2. **Feature Engineering** (150-218 feature space)
    - **Phase 1-3** (Base): Shot volume, matchup context, advanced rates (49 features)
@@ -275,76 +275,61 @@ The system trains on **all available historical data (2002-2026)** to maximize p
 
 3. **Model Training** (Neural hybrid ensemble for games & players)
    - **Game Models**:
-     - Predicted Winner: LightGBM + Logistic Regression + Elo + Meta-Learner
-     - Predicted Margin: LightGBM + Ridge Regression + Hybrid
+     - Neural hybrid or LightGBM for winner/margin prediction
    - **Player Models** (per stat type):
-     - NeuralHybridPredictor (TabNet + LightGBM + 24-dim embeddings) 🆕 **NEW**
+     - NeuralHybridPredictor (TabNet + LightGBM + 24-dim embeddings) 🆕 **DEFAULT**
      - TabNet: Deep learning on 150-218 features
      - LightGBM: Gradient boosting on features + TabNet embeddings
      - Ensemble: Weighted average (40% TabNet + 60% LightGBM)
-     - Fallback components: Ridge Regression, Player Elo, Team Matchup, Rolling Averages
-     - Meta-Learner (optimal weight combination)
+   - **Training Strategy**:
+     - Full historical data (1947-present)
+     - Time-decay weighting (0.97^years_ago)
+     - Cross-validation with time-series splits
 
-4. **Multi-Window Ensembles**
-   - Train 5 separate ensembles: 3-game, 5-game, 7-game, 10-game, 15-game windows
-   - Each window captures different signal timescales
-   - Dynamic selector chooses optimal window per prediction
-
-5. **Adaptive Calibration**
+4. **Adaptive Calibration**
    - Track all predictions vs actual outcomes
    - Isotonic regression to fix probability calibration
    - Continuous learning from new results
 
-### Why Use Full History (2002-2026)?
+### Why Use Full History (1947-Present)?
 
-**The model uses ALL 23 years of data** rather than filtering to "modern era only" because:
+**The model uses ALL NBA history** rather than filtering to recent eras because:
 
-1. **More Data = Better Generalization**: 833k training examples vs ~400k
-2. **Captures Era Transitions**: Model learns which features matter in different eras
-3. **Time-Decay Weighting**: Recent seasons weighted higher (0.97^years decay)
-4. **Lockout Downweighting**: 1999 and 2012 seasons automatically downweighted
-5. **Bayesian Priors**: Career-long stats provide better player context
-6. **Robust to Rule Changes**: Model adapts rather than ignores valuable historical patterns
+1. **More Data = Better Generalization**: 1M+ training examples vs filtering
+2. **Captures Era Transitions**: Model learns which features matter across different eras
+3. **Time-Decay Weighting**: Recent seasons weighted exponentially higher (0.97^years_ago)
+4. **Robust to Rule Changes**: Model adapts rather than ignores valuable historical patterns
+5. **Deep Historical Context**: Career stats and player priors benefit from long-term data
 
-The dynamic window selector and ensemble architecture allow the model to automatically focus on relevant timeframes without discarding valuable long-term patterns.
+The time-decay weighting and neural architecture allow the model to automatically focus on relevant patterns without discarding valuable long-term information.
 
 ## 🔧 Technical Architecture
 
 ### Key Components
 
-#### 1. Dynamic Window Selector (`train_dynamic_selector_enhanced.py`)
-- **Purpose**: Intelligently choose which time window (3/5/7/10/15 games) to use for each prediction
-- **Features**: 15+ contextual features (opponent, home/away, rest days, season phase)
-- **Algorithm**: Random Forest classifier trained on historical validation data (2002-2026)
-- **Output**: Probability distribution over windows → weighted ensemble prediction
+#### 1. Neural Hybrid Architecture (`neural_hybrid.py`) 🆕
+- **Purpose**: Combine deep learning (TabNet) with gradient boosting (LightGBM)
+- **TabNet**: Learns 24-dim latent representations from decision steps
+- **LightGBM**: Uses raw features + TabNet embeddings
+- **Ensemble**: 40% TabNet + 60% LightGBM weighted average
+- **Training**: Full NBA history (1947-present) with time-decay
 
-#### 2. Player Ensemble (`player_ensemble_enhanced.py`)
-- **Architecture**: 5-model ensemble per stat type (Points, Rebounds, Assists, Threes)
-  - LightGBM (gradient boosting, 56 features)
-  - Ridge Regression (L2-regularized linear model)
-  - Player Elo (performance momentum tracker)
-  - Team Matchup Context (opponent defense, pace, game script)
-  - Rolling Averages (robust baseline)
-- **Meta-Learner**: Logistic regression combines model predictions with optimal weights
-- **Training**: Historical data 2002-2026, time-safe out-of-fold predictions
+#### 2. Player Model (`train_auto.py`)
+- **Architecture**: NeuralHybridPredictor for each stat type (Points, Rebounds, Assists, Threes)
+- **Features**: 150-218 features across 7 phases
+- **Training Data**: 1M+ player box scores
+- **Calibration**: Isotonic regression on tracked outcomes
 
-#### 3. Game Ensemble (`ensemble_models_enhanced.py`)
-- **Predicted Winner Models**:
-  - LightGBM Classifier
-  - Logistic Regression
-  - Dynamic Elo Rating (K-factor adapts to upset magnitude)
-  - Meta-Learner (polynomial interaction features)
-- **Predicted Margin Models**:
-  - Ridge Regression (score differential)
-  - Elo-based spread estimator
-  - Four Factors differential predictor
-- **Calibration**: Isotonic regression for probability correction
+#### 3. Game Models (`train_auto.py`)
+- **Predicted Winner**: LightGBM or Neural Hybrid
+- **Predicted Margin**: Regression models
+- **Training**: Full NBA game history with team-level features
 
 #### 4. Isotonic Calibration (`recalibrate_models.py`)
 - **Problem Solved**: Models overconfident (95% confidence → 47% actual)
 - **Solution**: Fit isotonic regression on tracked predictions
 - **Data**: 1,500+ settled predictions with outcomes
-- **Result**: Improved calibration curves (95% → 51-65% actual depending on stat)
+- **Result**: Improved calibration curves
 
 ### Model Performance Validation
 
@@ -425,14 +410,8 @@ python recalibrate_models.py
 ### Full Retrain
 
 ```bash
-# Train game + player models (2002-2026 data)
-python train_auto.py --verbose --fresh
-
-# Train multi-window ensembles
-python train_ensemble_enhanced.py
-
-# Train window selector
-python train_dynamic_selector_enhanced.py
+# Train game + player models with neural hybrid (full NBA history)
+python train_auto.py --verbose --fresh --epochs 30
 ```
 
 ## 📊 Research & Analytics Focus
@@ -475,25 +454,24 @@ Focus areas: AI/ML, data analytics, NBA statistics, probability calibration, ens
 
 ```python
 # train_auto.py default configuration
---game-season-cutoff 2002    # Games from 2002-2026
---player-season-cutoff 2002  # Players from 2002-2026
+# Full NBA history (1947-present)
 --decay 0.97                 # Time-decay factor (recent weighted higher)
---lockout-weight 0.90        # Downweight lockout seasons
+--epochs 30                  # TabNet training epochs
 ```
 
 **Total Dataset**:
-- 50,000+ games (2002-2026)
-- 833,000+ player box scores (2002-2026)
-- 23 full NBA seasons
+- 70,000+ games (1947-present)
+- 1,000,000+ player box scores (1947-present)
+- 78 NBA seasons
+- 5,400+ players with Basketball Reference priors
 
 ### Model Files
 
 | File | Description | Training Data |
 |------|-------------|---------------|
-| `game_models_*.pkl` | Game predicted winner/margin | 2002-2026 games |
-| `player_models_*.pkl` | Player stat predictions | 2002-2026 box scores |
-| `player_ensemble_*.pkl` | Multi-window ensembles | 2002-2026 (5 windows) |
-| `calibration.pkl` | Isotonic calibration curves | 1,523 tracked predictions |
+| `*_model.pkl` | Neural hybrid player models | 1947-present box scores |
+| `game_models_*.pkl` | Game winner/margin models | 1947-present games |
+| `calibration.pkl` | Isotonic calibration curves | 1,500+ tracked predictions |
 
 ### Dependencies
 
@@ -544,33 +522,13 @@ Completed full 7-phase feature engineering with neural network embeddings:
 - CPU: ~3-4 hours (30 epochs)
 
 **Previous Updates (Jan 5, 2025) - Phase 6:**
-Added powerful optimization features for breakthrough accuracy gains:
+Added powerful optimization features:
 
-**Phase 6 - Advanced Optimizations (40+ new features):**
+**Phase 6 - Momentum & Optimization Features:**
 - **Momentum Tracking**: Multi-timeframe trend detection (3/7/15-game windows)
-  - Linear regression slope momentum
-  - Acceleration (change in momentum)
-  - Hot/cold streak detection
-  - Applied to all stats (points, rebounds, assists, minutes)
-
-- **Meta-Learning Window Selection**: Context-aware optimal timeframe selection
-  - Recency weighting (recent data weighted higher)
-  - Sample size consideration
-  - Player consistency scoring
-  - Era similarity detection
-  - Learned weights via logistic regression
-
-- **Market Signal Analysis**: Betting market inefficiency detection
-  - Line movement tracking (opening vs closing)
-  - Steam move detection (sharp money indicators)
-  - Reverse line movement (RLM) identification
-  - Market efficiency scoring
-  - Edge opportunity calculation
-
-- **Ensemble Stacking**: Optimal window combination
-  - Simple, recency, and learned weight methods
-  - Ridge regression for optimal weights
-  - Dynamic weight adjustment per prediction
+- **Variance & Consistency**: Standard deviation, ceiling/floor detection  
+- **Fatigue Indicators**: Games in last 7 days, minutes load
+- **Hot/Cold Streaks**: Statistical streak detection
 
 **Previous Updates (Nov 4, 2025) - Phase 4-5:**
 Added 14 features for context and position awareness:
