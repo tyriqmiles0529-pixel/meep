@@ -1,0 +1,38 @@
+======================================================================
+TESTING PERFORMANCE OPTIMIZATIONS
+======================================================================
+
+======================================================================
+TEST 1: Vectorized Injury Counter
+======================================================================
+
+Test data:
+   player_id  likely_injury_return
+0          1                     0
+1          1                     0
+2          1                     1
+3          1                     0
+4          1                     0
+5          2                     0
+6          2                     1
+7          2                     0
+8          2                     1
+Traceback (most recent call last):
+  File "C:\Users\tmiles11\nba_predictor\test_optimizations.py", line 45, in <module>
+    print("\n\u2705 Vectorized injury counter works!")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\tmiles11\AppData\Local\Python\pythoncore-3.14-64\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2705' in position 2: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\tmiles11\nba_predictor\test_optimizations.py", line 58, in <module>
+    print(f"\u274c Vectorized injury counter failed: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\tmiles11\AppData\Local\Python\pythoncore-3.14-64\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 0: character maps to <undefined>
