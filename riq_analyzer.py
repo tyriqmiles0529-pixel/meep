@@ -3866,9 +3866,33 @@ def build_parlays(props: List[dict], max_legs: int = 3, min_legs: int = 2, max_p
             }
             parlays.append(parlay)
     
-    # Sort by composite score and return top parlays
+    # Sort by composite score
     parlays.sort(key=lambda x: x["score"], reverse=True)
-    return parlays[:max_parlays]
+
+    # Remove parlays with overlapping props (greedy selection)
+    final_parlays = []
+    used_props = set()
+
+    for parlay in parlays:
+        # Check if any leg in this parlay has already been used
+        parlay_props = set([
+            f"{leg['player']}_{leg['prop_type']}_{leg['pick']}"
+            for leg in parlay['legs']
+        ])
+
+        # Skip if any prop overlaps with already selected parlays
+        if parlay_props & used_props:
+            continue
+
+        # Add this parlay and mark props as used
+        final_parlays.append(parlay)
+        used_props.update(parlay_props)
+
+        # Stop when we have enough parlays
+        if len(final_parlays) >= max_parlays:
+            break
+
+    return final_parlays
 
 # ========= MAIN =========
 def run_analysis():
