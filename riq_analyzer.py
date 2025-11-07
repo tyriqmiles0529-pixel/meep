@@ -64,6 +64,11 @@ SLEEP_SHORT = 0.05 if FAST_MODE else 0.2
 SLEEP_LONG = 0.1 if FAST_MODE else 0.3
 RUN_TIME_BUDGET_SEC = None  # Disabled - no time limit for analysis
 
+# SAFE MODE: Add extra margin to lines for conservative betting
+# Example: Projection=2.8, Line=3.5, SafeMargin=1.0 → Requires line at 4.5+ for UNDER
+SAFE_MODE = os.getenv("SAFE_MODE", "").lower() in ["true", "1", "yes"]
+SAFE_MARGIN = float(os.getenv("SAFE_MARGIN", "1.0"))  # Extra points/rebounds/assists buffer
+
 # ========= CONFIG =========
 # API-Sports (schedule + player stats)
 API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or ""
@@ -3429,10 +3434,26 @@ def analyze_player_prop(prop: dict, matchup_context: dict) -> Optional[dict]:
 
     if projection == 0 or std_dev == 0: return None
 
-    disparity = projection - prop["line"]
+    # SAFE MODE: Apply safety margin to line before comparison
+    # Example: Projection=2.8, Line=3.5, SafeMargin=1.0
+    #   Original: 2.8 < 3.5 → UNDER
+    #   Safe Mode: 2.8 < (3.5 + 1.0 = 4.5) → UNDER (but requires line at 4.5+)
+    effective_line = prop["line"]
+    if SAFE_MODE:
+        # If projection suggests UNDER, add margin to line (need more room)
+        # If projection suggests OVER, subtract margin from line (need more room)
+        if projection < prop["line"]:
+            effective_line = prop["line"] + SAFE_MARGIN  # Conservative UNDER
+        else:
+            effective_line = prop["line"] - SAFE_MARGIN  # Conservative OVER
+        
+        if DEBUG_MODE:
+            print(f"   [SAFE MODE] Original line: {prop['line']:.1f}, Effective line: {effective_line:.1f}, Margin: {SAFE_MARGIN:.1f}")
+
+    disparity = projection - effective_line
     pick = "over" if disparity > 0 else "under"
     risk_adj = disparity / std_dev if std_dev > 0 else 0.0
-    edge_pct = (disparity / prop["line"]) * 100 if prop["line"] != 0 else 0.0
+    edge_pct = (disparity / effective_line) * 100 if effective_line != 0 else 0.0
 
     # Choose correct side odds if both provided
     if "odds_over" in prop or "odds_under" in prop:
@@ -3963,8 +3984,15 @@ def run_analysis():
     print(f"\n   Total props: {len(fd_props)} | Player: {len(player_props)} | Game: {len(game_bets)}\n")
     if DEBUG_MODE and len(fd_props) == 0:
         print("   [DEBUG] No props found. Check expand/nested markets and bookmaker naming; printing diagnostics above.")
+    
+    # Display safe mode status
+    if SAFE_MODE:
+        print(f"🛡️  SAFE MODE: ON (Margin: {SAFE_MARGIN:.1f} points)")
+        print(f"   Conservative betting - lines require extra {SAFE_MARGIN:.1f} buffer")
+    else:
+        print(f"⚡ SAFE MODE: OFF (Standard analysis)")
 
-    print(f"🔍 {random.choice(MEEP_MESSAGES)}...")
+    print(f"\n🔍 {random.choice(MEEP_MESSAGES)}...")
 
     analyzed = []
     for idx, prop in enumerate(player_props + game_bets, 1):
@@ -4035,7 +4063,11 @@ def run_analysis():
             
             if key in ["points","assists","rebounds","threes"]:
                 print(f"   Line:     {p['line']:.1f}")
-                print(f"   Projection: {p['projection']:.2f} (Δ: {p['disparity']:+.2f}, σ: {p['std_dev']:.2f})")
+                if SAFE_MODE:
+                    safe_marker = "🛡️ " if SAFE_MARGIN > 0 else ""
+                    print(f"   {safe_marker}Projection: {p['projection']:.2f} (Δ: {p['disparity']:+.2f}, σ: {p['std_dev']:.2f}) [Safe Mode]")
+                else:
+                    print(f"   Projection: {p['projection']:.2f} (Δ: {p['disparity']:+.2f}, σ: {p['std_dev']:.2f})")
                 print(f"   Pace:     {p.get('pace_factor',1.0):.3f}x | Defense: {p.get('defense_factor',1.0):.3f}x")
                 print(f"   Pick:     {p['pick'].upper()} @ {p['odds']:+d}")
             else:
