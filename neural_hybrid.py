@@ -657,16 +657,26 @@ class NeuralHybridPredictor:
 
                     # Pass through TabNet encoder to get feature representation
                     if hasattr(self.tabnet.network, 'tabnet'):
-                        # Newer API: network.tabnet returns (steps_output, M_loss)
-                        steps_output, _ = self.tabnet.network.tabnet(x)
+                        # Get output from TabNet encoder
+                        steps_output, M_loss = self.tabnet.network.tabnet(x)
 
-                        # Handle different output shapes
+                        # Try to extract multi-dimensional embeddings
                         if steps_output.ndim == 3:
-                            # Shape: (batch_size, n_steps, n_d) - take final step
-                            batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+                            # Shape: (batch_size, n_steps, n_d)
+                            # Create 4-dim embedding by taking first output from each of 4 steps
+                            n_steps = min(steps_output.shape[1], 4)
+                            batch_embeddings = steps_output[:, :n_steps, 0].cpu().numpy()  # (batch, 4)
+                            print(f"  [DEBUG] Extracted {batch_embeddings.shape[1]}-dim embeddings from {steps_output.shape[1]} steps")
                         elif steps_output.ndim == 2:
-                            # Shape: (batch_size, n_d) - already final representation
-                            batch_embeddings = steps_output.cpu().numpy()
+                            # Shape: (batch_size, n_d) - try to split into multiple dims
+                            if steps_output.shape[1] >= 4:
+                                # Take first 4 dimensions
+                                batch_embeddings = steps_output[:, :4].cpu().numpy()
+                                print(f"  [DEBUG] Extracted 4-dim embeddings from {steps_output.shape[1]}-dim output")
+                            else:
+                                # Use all available dimensions
+                                batch_embeddings = steps_output.cpu().numpy()
+                                print(f"  [DEBUG] Using all {batch_embeddings.shape[1]} dimensions")
                         else:
                             raise ValueError(f"Unexpected steps_output shape: {steps_output.shape}")
 
