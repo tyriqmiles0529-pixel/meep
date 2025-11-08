@@ -3924,6 +3924,8 @@ def run_analysis():
     print(f"Season: {SEASON} | Stats: prior={STATS_SEASON} | Bankroll: ${BANKROLL:.2f}")
     print(f"Odds Range: {MIN_ODDS} to {MAX_ODDS} | Ranking: ELG + dynamic Kelly")
     print(f"FAST_MODE: {'ON' if FAST_MODE else 'OFF'} | Time Budget: {'Disabled' if RUN_TIME_BUDGET_SEC is None else f'{RUN_TIME_BUDGET_SEC}s'}")
+    if SAFE_MODE:
+        print(f"🛡️ SAFE MODE: ON (Margin: {SAFE_MARGIN:.1f} pts/reb/ast)")
     print("=" * 72)
     print()
 
