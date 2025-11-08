@@ -666,35 +666,48 @@ class NeuralHybridPredictor:
                     else:
                         x = X_tensor
 
-                    # Pass through TabNet encoder to get LATENT representation
-                    # Use 2-dim embeddings: predictions + mean attention importance
-                    # This is reliable across pytorch-tabnet versions
-                    if hasattr(self.tabnet.network, 'tabnet'):
-                        # Dim 1: TabNet predictions (learned target approximation)
-                        predictions = self.tabnet.predict(batch).reshape(-1, 1)
+                    # Pass through TabNet encoder to get FULL 24-dimensional embeddings
+                    # Try to extract from the encoder's final step output
+                    try:
+                        # Method 1: Access encoder directly (most reliable for full embeddings)
+                        if hasattr(self.tabnet.network, 'encoder'):
+                            steps_output, _ = self.tabnet.network.encoder(x)
 
-                        # Dim 2: Mean attention weights (feature importance for this sample)
-                        # explain_matrix has shape (batch, n_features) - aggregated attention
+                            # steps_output shape: (batch, n_steps, n_d+n_a) or (batch, n_d+n_a)
+                            if steps_output.ndim == 3:
+                                # Take last step output: shape (batch, 24)
+                                batch_embeddings = steps_output[:, -1, :].cpu().numpy()
+                                print(f"  [DEBUG] Using {batch_embeddings.shape[1]}-dim embeddings from encoder (3D)")
+                            elif steps_output.ndim == 2:
+                                # Already flattened: shape (batch, 24)
+                                batch_embeddings = steps_output.cpu().numpy()
+                                print(f"  [DEBUG] Using {batch_embeddings.shape[1]}-dim embeddings from encoder (2D)")
+                            else:
+                                raise ValueError(f"Unexpected steps_output shape: {steps_output.shape}")
+
+                        # Method 2: Use TabNet's forward pass
+                        elif hasattr(self.tabnet.network, 'forward_masks'):
+                            # Get output before final prediction layer
+                            output, _ = self.tabnet.network.forward_masks(x)
+                            batch_embeddings = output.cpu().numpy()
+                            print(f"  [DEBUG] Using {batch_embeddings.shape[1]}-dim embeddings from forward_masks")
+
+                        else:
+                            # Fallback: 2-dim (predictions + attention)
+                            print("  [WARNING] Cannot access encoder, falling back to 2-dim embeddings")
+                            predictions = self.tabnet.predict(batch).reshape(-1, 1)
+                            M_explain, _ = self.tabnet.explain(batch)
+                            mean_attention = M_explain.mean(axis=1, keepdims=True)
+                            batch_embeddings = np.hstack([predictions, mean_attention])
+                            print(f"  [DEBUG] Using 2-dim embeddings: predictions + attention weights")
+
+                    except Exception as e:
+                        # Ultimate fallback
+                        print(f"  [WARNING] Embedding extraction failed: {str(e)[:60]}, using 2-dim fallback")
+                        predictions = self.tabnet.predict(batch).reshape(-1, 1)
                         M_explain, _ = self.tabnet.explain(batch)
                         mean_attention = M_explain.mean(axis=1, keepdims=True)
-
-                        # Concatenate for 2-dim embeddings
                         batch_embeddings = np.hstack([predictions, mean_attention])
-                        print(f"  [DEBUG] Using 2-dim embeddings: predictions + attention weights")
-
-                    elif hasattr(self.tabnet.network, 'encoder'):
-                        # Older API
-                        steps_output, _ = self.tabnet.network.encoder(x)
-
-                        if steps_output.ndim == 3:
-                            batch_embeddings = steps_output[:, -1, :].cpu().numpy()
-                        elif steps_output.ndim == 2:
-                            batch_embeddings = steps_output.cpu().numpy()
-                        else:
-                            raise ValueError(f"Unexpected steps_output shape: {steps_output.shape}")
-                    else:
-                        # Fallback: use predictions
-                        raise AttributeError("Cannot find encoder in TabNet network")
 
                     all_embeddings.append(batch_embeddings)
 
