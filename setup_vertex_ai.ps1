@@ -86,7 +86,7 @@ Write-Host ""
 Write-Host "📦 Step 4: Creating Cloud Storage bucket..." -ForegroundColor Yellow
 Write-Host ""
 
-$INITIALS = Read-Host "Enter your initials (e.g., 'tm' for Tyriq Miles)"
+$INITIALS = Read-Host "Enter your initials (e.g., tm for Tyriq Miles)"
 $BUCKET_NAME = "nba-predictor-models-$INITIALS"
 
 Write-Host "Creating bucket: gs://$BUCKET_NAME" -ForegroundColor Cyan
@@ -114,8 +114,8 @@ Write-Host ""
 Write-Host "To get your Kaggle API credentials:" -ForegroundColor Cyan
 Write-Host "1. Go to https://www.kaggle.com/" -ForegroundColor White
 Write-Host "2. Click your profile picture → Settings" -ForegroundColor White
-Write-Host "3. Scroll to 'API' section" -ForegroundColor White
-Write-Host "4. Click 'Create New Token'" -ForegroundColor White
+Write-Host "3. Scroll to API section" -ForegroundColor White
+Write-Host "4. Click Create New Token" -ForegroundColor White
 Write-Host "5. Open the downloaded kaggle.json file" -ForegroundColor White
 Write-Host ""
 
@@ -138,7 +138,7 @@ Write-Host "Creating secrets in Secret Manager..." -ForegroundColor Cyan
 # Create username secret
 $usernameExists = gcloud secrets describe kaggle-username 2>&1
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "⚠️  Secret 'kaggle-username' already exists, updating..." -ForegroundColor Yellow
+    Write-Host "⚠️  Secret kaggle-username already exists, updating..." -ForegroundColor Yellow
     echo $KAGGLE_USERNAME | gcloud secrets versions add kaggle-username --data-file=-
 } else {
     echo $KAGGLE_USERNAME | gcloud secrets create kaggle-username --data-file=-
@@ -147,7 +147,7 @@ if ($LASTEXITCODE -eq 0) {
 # Create key secret
 $keyExists = gcloud secrets describe kaggle-key 2>&1
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "⚠️  Secret 'kaggle-key' already exists, updating..." -ForegroundColor Yellow
+    Write-Host "⚠️  Secret kaggle-key already exists, updating..." -ForegroundColor Yellow
     echo $KAGGLE_KEY_PLAIN | gcloud secrets versions add kaggle-key --data-file=-
 } else {
     echo $KAGGLE_KEY_PLAIN | gcloud secrets create kaggle-key --data-file=-
