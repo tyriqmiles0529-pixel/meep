@@ -200,12 +200,17 @@ for player_name in remaining_players:
                 continue
             
             actual_value = float(game_row[nba_col])
-            
-            # Determine if won
-            if bet['predicted_prob'] > 0.5:
+
+            # Determine if won - use the ACTUAL pick that was made, not predicted_prob
+            # The 'pick' field contains 'over' or 'under'
+            pick = bet.get('pick', '').lower()
+            if pick == 'over':
                 won = actual_value > bet['line']
-            else:
+            elif pick == 'under':
                 won = actual_value < bet['line']
+            else:
+                # Fallback if pick field missing - use disparity
+                won = actual_value > bet['line'] if bet.get('projection', 0) > bet['line'] else actual_value < bet['line']
             
             # Update in original list
             for i, original_bet in enumerate(bets):
