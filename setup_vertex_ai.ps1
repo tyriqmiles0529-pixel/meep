@@ -113,7 +113,7 @@ Write-Host "🔑 Step 5: Setting up Kaggle credentials..." -ForegroundColor Yell
 Write-Host ""
 Write-Host "To get your Kaggle API credentials:" -ForegroundColor Cyan
 Write-Host "1. Go to https://www.kaggle.com/" -ForegroundColor White
-Write-Host "2. Click your profile picture → Settings" -ForegroundColor White
+Write-Host "2. Click your profile picture -> Settings" -ForegroundColor White
 Write-Host "3. Scroll to API section" -ForegroundColor White
 Write-Host "4. Click Create New Token" -ForegroundColor White
 Write-Host "5. Open the downloaded kaggle.json file" -ForegroundColor White
