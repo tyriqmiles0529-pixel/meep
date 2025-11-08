@@ -23,7 +23,7 @@ print("=" * 70)
 ledger_file = Path("bets_ledger.pkl")
 if not ledger_file.exists():
     print("ERROR: bets_ledger.pkl not found!")
-    exit(1)
+    raise FileNotFoundError("bets_ledger.pkl not found")
 
 with open(ledger_file, 'rb') as f:
     ledger_data = pickle.load(f)
@@ -49,7 +49,7 @@ print(f"Ready to fetch: {len(ready_to_settle):,}")
 
 if len(ready_to_settle) == 0:
     print("\nNo bets ready to settle!")
-    exit(0)
+    pass  # Success
 
 # Load/create fetch progress tracker
 progress_file = Path("fetch_progress.json")
@@ -76,7 +76,7 @@ if len(remaining_players) == 0:
     print("   If you still have unsettled bets, they may be:")
     print("   - Future games (not played yet)")
     print("   - Players not in NBA database")
-    exit(0)
+    pass  # Success
 
 # Import nba_api
 try:
@@ -86,7 +86,7 @@ try:
 except ImportError as e:
     print(f"\nERROR: {e}")
     print("Install with: pip install nba-api")
-    exit(1)
+    raise RuntimeError("Script terminated")
 
 # Get all NBA players
 all_players = nba_players.get_players()
