@@ -1,0 +1,28 @@
+# Dockerfile for Vertex AI Training
+# Base image with PyTorch + GPU support
+FROM gcr.io/deeplearning-platform-release/pytorch-gpu.1-13
+
+# Install additional dependencies
+RUN pip install --no-cache-dir \
+    pytorch-tabnet==4.0 \
+    lightgbm==4.1.0 \
+    kaggle==1.5.16 \
+    scikit-learn>=1.3.0 \
+    pandas>=2.0.0 \
+    numpy>=1.24.0
+
+# Set working directory
+WORKDIR /app
+
+# Copy training script
+COPY train_auto.py /app/
+COPY neural_hybrid.py /app/
+COPY keys.py /app/
+
+# Set Kaggle credentials from environment
+# (Will be passed via Vertex AI secret manager)
+ENV KAGGLE_USERNAME=""
+ENV KAGGLE_KEY=""
+
+# Entry point
+ENTRYPOINT ["python", "train_auto.py"]
