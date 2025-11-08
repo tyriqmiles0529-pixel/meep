@@ -289,9 +289,9 @@ Write-Host ""
 Write-Host "2. Go to Vertex AI Training:" -ForegroundColor White
 Write-Host "   https://console.cloud.google.com/vertex-ai/training/custom-jobs?project=$PROJECT_ID" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "3. Click 'CREATE' and fill in the form using values from the config file" -ForegroundColor White
+Write-Host "3. Click CREATE and fill in the form using values from the config file" -ForegroundColor White
 Write-Host ""
-Write-Host "4. Click 'START TRAINING' and wait 1-1.5 hours" -ForegroundColor White
+Write-Host "4. Click START TRAINING and wait 1-1.5 hours" -ForegroundColor White
 Write-Host ""
 Write-Host "5. Download trained models when complete:" -ForegroundColor White
 Write-Host "   gsutil -m cp -r gs://$BUCKET_NAME/models/ ./trained-models/" -ForegroundColor Cyan
