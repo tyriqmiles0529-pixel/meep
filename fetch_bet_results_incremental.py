@@ -82,7 +82,6 @@ if len(remaining_players) == 0:
 try:
     from nba_api.stats.endpoints import playergamelog
     from nba_api.stats.static import players as nba_players
-    from player_name_mapping import find_player_id
 except ImportError as e:
     print(f"\nERROR: {e}")
     print("Install with: pip install nba-api")
@@ -90,6 +89,30 @@ except ImportError as e:
 
 # Get all NBA players
 all_players = nba_players.get_players()
+
+# Player name matching function (inline)
+def find_player_id(player_name, all_players):
+    """Find NBA player ID using fuzzy matching."""
+    import difflib
+
+    # Normalize name
+    name_lower = player_name.lower().strip()
+
+    # Try exact match first
+    for player in all_players:
+        if player['full_name'].lower() == name_lower:
+            return player['id']
+
+    # Try fuzzy match
+    player_names = [p['full_name'] for p in all_players]
+    matches = difflib.get_close_matches(player_name, player_names, n=1, cutoff=0.8)
+
+    if matches:
+        for player in all_players:
+            if player['full_name'] == matches[0]:
+                return player['id']
+
+    return None
 
 # Track updates
 updates_made = 0
