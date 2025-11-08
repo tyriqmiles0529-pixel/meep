@@ -2,18 +2,20 @@
 
 **State-of-the-art NBA prediction system** using neural networks, advanced machine learning, 150-218 engineered features, and 7-phase feature engineering to predict player & game performance with **complete NBA history since 1947**.
 
-**Latest Update (Nov 7, 2025):** 
+**Latest Update (Nov 8, 2025):** 
 - ✅ **Neural Hybrid Models** - TabNet + LightGBM with 24-dim embeddings (default, +12-15% accuracy)
+- ✅ **Safe Mode** - Conservative betting with configurable margin buffer (default: 1.0 points)
+- ✅ **Evaluation Notebook** - Settle bets, generate calibration curves, recalibrate models
 - ✅ **Phase 7 Complete** - Basketball Reference priors integrated (68 features, 49% match rate)
 - ✅ **150-218 Features** - Full 7-phase feature engineering (Phases 1-7)
 - ✅ **RIQ Analyzer Updated** - Production-ready with neural models + momentum + priors
-- ✅ **Google Colab Training** - GPU-accelerated cloud training (1.5 hours on L4 GPU)
+- ✅ **Google Colab Workflow** - Complete training, prediction, and evaluation in cloud
 - ✅ **All Integrations Complete** - Ready for production
 
-**🚀 NEW: Train on Google Colab in 20-30 minutes**
-- See `START_HERE_COLAB.md` for quick start
-- Upload `NBA_COLAB_COMPLETE.ipynb` to Google Colab
-- No need to slow down your computer
+**🚀 Complete Google Colab Workflow**
+1. **Train Models**: `NBA_COLAB_SIMPLE.ipynb` (1.5 hours on L4 GPU)
+2. **Get Predictions**: `Riq_Machine.ipynb` (with Safe Mode & auto-download)
+3. **Evaluate & Calibrate**: `Evaluate_Predictions.ipynb` (settle bets, generate calibration)
 
 ## 🎯 Overview
 
@@ -31,10 +33,11 @@
   - **Phase 7**: Basketball Reference priors (career stats, advanced metrics, 68 features) 🆕 **NEW**
 
 - **Neural Hybrid Models** (Default): TabNet + LightGBM + 24-dim embeddings for 12-15% accuracy boost 🧠
+- **Safe Mode Betting**: Conservative picks with configurable margin (e.g., Proj: 2.8, Line: 3.5 → Requires 4.5+)
 - **Full Historical Training**: Complete NBA dataset from 1947-present (no windowing)
 - **Time-Decay Weighting**: Recent seasons weighted higher (exponential decay)
-- **Isotonic Calibration**: Real-time probability recalibration from tracked outcomes
-- **Confidence Filtering**: 56% minimum threshold for high-quality predictions only
+- **Isotonic Calibration**: Real-time probability recalibration from tracked outcomes (via Evaluate_Predictions.ipynb)
+- **Performance Tracking**: Automatic bet logging, settlement, win rate analysis, and ROI calculation
 
 ### 📊 Training Data
 
@@ -74,36 +77,43 @@
 
 **Biggest gains expected:** All stats improved via neural embeddings + momentum + priors integration
 
-## 🚀 Quick Start
+## 🚀 Quick Start - Complete Google Colab Workflow
 
-### Option 1: Train on Google Colab (Recommended) ⚡
+### Full Production Pipeline (No Local Setup Required!)
 
-**Fastest way to get started - No installation needed!**
+**📚 Three Notebooks for Complete Workflow:**
 
-1. **Open Colab Notebook**:
-   - Upload `NBA_COLAB_COMPLETE.ipynb` to [Google Colab](https://colab.research.google.com/)
-   - OR click: [Open in Colab](https://colab.research.google.com/github/tyriqmiles0529-pixel/meep/blob/main/NBA_COLAB_COMPLETE.ipynb)
+#### 1️⃣ **Train Models** - `NBA_COLAB_SIMPLE.ipynb` ⚡
+- Upload to [Google Colab](https://colab.research.google.com/)
+- Enable GPU (Runtime → Change runtime type → L4 GPU)
+- Upload `priors_data.zip`
+- Runtime → Run all (~1.5 hours)
+- Download `nba_models_trained.zip`
 
-2. **Enable GPU**:
-   - Runtime → Change runtime type → GPU
+#### 2️⃣ **Get Predictions** - `Riq_Machine.ipynb` 🎯
+- Upload trained models (`nba_models_trained.zip`)
+- Upload priors data (`priors_data.zip`) 
+- Upload historical data (`PlayerStatistics.csv`)
+- Configure API keys (The Odds API)
+- **Optional**: Enable Safe Mode (conservative picks)
+- Run analysis → Get today's predictions
+- **IMPORTANT**: Run Download Results cell to save predictions!
 
-3. **Upload Priors Data**:
-   - Drag `priors_data.zip` into Colab file browser
+#### 3️⃣ **Evaluate & Calibrate** - `Evaluate_Predictions.ipynb` 📊
+- Upload `bets_ledger.pkl` (from Riq_Machine)
+- Fetch actual game results from NBA API
+- Settle all pending bets
+- Generate calibration plots (4-panel analysis)
+- Train isotonic regression for better calibration
+- Download `calibration.pkl` → Use in production!
 
-4. **Run All**:
-   - Runtime → Run all (takes ~1.5 hours with L4 GPU, 20-30 min with A100)
-   - Trains neural hybrid models with 150-218 features
-   - Includes Phase 7 priors integration
-
-5. **Download Models**:
-   - Auto-downloads `nba_models_trained.zip`
-   - Extract to your local `models/` folder
-
-**See `START_HERE_COLAB.md` for detailed guide.**
+**📖 See `START_HERE_COLAB.md` for detailed guide.**
 
 ---
 
-### Option 2: Train Locally (If You Prefer)
+### Alternative: Train Locally
+
+### Local Training Option (If You Prefer)
 
 ```bash
 # Clone repository
