@@ -17,7 +17,7 @@ from rapidfuzz import fuzz, process
 import gc
 
 # --- Configuration ---
-CHUNK_SIZE = 100000  # Process 100,000 rows at a time
+CHUNK_SIZE = 25000  # Process 25,000 rows at a time
 
 def get_memory_usage():
     """Returns current memory usage of the script in MB."""
