@@ -40,6 +40,13 @@ def load_player_statistics(csv_path):
     print(f"  Path: {csv_path}")
 
     df = pd.read_csv(csv_path, low_memory=False)
+    
+    # Perform fillna on firstName/lastName BEFORE optimizing dtypes
+    if 'firstName' in df.columns:
+        df['firstName'] = df['firstName'].fillna('')
+    if 'lastName' in df.columns:
+        df['lastName'] = df['lastName'].fillna('')
+
     df = optimize_df(df)
     print(f"  Rows: {len(df):,}, Columns: {len(df.columns)}")
 
@@ -53,7 +60,8 @@ def load_player_statistics(csv_path):
         df['player_game_id'] = df['personId'].astype(str)
 
     if 'firstName' in df.columns and 'lastName' in df.columns:
-        df['player_name'] = (df['firstName'].fillna('') + ' ' + df['lastName'].fillna('')).str.strip()
+        # fillna already done, just concatenate
+        df['player_name'] = (df['firstName'] + ' ' + df['lastName']).str.strip()
 
     return df
 
