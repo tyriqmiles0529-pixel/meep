@@ -145,8 +145,11 @@ def fill_missing_values(df):
     """Intelligently fill missing values."""
     print(f"\n{'='*70}\nFILLING MISSING VALUES\n{'='*70}")
     prior_cols = [c for c in df.columns if c.startswith(('adv_', 'per100_', 'shoot_', 'pbp_', 'team_'))]
-    print(f"\n  Filling {len(prior_cols)} prior columns with 0...")
-    df[prior_cols] = df[prior_cols].fillna(0)
+    # Select only numeric columns from the priors to fill with 0
+    numeric_prior_cols = df[prior_cols].select_dtypes(include=np.number).columns.tolist()
+    
+    print(f"\n  Filling {len(numeric_prior_cols)} numeric prior columns with 0...")
+    df[numeric_prior_cols] = df[numeric_prior_cols].fillna(0)
     return df
 
 def main():
