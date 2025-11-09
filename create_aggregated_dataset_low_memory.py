@@ -3,6 +3,7 @@ Create Pre-Aggregated Dataset - EFFICIENT MERGE VERSION
 
 This script is optimized for both speed and memory by using efficient
 vectorized operations for merging instead of slower, row-by-row methods.
+It is configured to read from the two separate Kaggle datasets.
 """
 
 import pandas as pd
@@ -333,7 +334,7 @@ def main():
                        default='/kaggle/input/historical-nba-data-and-player-box-scores/PlayerStatistics.csv',
                        help='Path to PlayerStatistics.csv')
     parser.add_argument('--priors-dir', type=str,
-                       default='/kaggle/input/historical-nba-data-and-player-box-scores/priors_data',
+                       default='/kaggle/input/nba-aba-baa-stats',
                        help='Directory with priors CSVs')
     parser.add_argument('--output', type=str,
                        default='aggregated_nba_data.csv',
@@ -351,12 +352,20 @@ def main():
     print(f"Expected time: 5-10 minutes")
     print(f"Expected size: ~500-800 MB compressed")
 
-    # Load main data source
+    # Load all data sources
     df_player = load_player_statistics(args.player_csv)
+    df_adv = load_advanced_stats(f"{args.priors_dir}/Advanced.csv")
+    df_per100 = load_per_100_poss(f"{args.priors_dir}/Per 100 Poss.csv")
+    df_shoot = load_shooting_stats(f"{args.priors_dir}/Player Shooting.csv")
+    df_pbp = load_playbyplay_stats(f"{args.priors_dir}/Player Play By Play.csv")
+    df_team_sum = load_team_summaries(f"{args.priors_dir}/Team Summaries.csv")
+    df_team_abbrev = load_team_abbrev(f"{args.priors_dir}/Team Abbrev.csv")
 
-    # NOTE: The priors_data directory is not available in the Kaggle dataset.
-    # Skipping the merge of Advanced, Per 100 Poss, Shooting, and PBP stats.
-    df_merged = df_player
+    # Merge player priors
+    df_merged = merge_player_priors(df_player, df_adv, df_per100, df_shoot, df_pbp)
+
+    # Merge team priors
+    df_merged = merge_team_priors(df_merged, df_team_sum, df_team_abbrev)
 
     # Fill missing values
     df_merged = fill_missing_values(df_merged)
