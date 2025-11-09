@@ -61,7 +61,7 @@ def load_player_statistics(csv_path):
 
     if 'firstName' in df.columns and 'lastName' in df.columns:
         # fillna already done, just concatenate
-        df['player_name'] = (df['firstName'] + ' ' + df['lastName']).str.strip()
+        df['player_name'] = (df['firstName'].astype(str) + ' ' + df['lastName'].astype(str)).str.strip()
 
     return df
 
