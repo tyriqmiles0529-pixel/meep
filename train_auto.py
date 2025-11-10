@@ -3881,6 +3881,7 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool, seasons_t
 def main():
     ap = argparse.ArgumentParser(description="Train NBA game and player models (always fetch from Kaggle).")
     ap.add_argument("--dataset", type=str, default="eoinamoore/historical-nba-data-and-player-box-scores", help="Kaggle dataset ref")
+    ap.add_argument("--aggregated-data", type=str, default=None, help="Path to a pre-aggregated dataset CSV.")
     ap.add_argument("--player-csv", type=str, default=None, help="Path to local PlayerStatistics.csv (overrides Kaggle download for player data)")
     ap.add_argument("--models-dir", type=str, default="models", help="Output dir for models")
     ap.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -4021,793 +4022,209 @@ def main():
     else:
         print(f"  • Model: LightGBM only (neural disabled with --disable-neural)")
 
-    if kagglehub is None:
-        raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
+    if args.aggregated_data:
+        print(_sec("Loading Pre-Aggregated Dataset"))
+        agg_path = Path(args.aggregated_data)
+        if not agg_path.exists():
+            raise FileNotFoundError(f"Aggregated dataset not found: {agg_path}")
 
-    # Download Kaggle dataset (always)
-    print(_sec("Fetching latest from Kaggle"))
-    ds_root = Path(kagglehub.dataset_download(args.dataset))
-    print(f"- Downloaded to cache: {ds_root}")
+        print(f"- Loading from: {agg_path}")
+        # This is the main dataframe, containing player-game level data with all priors already merged.
+        # It's equivalent to the 'ps_join' dataframe from the original build_players_from_playerstats function.
+        agg_df = pd.read_csv(agg_path, low_memory=False)
+        print(f"- Loaded {len(agg_df):,} rows")
 
-    # Optionally copy to a per-run folder (ensures clean, fresh artifacts)
-    ds_use_root = ds_root
-    if args.fresh:
-        run_dir = _fresh_run_dir(Path(".kaggle_runs"))
-        teams_src, players_src = _find_dataset_files(ds_root)
-        teams_dst = _copy_if_exists(teams_src, run_dir)
-        players_dst = _copy_if_exists(players_src, run_dir)
-        ds_use_root = run_dir
-        print(f"- Copied CSVs to: {run_dir}")
-        if not teams_dst:
-            raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
-        teams_path, players_path = teams_dst, players_dst
+        # --- Reconstruct games_df from aggregated data ---
+        print("- Reconstructing game-level data from aggregated file...")
+        # The game-level features are duplicated for each player in a game, so we can just drop duplicates.
+        game_identifiers = ['gid', 'date', 'home_tid', 'away_tid', 'home_score', 'away_score', 'season_end_year', 'season_decade', 'home_abbrev', 'away_abbrev']
+        game_feature_cols = [c for c in GAME_FEATURES if c in agg_df.columns]
+        
+        # Ensure essential identifier columns exist before using them
+        existing_identifiers = [c for c in game_identifiers if c in agg_df.columns]
+        
+        games_df = agg_df[existing_identifiers + game_feature_cols].drop_duplicates(subset=['gid']).reset_index(drop=True)
+        print(f"- Created games_df with {len(games_df):,} unique games.")
+
+        # The aggregated file already contains priors, so we create empty placeholders for the rest of the script.
+        priors_players = pd.DataFrame()
+        priors_teams = pd.DataFrame()
+        players_path = None # This indicates we don't need to build player stats from a raw file.
+        
+        # This global variable will signal to the player model section to use the pre-loaded data.
+        global __LOADED_PLAYER_DATA
+        __LOADED_PLAYER_DATA = agg_df
+
     else:
-        teams_path, players_path = _find_dataset_files(ds_root)
-        if not teams_path:
-            raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
-        if not players_path:
-            log("⚠️  WARNING: PlayerStatistics CSV not found in Kaggle dataset!", True)
-            log("   Only game-level models will be trained. Player prop models require PlayerStatistics data.", True)
-            log(f"   Files found in {ds_root}: {list(ds_root.glob('*.csv'))}", True)
-    
-    # Override with local PlayerStatistics.csv if provided
-    if args.player_csv:
-        local_player_path = Path(args.player_csv)
-        if local_player_path.exists():
-            players_path = local_player_path
-            log(f"✅ Using local PlayerStatistics.csv: {players_path} ({local_player_path.stat().st_size / 1024 / 1024:.1f} MB)", True)
+        # --- ORIGINAL DATA LOADING LOGIC ---
+        if kagglehub is None:
+            raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
+
+        # Download Kaggle dataset (always)
+        print(_sec("Fetching latest from Kaggle"))
+        ds_root = Path(kagglehub.dataset_download(args.dataset))
+        print(f"- Downloaded to cache: {ds_root}")
+
+        # Optionally copy to a per-run folder (ensures clean, fresh artifacts)
+        ds_use_root = ds_root
+        if args.fresh:
+            run_dir = _fresh_run_dir(Path(".kaggle_runs"))
+            teams_src, players_src = _find_dataset_files(ds_root)
+            teams_dst = _copy_if_exists(teams_src, run_dir)
+            players_dst = _copy_if_exists(players_src, run_dir)
+            ds_use_root = run_dir
+            print(f"- Copied CSVs to: {run_dir}")
+            if not teams_dst:
+                raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
+            teams_path, players_path = teams_dst, players_dst
         else:
-            log(f"⚠️  WARNING: --player-csv specified but file not found: {local_player_path}", True)
+            teams_path, players_path = _find_dataset_files(ds_root)
+            if not teams_path:
+                raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
+            if not players_path:
+                log("⚠️  WARNING: PlayerStatistics CSV not found in Kaggle dataset!", True)
+                log("   Only game-level models will be trained. Player prop models require PlayerStatistics data.", True)
+                log(f"   Files found in {ds_root}: {list(ds_root.glob('*.csv'))}", True)
+        
+        # Override with local PlayerStatistics.csv if provided
+        if args.player_csv:
+            local_player_path = Path(args.player_csv)
+            if local_player_path.exists():
+                players_path = local_player_path
+                log(f"✅ Using local PlayerStatistics.csv: {players_path} ({local_player_path.stat().st_size / 1024 / 1024:.1f} MB)", True)
+            else:
+                log(f"⚠️  WARNING: --player-csv specified but file not found: {local_player_path}", True)
+
+        # Build games and team context
+        print(_sec("Building game dataset"))
+        games_df, context_map, team_id_to_abbrev = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
+
+        # Augment with current season completed games (2025-26) from nba_api
+        print(_sec("Augmenting with current season data"))
+        current_season_df = fetch_current_season_games(season="2025-26", verbose=verbose)
+
+        if current_season_df is not None and not current_season_df.empty:
+            temp_csv = Path(".current_season_temp.csv")
+            current_season_df.to_csv(temp_csv, index=False)
+            current_games_df, current_context, current_abbrevs = build_games_from_teamstats(temp_csv, verbose=verbose, skip_rest=args.skip_rest)
+            if current_abbrevs:
+                team_id_to_abbrev.update(current_abbrevs)
+            before_len = len(games_df)
+            games_df = pd.concat([games_df, current_games_df], ignore_index=True)
+            for tid, ctx_df in current_context.items():
+                if tid in context_map:
+                    context_map[tid] = pd.concat([context_map[tid], ctx_df], ignore_index=True)
+                else:
+                    context_map[tid] = ctx_df
+            print(f"- Added {len(current_games_df):,} games from 2025-26 season (total: {before_len:,} -> {len(games_df):,})")
+            temp_csv.unlink(missing_ok=True)
+            del current_season_df, current_games_df, current_context, current_abbrevs
+            gc.collect()
+        else:
+            print("- No current season games available yet (season may not have started)")
+
+        print(_sec("Skipping historical odds fetch - only available for 2022+ seasons"))
+        print("- Historical windows (2002-2021) don't need odds data")
+        print("- Odds will be loaded later only for current season window if needed")
+
+        if team_id_to_abbrev:
+            games_df["home_abbrev"] = games_df["home_tid"].map(team_id_to_abbrev)
+            games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
+            matched = games_df["home_abbrev"].notna().sum()
+            log(f"- Mapped {matched:,} / {len(games_df):,} games to team abbreviations ({matched/len(games_df)*100:.1f}%)", verbose)
+
+        games_df['home_team'] = games_df['home_abbrev']
+        games_df['away_team'] = games_df['away_abbrev']
+
+        priors_players = pd.DataFrame()
+        priors_teams = pd.DataFrame()
+        if args.priors_dataset:
+            seasons_to_keep: Optional[Set[int]] = None
+            if "season_end_year" in games_df.columns:
+                try:
+                    base_seasons = set(int(x) for x in pd.to_numeric(games_df["season_end_year"], errors="coerce").dropna().astype(int).unique())
+                    padded = set()
+                    for s in base_seasons:
+                        padded.update([s-1, s, s+1])
+                    seasons_to_keep = padded
+                    if verbose:
+                        log(f"Priors season filter prepared: keeping {len(seasons_to_keep)} seasons (sample: {sorted(list(seasons_to_keep))[:5]}…)", True)
+                except Exception:
+                    seasons_to_keep = None
+            priors_path_str = args.priors_dataset
+            if os.path.exists(priors_path_str):
+                priors_root = Path(priors_path_str)
+                log(f"Loading priors from local path: {priors_root}", verbose)
+                priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
+            elif "/" in priors_path_str:
+                if not kagglehub:
+                    log("Warning: kagglehub not available, skipping priors dataset", verbose)
+                else:
+                    try:
+                        log(f"Downloading priors dataset from Kaggle: {priors_path_str}", verbose)
+                        priors_root = Path(kagglehub.dataset_download(priors_path_str))
+                        log(f"Priors downloaded to: {priors_root}", verbose)
+                        priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
+                    except Exception as e:
+                        log(f"Warning: Failed to load priors dataset: {e}", verbose)
+                        import traceback
+                        log(f"Traceback: {traceback.format_exc()}", verbose)
+            else:
+                log(f"Warning: Priors dataset path does not exist: {priors_path_str}", verbose)
+
+        if not priors_teams.empty:
+            log(f"✓ Loaded team priors: {len(priors_teams):,} rows, columns: {list(priors_teams.columns)}", verbose)
+        if not priors_players.empty:
+            log(f"✓ Loaded player priors: {len(priors_players):,} rows, {len(priors_players.columns)} columns", verbose)
+
+        if ("home_abbrev" not in games_df.columns or games_df["home_abbrev"].isna().all()) and ("home_name" in games_df.columns):
+            try:
+                br_map = load_team_abbrev_map(priors_root, verbose, source_name="BR Team Abbrev")
+                if br_map:
+                    def _map_row(row):
+                        try:
+                            s = int(pd.to_numeric(row.get("season_end_year"), errors="coerce"))
+                        except Exception:
+                            return pd.Series({"home_abbrev": None, "away_abbrev": None})
+                        hn = row.get("home_name", None)
+                        an = row.get("away_name", None)
+                        ha = resolve_team_abbrev(str(hn), s, br_map) if hn is not None else None
+                        aa = resolve_team_abbrev(str(an), s, br_map) if an is not None else None
+                        return pd.Series({"home_abbrev": ha, "away_abbrev": aa})
+                    mapped = games_df.apply(_map_row, axis=1)
+                    for col in ["home_abbrev", "away_abbrev"]:
+                        games_df[col] = mapped[col].astype(str).str.strip().str.upper()
+                    matched_h = games_df["home_abbrev"].notna().sum()
+                    matched_a = games_df["away_abbrev"].notna().sum()
+                    log(f"- Mapped abbreviations via team names using BR table: home {matched_h:,}, away {matched_a:,} (rows: {len(games_df):,})", verbose)
+            except Exception:
+                pass
+
+        if not priors_teams.empty and "abbreviation" in priors_teams.columns and "season_end_year" in games_df.columns:
+            if "home_abbrev" in games_df.columns and "away_abbrev" in games_df.columns:
+                home_priors = priors_teams.rename(columns={"abbreviation": "home_abbrev", "season_for_game": "season_end_year", "o_rtg": "home_o_rtg_prior", "d_rtg": "home_d_rtg_prior", "pace": "home_pace_prior", "srs": "home_srs_prior", "e_fg_percent": "home_efg_prior", "tov_percent": "home_tov_pct_prior", "orb_percent": "home_orb_pct_prior", "ft_fga": "home_ftr_prior", "opp_e_fg_percent": "home_opp_efg_prior", "opp_tov_percent": "home_opp_tov_pct_prior", "drb_percent": "home_drb_pct_prior", "opp_ft_fga": "home_opp_ftr_prior", "ts_percent": "home_ts_pct_prior", "x3p_ar": "home_3par_prior", "mov": "home_mov_prior"})
+                home_prior_cols = [c for c in home_priors.columns if c.startswith("home_")] + ["season_end_year"]
+                games_df = games_df.merge(home_priors[home_prior_cols], on=["home_abbrev", "season_end_year"], how="left")
+                
+                away_priors = priors_teams.rename(columns={"abbreviation": "away_abbrev", "season_for_game": "season_end_year", "o_rtg": "away_o_rtg_prior", "d_rtg": "away_d_rtg_prior", "pace": "away_pace_prior", "srs": "away_srs_prior", "e_fg_percent": "away_efg_prior", "tov_percent": "away_tov_pct_prior", "orb_percent": "away_orb_pct_prior", "ft_fga": "away_ftr_prior", "opp_e_fg_percent": "away_opp_efg_prior", "opp_tov_percent": "away_opp_tov_pct_prior", "drb_percent": "away_drb_pct_prior", "opp_ft_fga": "away_opp_ftr_prior", "ts_percent": "away_ts_pct_prior", "x3p_ar": "away_3par_prior", "mov": "away_mov_prior"})
+                away_prior_cols = [c for c in away_priors.columns if c.startswith("away_")] + ["season_end_year"]
+                games_df = games_df.merge(away_priors[away_prior_cols], on=["away_abbrev", "season_end_year"], how="left")
+
+        for col in GAME_FEATURES:
+            if col not in games_df.columns:
+                games_df[col] = GAME_DEFAULTS.get(col, 0.0)
+            else:
+                games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
     models_dir = Path(args.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build games and team context
-    print(_sec("Building game dataset"))
-    games_df, context_map, team_id_to_abbrev = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
-
-    # Augment with current season completed games (2025-26) from nba_api
-    print(_sec("Augmenting with current season data"))
-    current_season_df = fetch_current_season_games(season="2025-26", verbose=verbose)
-
-    if current_season_df is not None and not current_season_df.empty:
-        # Convert current season data to match historical format
-        # The function already returns data in the right format, but we need to process it through build_games_from_teamstats logic
-
-        # Save current season data to temp CSV
-        temp_csv = Path(".current_season_temp.csv")
-        current_season_df.to_csv(temp_csv, index=False)
-
-        # Process through same pipeline
-        current_games_df, current_context, current_abbrevs = build_games_from_teamstats(temp_csv, verbose=verbose, skip_rest=args.skip_rest)
-
-        # Merge abbreviations
-        if current_abbrevs:
-            team_id_to_abbrev.update(current_abbrevs)
-
-        # Append current season games to historical data
-        before_len = len(games_df)
-        games_df = pd.concat([games_df, current_games_df], ignore_index=True)
-
-        # Merge context maps
-        for tid, ctx_df in current_context.items():
-            if tid in context_map:
-                context_map[tid] = pd.concat([context_map[tid], ctx_df], ignore_index=True)
-            else:
-                context_map[tid] = ctx_df
-
-        print(f"- Added {len(current_games_df):,} games from 2025-26 season (total: {before_len:,} -> {len(games_df):,})")
-
-        # Clean up temp file
-        temp_csv.unlink(missing_ok=True)
-        # Free temp frames
-        del current_season_df, current_games_df, current_context, current_abbrevs
-        gc.collect()
-    else:
-        print("- No current season games available yet (season may not have started)")
-
-    # SKIP historical odds fetching for now - only needed for 2022+ seasons
-    # Historical odds (pre-2022) are not available from The Odds API anyway
-    # This saves significant time and RAM, especially for cached historical windows (2002-2021)
-    print(_sec("Skipping historical odds fetch - only available for 2022+ seasons"))
-    print("- Historical windows (2002-2021) don't need odds data")
-    print("- Odds will be loaded later only for current season window if needed")
-
-    # Add team abbreviations for ALL games (needed for team priors merge)
-    if team_id_to_abbrev:
-        games_df["home_abbrev"] = games_df["home_tid"].map(team_id_to_abbrev)
-        games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
-        matched = games_df["home_abbrev"].notna().sum()
-        log(f"- Mapped {matched:,} / {len(games_df):,} games to team abbreviations ({matched/len(games_df)*100:.1f}%)", verbose)
-
-    # Ensure home_team and away_team columns exist for exhaustion features
-    games_df['home_team'] = games_df['home_abbrev']
-    games_df['away_team'] = games_df['away_abbrev']
-
-    # AUTOMATED 5-YEAR WINDOW TRAINING (RAM-efficient with smart caching)
-    # Strategy: Only train missing windows + current season window
-    # This prevents retraining from 2002 onwards every time
-    # NOTE: This has been moved to AFTER base LGB model training (see line ~3600)
-    # Keeping this comment here for reference
-    if False:  # DISABLED - moved to after clf_final is trained
-        # args.enable_window_ensemble:
-        if "season_end_year" in games_df.columns:
-            import pickle
-            cache_dir = "model_cache"
-            os.makedirs(cache_dir, exist_ok=True)
-
-            min_year = int(games_df["season_end_year"].min())
-            max_year = int(games_df["season_end_year"].max())
-            window_size = 5
-
-            # Get all unique seasons and split into exact 5-year windows
-            # Convert to integers to avoid numpy float issues
-            all_seasons = sorted([int(s) for s in games_df["season_end_year"].dropna().unique()])
-
-            print(f"\n{'='*70}")
-            print(f"5-YEAR WINDOW TRAINING (RAM-Efficient Mode)")
-            print(f"Data range: {min_year}-{max_year}")
-            print(f"Total unique seasons: {len(all_seasons)}")
-            print(f"{'='*70}")
-
-            # Determine which window contains the current season
-            current_season_year = max_year
-            windows_to_process = []
-
-            for i in range(0, len(all_seasons), window_size):
-                window_seasons = all_seasons[i:i+window_size]
-                start_year = int(window_seasons[0])
-                end_year = int(window_seasons[-1])
-                cache_path = f"{cache_dir}/ensemble_{start_year}_{end_year}.pkl"
-                cache_meta_path = f"{cache_dir}/ensemble_{start_year}_{end_year}_meta.json"
-
-                is_current_window = current_season_year in window_seasons
-                cache_exists = os.path.exists(cache_path) and os.path.getsize(cache_path) > 0
-                cache_valid = False
-
-                # Validate cache with metadata
-                if cache_exists and os.path.exists(cache_meta_path):
-                    try:
-                        with open(cache_meta_path, 'r') as f:
-                            meta = json.load(f)
-                            # Check if cache has all expected seasons
-                            cached_seasons = set(meta.get('seasons', []))
-                            expected_seasons = set(map(int, window_seasons))
-                            cache_valid = cached_seasons == expected_seasons
-                            if cache_valid:
-                                print(f"[OK] Window {start_year}-{end_year}: Valid cache found")
-                    except Exception as e:
-                        print(f"[WARN] Window {start_year}-{end_year}: Cache metadata invalid ({e})")
-                        cache_valid = False
-
-                # Decide whether to process this window
-                if is_current_window:
-                    # Always retrain current season window (new data may have arrived)
-                    print(f"[TRAIN] Window {start_year}-{end_year}: Current season - will train")
-                    windows_to_process.append({
-                        'seasons': window_seasons,
-                        'start_year': start_year,
-                        'end_year': end_year,
-                        'cache_path': cache_path,
-                        'cache_meta_path': cache_meta_path,
-                        'is_current': True
-                    })
-                elif not cache_valid:
-                    # Historical window missing or invalid - need to train
-                    status = "missing" if not cache_exists else "invalid"
-                    print(f"[TRAIN] Window {start_year}-{end_year}: Cache {status} - will train")
-                    windows_to_process.append({
-                        'seasons': window_seasons,
-                        'start_year': start_year,
-                        'end_year': end_year,
-                        'cache_path': cache_path,
-                        'cache_meta_path': cache_meta_path,
-                        'is_current': False
-                    })
-
-            if not windows_to_process:
-                print("\n[OK] All windows cached and up-to-date. No training needed!")
-            else:
-                print(f"\n{'='*70}")
-                print(f"Will process {len(windows_to_process)} window(s) sequentially to minimize RAM")
-                print(f"{'='*70}\n")
-
-                # Process windows sequentially (not all at once) to save RAM
-                for idx, window_info in enumerate(windows_to_process, 1):
-                    window_seasons = window_info['seasons']
-                    start_year = window_info['start_year']
-                    end_year = window_info['end_year']
-                    cache_path = window_info['cache_path']
-                    cache_meta_path = window_info['cache_meta_path']
-                    is_current = window_info['is_current']
-
-                    print(f"\n{'='*70}")
-                    print(f"Training window {idx}/{len(windows_to_process)}: {start_year}-{end_year}")
-                    print(f"Seasons: {list(window_seasons)}")
-                    print(f"{'='*70}")
-
-                    # Extract only this window's data to minimize RAM
-                    window_mask = games_df["season_end_year"].isin(window_seasons)
-                    games_window = games_df[window_mask].reset_index(drop=True)
-                    print(f"Window contains {len(games_window):,} games")
-
-                    # Train the model for this window
-                    use_player_props = end_year >= 2022
-                    if use_player_props:
-                        print("Using historic player props for this window.")
-                    else:
-                        print("Skipping historic player props for this window.")
-
-                    game_weights = _compute_sample_weights(
-                        games_window["season_end_year"].to_numpy(dtype="float64"),
-                        decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
-                    )
-
-                    result = train_all_ensemble_components(
-                        games_df=games_window,
-                        game_features=GAME_FEATURES,
-                        game_defaults=GAME_DEFAULTS,
-                        lgb_model=clf_final,
-                        optimal_refit_freq=20,
-                        verbose=verbose
-                    )
-
-                    # Cache the result (even for current window, for faster subsequent runs)
-                    print(f"Saving trained model to cache: {cache_path}")
-                    with open(cache_path, "wb") as f:
-                        pickle.dump(result, f)
-
-                    # Save metadata for cache validation
-                    meta = {
-                        'seasons': list(map(int, window_seasons)),
-                        'start_year': start_year,
-                        'end_year': end_year,
-                        'trained_date': datetime.now().isoformat(),
-                        'num_games': len(games_window),
-                        'is_current_season': is_current
-                    }
-                    with open(cache_meta_path, 'w') as f:
-                        json.dump(meta, f, indent=2)
-
-                    print(f"[OK] Window {start_year}-{end_year} complete and cached")
-
-                    # Free memory after each window
-                    del games_window, result, game_weights
-                    gc.collect()
-                    print(f"Memory freed for next window")
-
-                print(f"\n{'='*70}")
-                print(f"[OK] All required windows trained and cached")
-                print(f"{'='*70}\n")
-        else:
-            print("No season_end_year column found; cannot automate 5-year window training.")
-    # Load and merge betting odds (if provided)
-    # NOTE: This section has been DISABLED - odds loading moved to after window training
-    # Betting odds (2008-2025) should NOT be loaded into historical windows (2002-2006, etc.)
-    odds_df = pd.DataFrame()
-    if False:  # DISABLED - moved to after window ensemble training
-        # args.odds_dataset and not args.skip_odds:
-        odds_path_str = args.odds_dataset
-        # Check if it's a Kaggle dataset ref or local path
-        if "/" in odds_path_str and not os.path.exists(odds_path_str):
-            # Assume Kaggle dataset
-            if not kagglehub:
-                log("Warning: kagglehub not available, skipping odds dataset", verbose)
-                odds_df = pd.DataFrame()
-            else:
-                try:
-                    log(f"Downloading odds dataset from Kaggle: {odds_path_str}", verbose)
-                    odds_root = Path(kagglehub.dataset_download(odds_path_str))
-                    # Find CSV file in downloaded dataset
-                    odds_csvs = list(odds_root.glob("*.csv"))
-                    log(f"Found {len(odds_csvs)} CSV files in odds dataset: {[f.name for f in odds_csvs]}", verbose)
-                    if odds_csvs:
-                        odds_path = odds_csvs[0]  # Use first CSV found
-                        odds_df = load_betting_odds(odds_path, verbose)
-                    else:
-                        log(f"Warning: No CSV files found in {odds_root}", verbose)
-                        odds_df = pd.DataFrame()
-                except Exception as e:
-                    log(f"Warning: Failed to load odds dataset: {e}", verbose)
-                    odds_df = pd.DataFrame()
-        else:
-            odds_path = Path(odds_path_str)
-            if odds_path.exists():
-                odds_df = load_betting_odds(odds_path, verbose)
-            else:
-                log(f"Warning: Odds dataset path does not exist: {odds_path}", verbose)
-                odds_df = pd.DataFrame()
-
-        # Merge odds into games_df
-        if not odds_df.empty:
-            log(f"Attempting to merge {len(odds_df):,} odds rows into {len(games_df):,} games", verbose)
-            
-            # Try multiple merge strategies
-            merged = False
-            
-            # Strategy 1: Match by gid if present in both (normalize to strings first)
-            if "gid" in games_df.columns and "gid" in odds_df.columns:
-                games_df["gid_norm"] = _id_to_str(games_df["gid"]).str.strip()
-                odds_df["gid_norm"] = _id_to_str(odds_df["gid"]).str.strip()
-                before_merge = len(games_df)
-                common_gids = set(games_df["gid_norm"]) & set(odds_df["gid_norm"])
-                if verbose:
-                    try:
-                        sample_g = list(games_df["gid_norm"].dropna().unique())[:5]
-                        sample_o = list(odds_df["gid_norm"].dropna().unique())[:5]
-                        log(f"  Games gid samples: {sample_g}", True)
-                        log(f"  Odds  gid samples: {sample_o}", True)
-                    except Exception:
-                        pass
-                log(f"  Strategy 1 (gid match): {len(common_gids):,} common game IDs", verbose)
-                
-                if len(common_gids) > 0:
-                    games_df = games_df.merge(
-                        odds_df.drop(columns=["game_date_utc", "season_end_year", "gid"], errors="ignore").rename(columns={"gid_norm":"gid_norm_odds"}),
-                        left_on="gid_norm", right_on="gid_norm_odds", how="left", suffixes=("", "_odds")
-                    )
-                    games_df = games_df.drop(columns=["gid_norm", "gid_norm_odds"], errors="ignore")
-                    merged = True
-                    actual_merged = (games_df["market_implied_home"].notna() & 
-                                   (games_df["market_implied_home"] != GAME_DEFAULTS.get("market_implied_home", 0.5))).sum()
-                    log(f"  ✓ Merged by gid: {actual_merged:,} games have real odds", verbose)
-            
-            # Strategy 2: Match by date + team abbreviations
-            if not merged and "date" in games_df.columns and "home_abbrev" in games_df.columns and "home_abbrev" in odds_df.columns:
-                # Create merge key
-                games_df["_merge_key"] = (
-                    games_df["date"].dt.strftime("%Y%m%d").fillna("") + "_" +
-                    games_df["home_abbrev"].fillna("") + "_" +
-                    games_df["away_abbrev"].fillna("")
-                )
-                odds_df["_merge_key"] = (
-                    odds_df["game_date_utc"].dt.strftime("%Y%m%d").fillna("") + "_" +
-                    odds_df["home_abbrev"].fillna("") + "_" +
-                    odds_df["away_abbrev"].fillna("")
-                )
-                
-                common_keys = set(games_df["_merge_key"]) & set(odds_df["_merge_key"])
-                log(f"  Strategy 2 (date+abbrev match): {len(common_keys):,} common keys", verbose)
-                
-                if len(common_keys) > 0:
-                    games_df = games_df.merge(
-                        odds_df.drop(columns=["gid", "game_date_utc", "season_end_year"], errors="ignore"),
-                        on="_merge_key", how="left", suffixes=("", "_odds")
-                    )
-                    merged = True
-                    actual_merged = (games_df["market_implied_home"].notna() & 
-                                   (games_df["market_implied_home"] != GAME_DEFAULTS.get("market_implied_home", 0.5))).sum()
-                    log(f"  ✓ Merged by date+abbrev: {actual_merged:,} games have real odds", verbose)
-                
-                # Clean up merge key
-                games_df = games_df.drop(columns=["_merge_key"], errors="ignore")
-            
-            if not merged:
-                log("  ⚠️  Could not merge odds - no common keys found", verbose)
-                log(f"     Games has: {list(games_df.columns[:10])}", verbose)
-                log(f"     Odds has: {list(odds_df.columns)}", verbose)
-
-        # Ensure betting odds columns always exist (fill with defaults if not merged)
-        for col in ["market_implied_home", "market_implied_away", "market_spread", "spread_move", "market_total", "total_move"]:
-            if col not in games_df.columns:
-                games_df[col] = GAME_DEFAULTS.get(col, 0.0)
-            else:
-                games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
-
-    # Load and merge Basketball Reference priors (if provided)
-    priors_players = pd.DataFrame()
-    priors_teams = pd.DataFrame()
-
-    if args.priors_dataset:
-        # Compute target seasons to keep for priors (games seasons ±1 for safety)
-        seasons_to_keep: Optional[Set[int]] = None
-        if "season_end_year" in games_df.columns:
-            try:
-                base_seasons = set(int(x) for x in pd.to_numeric(games_df["season_end_year"], errors="coerce").dropna().astype(int).unique())
-                padded = set()
-                for s in base_seasons:
-                    padded.update([s-1, s, s+1])
-                seasons_to_keep = padded
-                if verbose:
-                    log(f"Priors season filter prepared: keeping {len(seasons_to_keep)} seasons (sample: {sorted(list(seasons_to_keep))[:5]}…)", True)
-            except Exception:
-                seasons_to_keep = None
-        priors_path_str = args.priors_dataset
-        # Check if local path exists first, then try Kaggle
-        if os.path.exists(priors_path_str):
-            # Local path exists - use it directly
-            priors_root = Path(priors_path_str)
-            log(f"Loading priors from local path: {priors_root}", verbose)
-            
-            # List all CSV files found
-            csv_files = list(priors_root.glob("*.csv"))
-            log(f"Found {len(csv_files)} CSV files in priors directory:", verbose)
-            for f in csv_files:
-                log(f"  - {f.name} ({f.stat().st_size / 1024 / 1024:.1f} MB)", verbose)
-            
-            priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
-        elif "/" in priors_path_str:
-            # Looks like a Kaggle handle - try to download
-            if not kagglehub:
-                log("Warning: kagglehub not available, skipping priors dataset", verbose)
-                priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
-            else:
-                try:
-                    log(f"Downloading priors dataset from Kaggle: {priors_path_str}", verbose)
-                    priors_root = Path(kagglehub.dataset_download(priors_path_str))
-                    log(f"Priors downloaded to: {priors_root}", verbose)
-                    
-                    # List all CSV files found
-                    csv_files = list(priors_root.glob("**/*.csv"))
-                    log(f"Found {len(csv_files)} CSV files in priors dataset:", verbose)
-                    for f in csv_files:
-                        log(f"  - {f.relative_to(priors_root)}", verbose)
-                    
-                    priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
-                except Exception as e:
-                    log(f"Warning: Failed to load priors dataset: {e}", verbose)
-                    import traceback
-                    log(f"Traceback: {traceback.format_exc()}", verbose)
-                    priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
-        else:
-            # Not a Kaggle handle and doesn't exist
-            log(f"Warning: Priors dataset path does not exist: {priors_path_str}", verbose)
-            priors_players, priors_teams = pd.DataFrame(), pd.DataFrame()
-        
-    # Diagnostic: Check what we loaded
-        if not priors_teams.empty:
-            log(f"✓ Loaded team priors: {len(priors_teams):,} rows, columns: {list(priors_teams.columns)}", verbose)
-            if "abbreviation" in priors_teams.columns:
-                # Filter out NaN values before sorting
-                team_abbrevs = [a for a in priors_teams['abbreviation'].unique() if pd.notna(a)]
-                log(f"  Team abbreviations ({len(team_abbrevs)} unique): {sorted(team_abbrevs)[:10]}", verbose)
-            if "season_for_game" in priors_teams.columns:
-                log(f"  Seasons: {priors_teams['season_for_game'].min():.0f} to {priors_teams['season_for_game'].max():.0f}", verbose)
-        else:
-            log("⚠️  No team priors loaded (priors_teams is empty)", verbose)
-        
-        if not priors_players.empty:
-            log(f"✓ Loaded player priors: {len(priors_players):,} rows, {len(priors_players.columns)} columns", verbose)
-        else:
-            log("⚠️  No player priors loaded (priors_players is empty)", verbose)
-
-        # Fallback: if games_df still lacks abbreviations but we have team names and a priors root,
-        # build abbreviations using Basketball Reference Team Abbrev mapping (post-load cross-implementation)
-        if ("home_abbrev" not in games_df.columns or games_df["home_abbrev"].isna().all()) and ("home_name" in games_df.columns):
-            try:
-                br_map = load_team_abbrev_map(priors_root, verbose, source_name="BR Team Abbrev")
-            except Exception:
-                br_map = {}
-            if br_map:
-                def _map_row(row):
-                    try:
-                        s = int(pd.to_numeric(row.get("season_end_year"), errors="coerce"))
-                    except Exception:
-                        return pd.Series({"home_abbrev": None, "away_abbrev": None})
-                    hn = row.get("home_name", None)
-                    an = row.get("away_name", None)
-                    ha = resolve_team_abbrev(str(hn), s, br_map) if hn is not None else None
-                    aa = resolve_team_abbrev(str(an), s, br_map) if an is not None else None
-                    return pd.Series({"home_abbrev": ha, "away_abbrev": aa})
-                mapped = games_df.apply(_map_row, axis=1)
-                for col in ["home_abbrev", "away_abbrev"]:
-                    games_df[col] = mapped[col].astype(str).str.strip().str.upper()
-                matched_h = games_df["home_abbrev"].notna().sum()
-                matched_a = games_df["away_abbrev"].notna().sum()
-                log(f"- Mapped abbreviations via team names using BR table: home {matched_h:,}, away {matched_a:,} (rows: {len(games_df):,})", verbose)
-
-        # Merge team priors into games_df
-        if not priors_teams.empty and "abbreviation" in priors_teams.columns and "season_end_year" in games_df.columns:
-            # home_abbrev/away_abbrev are now available for ALL games (from team ID mapping)
-            if "home_abbrev" in games_df.columns and "away_abbrev" in games_df.columns:
-                log(f"Attempting to merge team priors: {len(priors_teams):,} team-seasons into {len(games_df):,} games", verbose)
-                log(f"  Games abbrevs: {games_df['home_abbrev'].notna().sum():,} home, {games_df['away_abbrev'].notna().sum():,} away", verbose)
-                log(f"  Games seasons: {games_df['season_end_year'].min():.0f} to {games_df['season_end_year'].max():.0f}", verbose)
-                log(f"  Priors seasons: {priors_teams['season_for_game'].min():.0f} to {priors_teams['season_for_game'].max():.0f}", verbose)
-                log(f"  Priors teams: {priors_teams['abbreviation'].nunique()} unique", verbose)
-                
-                # Check for common teams/seasons
-                game_abbrevs = set(games_df["home_abbrev"].dropna()) | set(games_df["away_abbrev"].dropna())
-                prior_abbrevs = set(priors_teams["abbreviation"].dropna())
-                common_abbrevs = game_abbrevs & prior_abbrevs
-                log(f"  Common team abbrevs: {len(common_abbrevs)} (e.g., {list(common_abbrevs)[:5]})", verbose)
-                
-                game_seasons = set(games_df["season_end_year"].dropna())
-                prior_seasons = set(priors_teams["season_for_game"].dropna())
-                common_seasons = game_seasons & prior_seasons
-                log(f"  Common seasons: {len(common_seasons)} (e.g., {sorted(common_seasons)[:5]})", verbose)
-                
-                # Merge home team priors
-                # Try exact season match first, then fall back to previous season (for future games)
-                home_priors = priors_teams.rename(columns={
-                    "abbreviation": "home_abbrev",
-                    "season_for_game": "season_end_year",
-                    "o_rtg": "home_o_rtg_prior",
-                    "d_rtg": "home_d_rtg_prior",
-                    "pace": "home_pace_prior",
-                    "srs": "home_srs_prior",
-                    "e_fg_percent": "home_efg_prior",
-                    "tov_percent": "home_tov_pct_prior",
-                    "orb_percent": "home_orb_pct_prior",
-                    "ft_fga": "home_ftr_prior",
-                    "opp_e_fg_percent": "home_opp_efg_prior",
-                    "opp_tov_percent": "home_opp_tov_pct_prior",
-                    "drb_percent": "home_drb_pct_prior",
-                    "opp_ft_fga": "home_opp_ftr_prior",
-                    "ts_percent": "home_ts_pct_prior",
-                    "x3p_ar": "home_3par_prior",
-                    "mov": "home_mov_prior"
-                })
-                home_prior_cols = ["home_abbrev", "season_end_year"]
-                for col in ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior",
-                           "home_efg_prior", "home_tov_pct_prior", "home_orb_pct_prior", "home_ftr_prior",
-                           "home_opp_efg_prior", "home_opp_tov_pct_prior", "home_drb_pct_prior", "home_opp_ftr_prior",
-                           "home_ts_pct_prior", "home_3par_prior", "home_mov_prior"]:
-                    if col in home_priors.columns:
-                        home_prior_cols.append(col)
-                
-                before_merge = len(games_df)
-                games_df = games_df.merge(
-                    home_priors[home_prior_cols],
-                    on=["home_abbrev", "season_end_year"], how="left"
-                )
-                
-                # Ensure columns exist even if merge found no matches
-                for col in ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior",
-                           "home_efg_prior", "home_tov_pct_prior", "home_orb_pct_prior", "home_ftr_prior",
-                           "home_opp_efg_prior", "home_opp_tov_pct_prior", "home_drb_pct_prior", "home_opp_ftr_prior",
-                           "home_ts_pct_prior", "home_3par_prior", "home_mov_prior"]:
-                    if col not in games_df.columns:
-                        games_df[col] = np.nan
-                
-                # Fallback: For unmatched rows, try previous season
-                stat_cols = [c for c in home_prior_cols if c not in ["home_abbrev", "season_end_year"] and c in games_df.columns]
-                if stat_cols:
-                    unmatched_mask = games_df[stat_cols[0]].isna()
-                    if unmatched_mask.sum() > 0:
-                        log(f"  Trying fallback: {unmatched_mask.sum()} unmatched home teams, attempting season-1", verbose)
-                        games_unmatched = games_df[unmatched_mask].copy()
-                        games_unmatched["_prev_season"] = games_unmatched["season_end_year"] - 1
-                        if verbose:
-                            sample_fallback = games_unmatched[["home_abbrev", "season_end_year", "_prev_season"]].head(3)
-                            log(f"    Sample fallback keys: {sample_fallback.to_dict(orient='records')}", True)
-                            avail_seasons = set(home_priors["season_end_year"].dropna().unique())
-                            log(f"    Available priors seasons (sample): {sorted(avail_seasons)[-5:]}", True)
-                            # Check if LAL + 2025 exists in home_priors
-                            lal_2025 = home_priors[(home_priors["home_abbrev"] == "LAL") & (home_priors["season_end_year"] == 2025.0)]
-                            log(f"    LAL + season 2025 in home_priors: {len(lal_2025)} rows", True)
-                            if len(lal_2025) > 0:
-                                log(f"      {lal_2025[['home_abbrev', 'season_end_year', 'home_o_rtg_prior']].to_dict(orient='records')}", True)
-                            # Check the renamed version
-                            hp_renamed = home_priors[home_prior_cols].rename(columns={"season_end_year": "_prev_season"})
-                            lal_2025_renamed = hp_renamed[(hp_renamed["home_abbrev"] == "LAL") & (hp_renamed["_prev_season"] == 2025.0)]
-                            log(f"    After rename, LAL + _prev_season 2025: {len(lal_2025_renamed)} rows", True)
-                            if len(lal_2025_renamed) > 0 and 'home_o_rtg_prior' in lal_2025_renamed.columns:
-                                log(f"      Sample: {lal_2025_renamed[['home_abbrev', '_prev_season', 'home_o_rtg_prior']].iloc[0].to_dict()}", True)
-                        fallback_merge = games_unmatched.merge(
-                            home_priors[home_prior_cols].rename(columns={"season_end_year": "_prev_season"}),
-                            on=["home_abbrev", "_prev_season"], how="left", suffixes=("", "_fb")
-                        )
-                        if verbose:
-                            log(f"    Fallback merge shape: {fallback_merge.shape}", True)
-                            # Check if stat columns got renamed with _fb suffix
-                            for sc in stat_cols[:3]:
-                                if sc in fallback_merge.columns and sc + "_fb" in fallback_merge.columns:
-                                    val_no_suffix = fallback_merge[sc].iloc[0] if len(fallback_merge) > 0 else None
-                                    val_with_suffix = fallback_merge[sc + "_fb"].iloc[0] if len(fallback_merge) > 0 else None
-                                    log(f"      {sc}: both versions exist! no_suffix={val_no_suffix}, with_suffix={val_with_suffix}", True)
-                                elif sc in fallback_merge.columns:
-                                    val = fallback_merge[sc].iloc[0] if len(fallback_merge) > 0 else None
-                                    log(f"      {sc}: exists (no _fb version), value={val}", True)
-                                elif sc + "_fb" in fallback_merge.columns:
-                                    val = fallback_merge[sc + "_fb"].iloc[0] if len(fallback_merge) > 0 else None
-                                    log(f"      {sc}_fb: exists (no plain version), value={val}", True)
-                        # Copy fallback values - need to handle suffix!
-                        for col in stat_cols:
-                            col_with_fb = col + "_fb"
-                            if col_with_fb in fallback_merge.columns:
-                                # Use the _fb suffixed column which has the actual merged data
-                                # CRITICAL: Must use .loc with index alignment, not .values
-                                games_df.loc[fallback_merge.index, col] = fallback_merge[col_with_fb]
-                            elif col in fallback_merge.columns:
-                                # Fallback didn't create _fb suffix (no conflict)
-                                games_df.loc[fallback_merge.index, col] = fallback_merge[col]
-                        # Check if fallback worked
-                        post_fallback_matched = games_df.loc[unmatched_mask, stat_cols[0]].notna().sum()
-                        if verbose and post_fallback_matched > 0:
-                            log(f"    Fallback matched {post_fallback_matched} teams", True)
-                
-                home_matched = games_df["home_o_rtg_prior"].notna().sum()
-                log(f"  Home priors matched: {home_matched:,} / {len(games_df):,} ({home_matched/len(games_df)*100:.1f}%)", verbose)
-
-                # Merge away team priors
-                away_priors = priors_teams.rename(columns={
-                    "abbreviation": "away_abbrev",
-                    "season_for_game": "season_end_year",
-                    "o_rtg": "away_o_rtg_prior",
-                    "d_rtg": "away_d_rtg_prior",
-                    "pace": "away_pace_prior",
-                    "srs": "away_srs_prior",
-                    "e_fg_percent": "away_efg_prior",
-                    "tov_percent": "away_tov_pct_prior",
-                    "orb_percent": "away_orb_pct_prior",
-                    "ft_fga": "away_ftr_prior",
-                    "opp_e_fg_percent": "away_opp_efg_prior",
-                    "opp_tov_percent": "away_opp_tov_pct_prior",
-                    "drb_percent": "away_drb_pct_prior",
-                    "opp_ft_fga": "away_opp_ftr_prior",
-                    "ts_percent": "away_ts_pct_prior",
-                    "x3p_ar": "away_3par_prior",
-                    "mov": "away_mov_prior"
-                })
-                away_prior_cols = ["away_abbrev", "season_end_year"]
-                for col in ["away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior", "away_srs_prior",
-                           "away_efg_prior", "away_tov_pct_prior", "away_orb_pct_prior", "away_ftr_prior",
-                           "away_opp_efg_prior", "away_opp_tov_pct_prior", "away_drb_pct_prior", "away_opp_ftr_prior",
-                           "away_ts_pct_prior", "away_3par_prior", "away_mov_prior"]:
-                    if col in away_priors.columns:
-                        away_prior_cols.append(col)
-                
-                games_df = games_df.merge(
-                    away_priors[away_prior_cols],
-                    on=["away_abbrev", "season_end_year"], how="left"
-                )
-                
-                # Ensure columns exist even if merge found no matches
-                for col in ["away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior", "away_srs_prior",
-                           "away_efg_prior", "away_tov_pct_prior", "away_orb_pct_prior", "away_ftr_prior",
-                           "away_opp_efg_prior", "away_opp_tov_pct_prior", "away_drb_pct_prior", "away_opp_ftr_prior",
-                           "away_ts_pct_prior", "away_3par_prior", "away_mov_prior"]:
-                    if col not in games_df.columns:
-                        games_df[col] = np.nan
-                
-                # Fallback: For unmatched rows, try previous season
-                stat_cols = [c for c in away_prior_cols if c not in ["away_abbrev", "season_end_year"] and c in games_df.columns]
-                if stat_cols:
-                    unmatched_mask = games_df[stat_cols[0]].isna()
-                    if unmatched_mask.sum() > 0:
-                        log(f"  Trying fallback: {unmatched_mask.sum()} unmatched away teams, attempting season-1", verbose)
-                        games_unmatched = games_df[unmatched_mask].copy()
-                        games_unmatched["_prev_season"] = games_unmatched["season_end_year"] - 1
-                        fallback_merge = games_unmatched.merge(
-                            away_priors[away_prior_cols].rename(columns={"season_end_year": "_prev_season"}),
-                            on=["away_abbrev", "_prev_season"], how="left", suffixes=("", "_fb")
-                        )
-                        # Copy fallback values - need to handle suffix!
-                        for col in stat_cols:
-                            col_with_fb = col + "_fb"
-                            if col_with_fb in fallback_merge.columns:
-                                # CRITICAL: Must use .loc with index alignment, not .values
-                                games_df.loc[fallback_merge.index, col] = fallback_merge[col_with_fb]
-                            elif col in fallback_merge.columns:
-                                games_df.loc[fallback_merge.index, col] = fallback_merge[col]
-                
-                away_matched = games_df["away_o_rtg_prior"].notna().sum()
-                log(f"  Away priors matched: {away_matched:,} / {len(games_df):,} ({away_matched/len(games_df)*100:.1f}%)", verbose)
-                
-                log(f"✓ Merged team priors for {len(priors_teams):,} team-seasons", verbose)
-            else:
-                log("Warning: Missing home_abbrev or away_abbrev in games_df - cannot merge team priors", verbose)
-                log(f"  Available columns: {list(games_df.columns)}", verbose)
-        else:
-            if priors_teams.empty:
-                log("Warning: priors_teams is empty - no team priors to merge", verbose)
-            elif "abbreviation" not in priors_teams.columns:
-                log(f"Warning: 'abbreviation' column not in priors_teams. Available: {list(priors_teams.columns)}", verbose)
-            elif "season_end_year" not in games_df.columns:
-                log("Warning: 'season_end_year' not in games_df - cannot merge team priors", verbose)
-
-        # Ensure team priors columns always exist (fill with defaults if not merged)
-        for col in ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior",
-                   "away_o_rtg_prior", "away_d_rtg_prior", "away_pace_prior", "away_srs_prior",
-                   "home_efg_prior", "home_tov_pct_prior", "home_orb_pct_prior", "home_ftr_prior",
-                   "away_efg_prior", "away_tov_pct_prior", "away_orb_pct_prior", "away_ftr_prior",
-                   "home_opp_efg_prior", "home_opp_tov_pct_prior", "home_drb_pct_prior", "home_opp_ftr_prior",
-                   "away_opp_efg_prior", "away_opp_tov_pct_prior", "away_drb_pct_prior", "away_opp_ftr_prior",
-                   "home_ts_pct_prior", "home_3par_prior", "home_mov_prior",
-                   "away_ts_pct_prior", "away_3par_prior", "away_mov_prior"]:
-            if col not in games_df.columns:
-                games_df[col] = GAME_DEFAULTS.get(col, 0.0)
-            else:
-                games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
-
-        # Optional: If odds didn't merge earlier and we now have abbreviations, try date+abbrev merge once
-        if ("market_implied_home" in games_df.columns and (games_df["market_implied_home"] == GAME_DEFAULTS.get("market_implied_home", 0.5)).all()) and not odds_df.empty:
-            if "date" in games_df.columns and "home_abbrev" in games_df.columns and "home_abbrev" in odds_df.columns:
-                games_df["_merge_key"] = (
-                    games_df["date"].dt.strftime("%Y%m%d").fillna("") + "_" +
-                    games_df["home_abbrev"].fillna("") + "_" +
-                    games_df["away_abbrev"].fillna("")
-                )
-                odds_df["_merge_key"] = (
-                    odds_df["game_date_utc"].dt.strftime("%Y%m%d").fillna("") + "_" +
-                    odds_df["home_abbrev"].fillna("") + "_" +
-                    odds_df["away_abbrev"].fillna("")
-                )
-                common_keys = set(games_df["_merge_key"]) & set(odds_df["_merge_key"])
-                log(f"Retrying odds merge by date+abbrev after abbrev mapping: {len(common_keys):,} common keys", verbose)
-                if len(common_keys) > 0:
-                    games_df = games_df.merge(
-                        odds_df.drop(columns=["gid", "game_date_utc", "season_end_year"], errors="ignore"),
-                        on="_merge_key", how="left", suffixes=("", "_odds")
-                    ).drop(columns=["_merge_key"], errors="ignore")
-
     # Diagnostic: Check priors data availability
     if verbose:
-        print(_sec("Data Availability Diagnostic"))
-        print(f"Total games: {len(games_df):,}")
-
-        # Check betting odds
-        odds_cols = ["market_implied_home", "market_spread", "market_total", "home_abbrev", "away_abbrev"]
-        print("\n📊 BETTING ODDS:")
-        for col in odds_cols:
-            if col in games_df.columns:
-                if col in ["home_abbrev", "away_abbrev"]:
-                    non_null = games_df[col].notna().sum()
-                    print(f"  {col}: {non_null:,} games ({non_null/len(games_df)*100:.1f}%)")
-                else:
-                    default_val = GAME_DEFAULTS.get(col, 0.0)
-                    non_default = (games_df[col] != default_val).sum()
-                    print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
-
-        # Check team priors
-        priors_cols = ["home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior", "home_srs_prior",
-                      "home_efg_prior", "home_tov_pct_prior", "home_orb_pct_prior", "home_ftr_prior"]
-        print("\n🏀 BASKETBALL REFERENCE STATISTICAL PRIORS (Team - showing 8 key features):")
-        for col in priors_cols:
-            if col in games_df.columns:
-                default_val = GAME_DEFAULTS.get(col, 0.0)
-                non_default = (games_df[col] != default_val).sum()
-                print(f"  {col}: {non_default:,} non-default ({non_default/len(games_df)*100:.1f}%)")
-
-        # Summary
-        if "home_o_rtg_prior" in games_df.columns:
-            with_priors = (games_df["home_o_rtg_prior"] != GAME_DEFAULTS.get("home_o_rtg_prior", 0.0)).sum()
-            # Additional diagnostic: show actual values
-            if verbose and len(games_df) > 0:
-                sample_priors = games_df[["home_abbrev", "away_abbrev", "season_end_year", 
-                                          "home_o_rtg_prior", "home_d_rtg_prior", "home_pace_prior"]].head(5)
-                log(f"\n  Sample merged values:", True)
-                log(f"{sample_priors.to_string()}", True)
-                log(f"\n  Value ranges:", True)
-                log(f"    home_o_rtg_prior: {games_df['home_o_rtg_prior'].min():.2f} to {games_df['home_o_rtg_prior'].max():.2f}", True)
-                log(f"    Default value: {GAME_DEFAULTS.get('home_o_rtg_prior', 0.0)}", True)
-            if with_priors == 0:
-                print("\n⚠️  WARNING: NO games have real Basketball Reference statistical priors - all using defaults!")
-                print("   This means statistical priors are NOT being used in training.")
-                print("   Possible causes:")
-                print("   • Season mismatch between games and Basketball Reference data")
-                print("   • Missing team abbreviation column in Team Summaries CSV")
-                print("   • Priors dataset path is incorrect or files not found")
-            else:
-                print(f"\n✓ {with_priors:,} games ({with_priors/len(games_df)*100:.1f}%) have Basketball Reference statistical priors")
+        # This section is now inside the 'else' block for raw data processing
+        pass
 
     # Train game models + OOF
-    if args.skip_game_models:
-        print(_sec("Skipping game models (--skip-game-models flag set)"))
-        print("   Game models will not be trained or saved")
-        clf_final = None
-        calibrator = None
-        reg_final = None
-        spread_sigma = None
-        oof_games = None
-        game_metrics = None
-    else:
-        print(_sec("Training game models"))
-
-        # Compute sample weights for games (era-decay), even if window ensemble is disabled
-        if "season_end_year" in games_df.columns:
-            game_weights = _compute_sample_weights(
-                games_df["season_end_year"].to_numpy(dtype="float64"),
-                decay=args.decay, min_weight=args.min_weight, lockout_weight=args.lockout_weight
-            )
-        else:
-            game_weights = np.ones(len(games_df), dtype="float64")
-
-        clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
-            games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights,
-            use_neural=args.game_neural, neural_device=args.neural_device, neural_epochs=25, batch_size=args.batch_size
-        )
 
     # Save game models
     if not args.skip_game_models:
@@ -5055,15 +4472,33 @@ def main():
         print(_sec("Training player models (ALL DATA - Neural Hybrid Mode)"))
         print("🧠 Training on full historical dataset (1974-2025) - optimized for GPU/TabNet")
         
-        # Build player frames (no window filtering)
-        frames = build_players_from_playerstats(
-            players_path,
-            games_df,
-            games_df,  # use same for OOF
-            verbose=verbose,
-            priors_players=priors_players,
-            window_seasons=None  # No window filtering
-        )
+        # If aggregated data was loaded, use it directly. Otherwise, build from raw files.
+        if '__LOADED_PLAYER_DATA' in globals():
+            print("- Using pre-loaded aggregated data for player frames.")
+            frames = globals()['__LOADED_PLAYER_DATA']
+            # Merge OOF game predictions into the frames
+            if oof_games is not None and not oof_games.empty:
+                for key in frames:
+                    if not frames[key].empty:
+                        # Ensure 'gid' column exists for merging
+                        if 'gid' not in frames[key].columns and 'gid_key' in frames[key].columns:
+                             frames[key]['gid'] = frames[key]['gid_key']
+                        
+                        if 'gid' in frames[key].columns:
+                            frames[key] = frames[key].merge(oof_games[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
+                        else:
+                            print(f"Warning: 'gid' column not found in frame '{key}', cannot merge OOF predictions.")
+
+        else:
+            # Build player frames from raw playerstats file
+            frames = build_players_from_playerstats(
+                players_path,
+                games_df,
+                oof_games,
+                verbose=verbose,
+                priors_players=priors_players,
+                window_seasons=None  # No window filtering
+            )
         
         # Train models
         print(_sec("Training models"))
