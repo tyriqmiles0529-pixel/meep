@@ -48,7 +48,10 @@ import argparse
 import warnings
 import requests
 import gc
-from train_ensemble_enhanced import train_all_ensemble_components
+try:
+    from train_ensemble_enhanced import train_all_ensemble_components
+except ImportError:
+    train_all_ensemble_components = None  # Optional: only needed for game models
 import subprocess
 from datetime import datetime
 from pathlib import Path
