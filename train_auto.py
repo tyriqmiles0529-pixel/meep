@@ -1428,6 +1428,7 @@ def _fit_game_models(
     use_neural: bool = False,
     neural_device: str = 'cpu',
     neural_epochs: int = 25,
+    batch_size: int = 8192,
 ) -> Tuple[object, Optional[CalibratedClassifierCV], object, float, pd.DataFrame, Dict[str, float]]:
     # Ensure all required GAME_FEATURES are present; add missing with sensible defaults
     missing_cols = [c for c in GAME_FEATURES if c not in games_df.columns]
@@ -1539,14 +1540,14 @@ def _fit_game_models(
         # Moneyline model
         clf_final = GameNeuralHybrid(task='classification', use_gpu=use_gpu)
         clf_final.fit(X_tr, y_ml_tr, X_val, y_ml_val,
-                     sample_weight=w_tr, epochs=neural_epochs, batch_size=512)
+                     sample_weight=w_tr, epochs=neural_epochs, batch_size=batch_size)
         p_val_cal = clf_final.predict(X_val)
         calibrator = None  # Already calibrated internally
 
         # Spread model
         reg_final = GameNeuralHybrid(task='regression', use_gpu=use_gpu)
         reg_final.fit(X_tr, y_sp_tr, X_val, y_sp_val,
-                     sample_weight=w_tr, epochs=neural_epochs, batch_size=512)
+                     sample_weight=w_tr, epochs=neural_epochs, batch_size=batch_size)
         y_pred_val = reg_final.predict(X_val)
 
     # LightGBM-only path
@@ -3080,7 +3081,7 @@ def _fit_minutes_model(df: pd.DataFrame, seed: int, verbose: bool) -> Tuple[obje
     print(f"- RMSE={_fmt(rmse)}, MAE={_fmt(mae)}")
     return reg, {"rows": int(n), "rmse": rmse, "mae": mae}
 
-def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str, use_neural: bool = False, neural_epochs: int = 100, use_gpu: bool = False) -> Tuple[object, Optional[object], Dict[str, float]]:
+def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str, use_neural: bool = False, neural_epochs: int = 100, use_gpu: bool = False, batch_size: int = 8192) -> Tuple[object, Optional[object], Dict[str, float]]:
     if df.empty:
         mdl = DummyRegressor(strategy="mean").fit([[0]], [0.0])
         return mdl, None, {"rows": 0, "rmse": float("nan"), "mae": float("nan")}
@@ -3177,7 +3178,7 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str, use_n
         print(f"{'='*60}")
         
         model = NeuralHybridPredictor(name, use_gpu=use_gpu)
-        model.fit(X_tr, y_tr, X_val, y_val, epochs=neural_epochs, batch_size=1024)
+        model.fit(X_tr, y_tr, X_val, y_val, epochs=neural_epochs, batch_size=batch_size)
         
         y_pred = model.predict(X_val)
         rmse = float(math.sqrt(mean_squared_error(y_val, y_pred))) if len(y_pred) else float("nan")
@@ -3242,7 +3243,7 @@ def _fit_stat_model(df: pd.DataFrame, seed: int, verbose: bool, name: str, use_n
 
 
 def train_player_model_enhanced(df: pd.DataFrame, prop_name: str, verbose: bool,
-                                neural_device: str = 'cpu', neural_epochs: int = 30) -> Tuple[object, Dict[str, float]]:
+                                neural_device: str = 'cpu', neural_epochs: int = 30, batch_size: int = 8192) -> Tuple[object, Dict[str, float]]:
     """
     Wrapper for training player models with neural hybrid support.
 
@@ -3283,7 +3284,8 @@ def train_player_model_enhanced(df: pd.DataFrame, prop_name: str, verbose: bool,
         name=prop_name,
         use_neural=use_neural,
         neural_epochs=neural_epochs,
-        use_gpu=use_gpu
+        use_gpu=use_gpu,
+        batch_size=batch_size
     )
 
     # Return just model and metrics (caller doesn't need sigma model separately)
@@ -3889,6 +3891,7 @@ def main():
     ap.add_argument("--n-jobs", type=int, default=-1, help="Threads for LightGBM/HistGBM (-1=all cores). Reduce to lower RAM usage.")
     ap.add_argument("--disable-neural", action="store_true", help="Disable neural hybrid and use only LightGBM (not recommended)")
     ap.add_argument("--neural-epochs", type=int, default=30, help="Number of epochs for TabNet training (default: 30)")
+    ap.add_argument("--batch-size", type=int, default=8192, help="Batch size for neural network training.")
     ap.add_argument("--neural-device", type=str, default="auto", choices=["auto", "cpu", "gpu"], help="Device for neural training: auto (detect GPU), cpu, or gpu")
     ap.add_argument("--game-neural", action="store_true", help="Enable neural hybrid for game models (TabNet + LightGBM ensemble)")
     ap.add_argument("--skip-game-models", action="store_true", help="Skip game model training (useful if you already have trained game models)")
@@ -4803,7 +4806,7 @@ def main():
 
         clf_final, calibrator, reg_final, spread_sigma, oof_games, game_metrics = _fit_game_models(
             games_df, seed=seed, verbose=verbose, folds=5, lgb_log_period=args.lgb_log_period, sample_weights=game_weights,
-            use_neural=args.game_neural, neural_device=args.neural_device, neural_epochs=25
+            use_neural=args.game_neural, neural_device=args.neural_device, neural_epochs=25, batch_size=args.batch_size
         )
 
     # Save game models
@@ -5068,31 +5071,31 @@ def main():
 
         # Train and save INCREMENTALLY (so models are saved even if later ones fail)
         minutes_model, m_metrics = train_player_model_enhanced(frames['minutes'], 'minutes', verbose,
-                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs, batch_size=args.batch_size)
         with open(models_dir / "minutes_model.pkl", 'wb') as f:
             pickle.dump(minutes_model, f)
         print("   💾 Minutes model saved immediately")
 
         points_model, p_metrics = train_player_model_enhanced(frames['points'], 'points', verbose,
-                                                               neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+                                                               neural_device=args.neural_device, neural_epochs=args.neural_epochs, batch_size=args.batch_size)
         with open(models_dir / "points_model.pkl", 'wb') as f:
             pickle.dump(points_model, f)
         print("   💾 Points model saved immediately")
 
         rebounds_model, r_metrics = train_player_model_enhanced(frames['rebounds'], 'rebounds', verbose,
-                                                                 neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+                                                                 neural_device=args.neural_device, neural_epochs=args.neural_epochs, batch_size=args.batch_size)
         with open(models_dir / "rebounds_model.pkl", 'wb') as f:
             pickle.dump(rebounds_model, f)
         print("   💾 Rebounds model saved immediately")
 
         assists_model, a_metrics = train_player_model_enhanced(frames['assists'], 'assists', verbose,
-                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+                                                                neural_device=args.neural_device, neural_epochs=args.neural_epochs, batch_size=args.batch_size)
         with open(models_dir / "assists_model.pkl", 'wb') as f:
             pickle.dump(assists_model, f)
         print("   💾 Assists model saved immediately")
 
         threes_model, t_metrics = train_player_model_enhanced(frames['threes'], 'threes', verbose,
-                                                               neural_device=args.neural_device, neural_epochs=args.neural_epochs)
+                                                               neural_device=args.neural_device, neural_epochs=args.neural_epochs, batch_size=args.batch_size)
         with open(models_dir / "threes_model.pkl", 'wb') as f:
             pickle.dump(threes_model, f)
         print("   💾 Threes model saved immediately")
