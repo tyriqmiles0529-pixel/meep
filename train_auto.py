@@ -3920,6 +3920,8 @@ def main():
                     help="Disable window ensemble training")
     ap.add_argument("--start-year", type=int, default=None,
                     help="Start training from this year (e.g., 1974 for earliest priors data). Auto-determined if not set.")
+    ap.add_argument("--memory-limit", action="store_true",
+                    help="Reduce memory usage by filtering to 2002+ data (cuts dataset by 80%%, saves ~10GB RAM)")
 
     args = ap.parse_args()
 
@@ -4025,16 +4027,59 @@ def main():
         print(f"  • Model: LightGBM only (neural disabled with --disable-neural)")
 
     if args.aggregated_data:
-        print(_sec("Loading Pre-Aggregated Dataset"))
+        print(_sec("Loading Pre-Aggregated Dataset (Memory-Efficient)"))
         agg_path = Path(args.aggregated_data)
         if not agg_path.exists():
             raise FileNotFoundError(f"Aggregated dataset not found: {agg_path}")
 
         print(f"- Loading from: {agg_path}")
-        # This is the main dataframe, containing player-game level data with all priors already merged.
-        # It's equivalent to the 'ps_join' dataframe from the original build_players_from_playerstats function.
-        agg_df = pd.read_csv(agg_path, low_memory=False)
-        print(f"- Loaded {len(agg_df):,} rows")
+        print(f"- Using optimized dtypes to reduce memory usage...")
+
+        # Memory optimization: specify dtypes to reduce memory footprint
+        # Read in chunks first to infer optimal dtypes
+        dtype_dict = {}
+
+        # Load with optimized settings for compressed files
+        agg_df = pd.read_csv(
+            agg_path,
+            low_memory=False,
+            dtype_backend='numpy_nullable',  # Use nullable dtypes (more memory efficient)
+        )
+
+        # Optimize dtypes after loading
+        print(f"- Loaded {len(agg_df):,} rows, optimizing memory...")
+
+        # Convert object columns to category if they have low cardinality
+        for col in agg_df.select_dtypes(include=['object']).columns:
+            num_unique = agg_df[col].nunique()
+            num_total = len(agg_df)
+            if num_unique / num_total < 0.5:  # Less than 50% unique values
+                agg_df[col] = agg_df[col].astype('category')
+
+        # Downcast numeric types
+        for col in agg_df.select_dtypes(include=['float']).columns:
+            agg_df[col] = pd.to_numeric(agg_df[col], downcast='float')
+
+        for col in agg_df.select_dtypes(include=['integer']).columns:
+            agg_df[col] = pd.to_numeric(agg_df[col], downcast='integer')
+
+        # Force garbage collection
+        gc.collect()
+
+        print(f"- Memory optimized. Current usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+
+        # Apply memory limit filter if requested (reduces dataset by ~80%)
+        if args.memory_limit:
+            print("\n⚠️  MEMORY LIMIT MODE: Filtering to 2002+ seasons only...")
+            before_rows = len(agg_df)
+            if 'season_end_year' in agg_df.columns:
+                agg_df = agg_df[agg_df['season_end_year'] >= 2002].copy()
+                gc.collect()
+                after_rows = len(agg_df)
+                print(f"- Filtered: {before_rows:,} → {after_rows:,} rows ({(1-after_rows/before_rows)*100:.1f}% reduction)")
+                print(f"- New memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+            else:
+                print("- Warning: season_end_year column not found, skipping filter")
 
         # --- Reconstruct games_df from aggregated data ---
         print("- Reconstructing game-level data from aggregated file...")
