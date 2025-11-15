@@ -4033,21 +4033,53 @@ def main():
             raise FileNotFoundError(f"Aggregated dataset not found: {agg_path}")
 
         print(f"- Loading from: {agg_path}")
-        print(f"- Using optimized dtypes to reduce memory usage...")
 
-        # Memory optimization: specify dtypes to reduce memory footprint
-        # Read in chunks first to infer optimal dtypes
-        dtype_dict = {}
+        # CHUNKED LOADING: Load and filter in chunks to avoid memory spike
+        if args.memory_limit:
+            print("- MEMORY LIMIT MODE: Using chunked loading with 2002+ filter")
+            print("- This prevents loading entire dataset into memory at once")
 
-        # Load with optimized settings for compressed files
-        agg_df = pd.read_csv(
-            agg_path,
-            low_memory=False,
-            dtype_backend='numpy_nullable',  # Use nullable dtypes (more memory efficient)
-        )
+            chunks = []
+            chunk_size = 100000  # Process 100K rows at a time
+            total_rows_read = 0
+            total_rows_kept = 0
+
+            for i, chunk in enumerate(pd.read_csv(agg_path, chunksize=chunk_size, low_memory=False)):
+                total_rows_read += len(chunk)
+
+                # Filter to 2002+ BEFORE appending (saves memory)
+                if 'season_end_year' in chunk.columns:
+                    chunk = chunk[chunk['season_end_year'] >= 2002]
+
+                if len(chunk) > 0:
+                    total_rows_kept += len(chunk)
+                    chunks.append(chunk)
+
+                if (i + 1) % 5 == 0:  # Progress every 500K rows
+                    print(f"  Processed {total_rows_read:,} rows, kept {total_rows_kept:,} (2002+)...")
+                    gc.collect()
+
+            print(f"- Read {total_rows_read:,} total rows, kept {total_rows_kept:,} rows (2002+)")
+            print(f"- Concatenating {len(chunks)} chunks...")
+            agg_df = pd.concat(chunks, ignore_index=True)
+            del chunks
+            gc.collect()
+            print(f"- Loaded {len(agg_df):,} rows after filtering")
+
+        else:
+            # Normal loading with optimizations
+            print(f"- Using optimized dtypes to reduce memory usage...")
+
+            # Load with optimized settings for compressed files
+            agg_df = pd.read_csv(
+                agg_path,
+                low_memory=False,
+                dtype_backend='numpy_nullable',  # Use nullable dtypes (more memory efficient)
+            )
+            print(f"- Loaded {len(agg_df):,} rows")
 
         # Optimize dtypes after loading
-        print(f"- Loaded {len(agg_df):,} rows, optimizing memory...")
+        print(f"- Optimizing dtypes...")
 
         # Convert object columns to category if they have low cardinality
         for col in agg_df.select_dtypes(include=['object']).columns:
@@ -4067,19 +4099,6 @@ def main():
         gc.collect()
 
         print(f"- Memory optimized. Current usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-
-        # Apply memory limit filter if requested (reduces dataset by ~80%)
-        if args.memory_limit:
-            print("\n⚠️  MEMORY LIMIT MODE: Filtering to 2002+ seasons only...")
-            before_rows = len(agg_df)
-            if 'season_end_year' in agg_df.columns:
-                agg_df = agg_df[agg_df['season_end_year'] >= 2002].copy()
-                gc.collect()
-                after_rows = len(agg_df)
-                print(f"- Filtered: {before_rows:,} → {after_rows:,} rows ({(1-after_rows/before_rows)*100:.1f}% reduction)")
-                print(f"- New memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-            else:
-                print("- Warning: season_end_year column not found, skipping filter")
 
         # --- Reconstruct games_df from aggregated data ---
         print("- Reconstructing game-level data from aggregated file...")
