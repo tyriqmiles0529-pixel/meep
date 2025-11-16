@@ -3881,7 +3881,7 @@ def load_basketball_reference_priors(priors_root: Path, verbose: bool, seasons_t
 def main():
     ap = argparse.ArgumentParser(description="Train NBA game and player models (always fetch from Kaggle).")
     ap.add_argument("--dataset", type=str, default="eoinamoore/historical-nba-data-and-player-box-scores", help="Kaggle dataset ref")
-    ap.add_argument("--aggregated-data", type=str, default=None, help="Path to a pre-aggregated dataset CSV.")
+    ap.add_argument("--aggregated-data", type=str, default=None, help="Path to a pre-aggregated dataset CSV for PLAYER models only. Game models still use TeamStatistics.csv.")
     ap.add_argument("--player-csv", type=str, default=None, help="Path to local PlayerStatistics.csv (overrides Kaggle download for player data)")
     ap.add_argument("--models-dir", type=str, default="models", help="Output dir for models")
     ap.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -4026,10 +4026,42 @@ def main():
     else:
         print(f"  • Model: LightGBM only (neural disabled with --disable-neural)")
 
+    # ALWAYS load TeamStatistics.csv for game models (from Kaggle dataset)
+    # Then optionally use aggregated data for player models
+    if kagglehub is None:
+        raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
+
+    # Download Kaggle dataset (always needed for TeamStatistics.csv)
+    print(_sec("Fetching TeamStatistics from Kaggle"))
+    ds_root = Path(kagglehub.dataset_download(args.dataset))
+    print(f"- Downloaded to cache: {ds_root}")
+
+    # Find TeamStatistics.csv
+    teams_path, players_path_from_kaggle = _find_dataset_files(ds_root)
+    if not teams_path:
+        raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
+
+    # Build games and team context from TeamStatistics.csv
+    print(_sec("Building game dataset from TeamStatistics.csv"))
+    games_df, context_map, team_id_to_abbrev = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
+    print(f"- Built {len(games_df):,} games from TeamStatistics.csv")
+
+    # Add team abbreviations
+    if team_id_to_abbrev:
+        games_df["home_abbrev"] = games_df["home_tid"].map(team_id_to_abbrev)
+        games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
+        games_df['home_team'] = games_df['home_abbrev']
+        games_df['away_team'] = games_df['away_abbrev']
+
+    # Now handle player data - either from aggregated file or raw CSV
     if args.aggregated_data:
         agg_path = Path(args.aggregated_data)
         if not agg_path.exists():
             raise FileNotFoundError(f"Aggregated dataset not found: {agg_path}")
+
+        print(_sec("Loading Aggregated Player Data"))
+        print(f"- Game models: TeamStatistics.csv ({len(games_df):,} games)")
+        print(f"- Player models: Aggregated data ({agg_path})")
 
         # Check if Parquet or CSV
         is_parquet = str(agg_path).endswith('.parquet')
@@ -4248,158 +4280,61 @@ def main():
 
         print(f"- Memory optimized. Current usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
 
-        # --- Reconstruct games_df from aggregated data ---
-        print("- Reconstructing game-level data from aggregated file...")
-        # The game-level features are duplicated for each player in a game, so we can just drop duplicates.
-        game_identifiers = ['gid', 'date', 'home_tid', 'away_tid', 'home_score', 'away_score', 'season_end_year', 'season_decade', 'home_abbrev', 'away_abbrev']
-        game_feature_cols = [c for c in GAME_FEATURES if c in agg_df.columns]
-
-        # Ensure essential identifier columns exist before using them
-        existing_identifiers = [c for c in game_identifiers if c in agg_df.columns]
-
-        # Find the game ID column (might be 'gid' or 'gameId')
-        gid_col = None
-        for col_name in ['gid', 'gameId', 'game_id']:
-            if col_name in agg_df.columns:
-                gid_col = col_name
-                break
-
-        if gid_col is None:
-            print("  WARNING: No game ID column found in aggregated data")
-            print(f"  Available columns: {list(agg_df.columns[:20])}...")
-            # Fallback: use entire row uniqueness (not ideal)
-            games_df = agg_df[existing_identifiers + game_feature_cols].drop_duplicates().reset_index(drop=True)
-        else:
-            print(f"  Using '{gid_col}' as game identifier")
-            games_df = agg_df[existing_identifiers + game_feature_cols].drop_duplicates(subset=[gid_col]).reset_index(drop=True)
-
-        print(f"- Created games_df with {len(games_df):,} unique games.")
-
-        # The aggregated file already contains priors, so we create empty placeholders for the rest of the script.
+        # The aggregated file already contains priors for players
         priors_players = pd.DataFrame()
         priors_teams = pd.DataFrame()
-        players_path = None # This indicates we don't need to build player stats from a raw file.
-        
+        players_path = None  # This indicates we don't need to build player stats from a raw file.
+
         # This global variable will signal to the player model section to use the pre-loaded data.
         global __LOADED_PLAYER_DATA
         __LOADED_PLAYER_DATA = agg_df
 
+        print(f"- Player data ready: {len(agg_df):,} player-game rows")
+
     else:
-        # --- ORIGINAL DATA LOADING LOGIC ---
-        if kagglehub is None:
-            raise RuntimeError("kagglehub is required. Install with: pip install kagglehub")
-
-        # Download Kaggle dataset (always)
-        print(_sec("Fetching latest from Kaggle"))
-        ds_root = Path(kagglehub.dataset_download(args.dataset))
-        print(f"- Downloaded to cache: {ds_root}")
-
-        # Optionally copy to a per-run folder (ensures clean, fresh artifacts)
-        ds_use_root = ds_root
-        if args.fresh:
-            run_dir = _fresh_run_dir(Path(".kaggle_runs"))
-            teams_src, players_src = _find_dataset_files(ds_root)
-            teams_dst = _copy_if_exists(teams_src, run_dir)
-            players_dst = _copy_if_exists(players_src, run_dir)
-            ds_use_root = run_dir
-            print(f"- Copied CSVs to: {run_dir}")
-            if not teams_dst:
-                raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
-            teams_path, players_path = teams_dst, players_dst
-        else:
-            teams_path, players_path = _find_dataset_files(ds_root)
-            if not teams_path:
-                raise FileNotFoundError("TeamStatistics CSV not found in Kaggle dataset.")
-            if not players_path:
-                log("⚠️  WARNING: PlayerStatistics CSV not found in Kaggle dataset!", True)
-                log("   Only game-level models will be trained. Player prop models require PlayerStatistics data.", True)
-                log(f"   Files found in {ds_root}: {list(ds_root.glob('*.csv'))}", True)
-        
-        # Override with local PlayerStatistics.csv if provided
-        if args.player_csv:
-            local_player_path = Path(args.player_csv)
-            if local_player_path.exists():
-                players_path = local_player_path
-                log(f"✅ Using local PlayerStatistics.csv: {players_path} ({local_player_path.stat().st_size / 1024 / 1024:.1f} MB)", True)
-            else:
-                log(f"⚠️  WARNING: --player-csv specified but file not found: {local_player_path}", True)
-
-        # Build games and team context
-        print(_sec("Building game dataset"))
-        games_df, context_map, team_id_to_abbrev = build_games_from_teamstats(teams_path, verbose=verbose, skip_rest=args.skip_rest)
-
-        # Augment with current season completed games (2025-26) from nba_api
-        print(_sec("Augmenting with current season data"))
-        current_season_df = fetch_current_season_games(season="2025-26", verbose=verbose)
-
-        if current_season_df is not None and not current_season_df.empty:
-            temp_csv = Path(".current_season_temp.csv")
-            current_season_df.to_csv(temp_csv, index=False)
-            current_games_df, current_context, current_abbrevs = build_games_from_teamstats(temp_csv, verbose=verbose, skip_rest=args.skip_rest)
-            if current_abbrevs:
-                team_id_to_abbrev.update(current_abbrevs)
-            before_len = len(games_df)
-            games_df = pd.concat([games_df, current_games_df], ignore_index=True)
-            for tid, ctx_df in current_context.items():
-                if tid in context_map:
-                    context_map[tid] = pd.concat([context_map[tid], ctx_df], ignore_index=True)
-                else:
-                    context_map[tid] = ctx_df
-            print(f"- Added {len(current_games_df):,} games from 2025-26 season (total: {before_len:,} -> {len(games_df):,})")
-            temp_csv.unlink(missing_ok=True)
-            del current_season_df, current_games_df, current_context, current_abbrevs
-            gc.collect()
-        else:
-            print("- No current season games available yet (season may not have started)")
-
-        print(_sec("Skipping historical odds fetch - only available for 2022+ seasons"))
-        print("- Historical windows (2002-2021) don't need odds data")
-        print("- Odds will be loaded later only for current season window if needed")
-
-        if team_id_to_abbrev:
-            games_df["home_abbrev"] = games_df["home_tid"].map(team_id_to_abbrev)
-            games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
-            matched = games_df["home_abbrev"].notna().sum()
-            log(f"- Mapped {matched:,} / {len(games_df):,} games to team abbreviations ({matched/len(games_df)*100:.1f}%)", verbose)
-
-        games_df['home_team'] = games_df['home_abbrev']
-        games_df['away_team'] = games_df['away_abbrev']
+        # Use raw PlayerStatistics.csv from Kaggle
+        players_path = players_path_from_kaggle
+        if not players_path:
+            log("⚠️  WARNING: PlayerStatistics CSV not found in Kaggle dataset!", True)
+            log("   Only game-level models will be trained. Player prop models require PlayerStatistics data.", True)
 
         priors_players = pd.DataFrame()
         priors_teams = pd.DataFrame()
-        if args.priors_dataset:
-            seasons_to_keep: Optional[Set[int]] = None
-            if "season_end_year" in games_df.columns:
-                try:
-                    base_seasons = set(int(x) for x in pd.to_numeric(games_df["season_end_year"], errors="coerce").dropna().astype(int).unique())
-                    padded = set()
-                    for s in base_seasons:
-                        padded.update([s-1, s, s+1])
-                    seasons_to_keep = padded
-                    if verbose:
-                        log(f"Priors season filter prepared: keeping {len(seasons_to_keep)} seasons (sample: {sorted(list(seasons_to_keep))[:5]}…)", True)
-                except Exception:
-                    seasons_to_keep = None
-            priors_path_str = args.priors_dataset
-            if os.path.exists(priors_path_str):
-                priors_root = Path(priors_path_str)
-                log(f"Loading priors from local path: {priors_root}", verbose)
-                priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
-            elif "/" in priors_path_str:
-                if not kagglehub:
-                    log("Warning: kagglehub not available, skipping priors dataset", verbose)
-                else:
-                    try:
-                        log(f"Downloading priors dataset from Kaggle: {priors_path_str}", verbose)
-                        priors_root = Path(kagglehub.dataset_download(priors_path_str))
-                        log(f"Priors downloaded to: {priors_root}", verbose)
-                        priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
-                    except Exception as e:
-                        log(f"Warning: Failed to load priors dataset: {e}", verbose)
-                        import traceback
-                        log(f"Traceback: {traceback.format_exc()}", verbose)
+
+    # Handle priors if provided (works for both paths)
+    if args.priors_dataset and not args.aggregated_data:
+        seasons_to_keep: Optional[Set[int]] = None
+        if "season_end_year" in games_df.columns:
+            try:
+                base_seasons = set(int(x) for x in pd.to_numeric(games_df["season_end_year"], errors="coerce").dropna().astype(int).unique())
+                padded = set()
+                for s in base_seasons:
+                    padded.update([s-1, s, s+1])
+                seasons_to_keep = padded
+                if verbose:
+                    log(f"Priors season filter prepared: keeping {len(seasons_to_keep)} seasons (sample: {sorted(list(seasons_to_keep))[:5]}…)", True)
+            except Exception:
+                seasons_to_keep = None
+        priors_path_str = args.priors_dataset
+        if os.path.exists(priors_path_str):
+            priors_root = Path(priors_path_str)
+            log(f"Loading priors from local path: {priors_root}", verbose)
+            priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
+        elif "/" in priors_path_str:
+            if not kagglehub:
+                log("Warning: kagglehub not available, skipping priors dataset", verbose)
             else:
-                log(f"Warning: Priors dataset path does not exist: {priors_path_str}", verbose)
+                try:
+                    log(f"Downloading priors dataset from Kaggle: {priors_path_str}", verbose)
+                    priors_root = Path(kagglehub.dataset_download(priors_path_str))
+                    log(f"Priors downloaded to: {priors_root}", verbose)
+                    priors_players, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=seasons_to_keep)
+                except Exception as e:
+                    log(f"Warning: Failed to load priors dataset: {e}", verbose)
+                    import traceback
+                    log(f"Traceback: {traceback.format_exc()}", verbose)
+        else:
+            log(f"Warning: Priors dataset path does not exist: {priors_path_str}", verbose)
 
         if not priors_teams.empty:
             log(f"✓ Loaded team priors: {len(priors_teams):,} rows, columns: {list(priors_teams.columns)}", verbose)
@@ -4434,16 +4369,17 @@ def main():
                 home_priors = priors_teams.rename(columns={"abbreviation": "home_abbrev", "season_for_game": "season_end_year", "o_rtg": "home_o_rtg_prior", "d_rtg": "home_d_rtg_prior", "pace": "home_pace_prior", "srs": "home_srs_prior", "e_fg_percent": "home_efg_prior", "tov_percent": "home_tov_pct_prior", "orb_percent": "home_orb_pct_prior", "ft_fga": "home_ftr_prior", "opp_e_fg_percent": "home_opp_efg_prior", "opp_tov_percent": "home_opp_tov_pct_prior", "drb_percent": "home_drb_pct_prior", "opp_ft_fga": "home_opp_ftr_prior", "ts_percent": "home_ts_pct_prior", "x3p_ar": "home_3par_prior", "mov": "home_mov_prior"})
                 home_prior_cols = [c for c in home_priors.columns if c.startswith("home_")] + ["season_end_year"]
                 games_df = games_df.merge(home_priors[home_prior_cols], on=["home_abbrev", "season_end_year"], how="left")
-                
+
                 away_priors = priors_teams.rename(columns={"abbreviation": "away_abbrev", "season_for_game": "season_end_year", "o_rtg": "away_o_rtg_prior", "d_rtg": "away_d_rtg_prior", "pace": "away_pace_prior", "srs": "away_srs_prior", "e_fg_percent": "away_efg_prior", "tov_percent": "away_tov_pct_prior", "orb_percent": "away_orb_pct_prior", "ft_fga": "away_ftr_prior", "opp_e_fg_percent": "away_opp_efg_prior", "opp_tov_percent": "away_opp_tov_pct_prior", "drb_percent": "away_drb_pct_prior", "opp_ft_fga": "away_opp_ftr_prior", "ts_percent": "away_ts_pct_prior", "x3p_ar": "away_3par_prior", "mov": "away_mov_prior"})
                 away_prior_cols = [c for c in away_priors.columns if c.startswith("away_")] + ["season_end_year"]
                 games_df = games_df.merge(away_priors[away_prior_cols], on=["away_abbrev", "season_end_year"], how="left")
 
-        for col in GAME_FEATURES:
-            if col not in games_df.columns:
-                games_df[col] = GAME_DEFAULTS.get(col, 0.0)
-            else:
-                games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
+    # Ensure all game features exist with defaults
+    for col in GAME_FEATURES:
+        if col not in games_df.columns:
+            games_df[col] = GAME_DEFAULTS.get(col, 0.0)
+        else:
+            games_df[col] = games_df[col].fillna(GAME_DEFAULTS.get(col, 0.0))
 
     models_dir = Path(args.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
