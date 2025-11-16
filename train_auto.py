@@ -4027,49 +4027,61 @@ def main():
         print(f"  • Model: LightGBM only (neural disabled with --disable-neural)")
 
     if args.aggregated_data:
-        print(_sec("Loading Pre-Aggregated Dataset (Chunked - All Years)"))
         agg_path = Path(args.aggregated_data)
         if not agg_path.exists():
             raise FileNotFoundError(f"Aggregated dataset not found: {agg_path}")
 
-        print(f"- Loading from: {agg_path}")
-        print("- CHUNKED LOADING: Processing 100K rows at a time to prevent memory spikes")
-        print("- Keeping ALL years (1947-2026) with aggressive memory optimization")
+        # Check if Parquet or CSV
+        is_parquet = str(agg_path).endswith('.parquet')
 
-        # ALWAYS use chunked loading to prevent memory spikes
-        chunks = []
-        chunk_size = 100000  # Process 100K rows at a time
-        total_rows_read = 0
+        if is_parquet:
+            print(_sec("Loading Pre-Aggregated Dataset (Parquet - FAST)"))
+            print(f"- Loading from: {agg_path}")
+            print("- PARQUET FORMAT: 10x faster than CSV, preserves dtypes")
 
-        for i, chunk in enumerate(pd.read_csv(agg_path, chunksize=chunk_size, low_memory=False)):
-            total_rows_read += len(chunk)
+            agg_df = pd.read_parquet(agg_path)
+            print(f"- Loaded {len(agg_df):,} rows instantly")
+        else:
+            print(_sec("Loading Pre-Aggregated Dataset (Chunked CSV - All Years)"))
+            print(f"- Loading from: {agg_path}")
+            print("- CHUNKED LOADING: Processing 100K rows at a time to prevent memory spikes")
+            print("- Keeping ALL years (1947-2026) with aggressive memory optimization")
+            print("- TIP: Convert to Parquet for 10x faster loading next time!")
 
-            # AGGRESSIVE DTYPE OPTIMIZATION PER CHUNK (critical for large datasets)
-            # Convert object columns to category if low cardinality
-            for col in chunk.select_dtypes(include=['object']).columns:
-                num_unique = chunk[col].nunique()
-                num_total = len(chunk)
-                if num_unique / num_total < 0.5:  # Less than 50% unique values
-                    chunk[col] = chunk[col].astype('category')
+            # ALWAYS use chunked loading to prevent memory spikes
+            chunks = []
+            chunk_size = 100000  # Process 100K rows at a time
+            total_rows_read = 0
 
-            # Downcast numeric types to save memory
-            for col in chunk.select_dtypes(include=['float']).columns:
-                chunk[col] = pd.to_numeric(chunk[col], downcast='float')
+            for i, chunk in enumerate(pd.read_csv(agg_path, chunksize=chunk_size, low_memory=False)):
+                total_rows_read += len(chunk)
 
-            for col in chunk.select_dtypes(include=['integer']).columns:
-                chunk[col] = pd.to_numeric(chunk[col], downcast='integer')
+                # AGGRESSIVE DTYPE OPTIMIZATION PER CHUNK (critical for large datasets)
+                # Convert object columns to category if low cardinality
+                for col in chunk.select_dtypes(include=['object']).columns:
+                    num_unique = chunk[col].nunique()
+                    num_total = len(chunk)
+                    if num_unique / num_total < 0.5:  # Less than 50% unique values
+                        chunk[col] = chunk[col].astype('category')
 
-            chunks.append(chunk)
+                # Downcast numeric types to save memory
+                for col in chunk.select_dtypes(include=['float']).columns:
+                    chunk[col] = pd.to_numeric(chunk[col], downcast='float')
 
-            if (i + 1) % 5 == 0:  # Progress every 500K rows
-                print(f"  Processed {total_rows_read:,} rows, optimized dtypes...")
-                gc.collect()
+                for col in chunk.select_dtypes(include=['integer']).columns:
+                    chunk[col] = pd.to_numeric(chunk[col], downcast='integer')
 
-        print(f"- Read {total_rows_read:,} total rows (all years: 1947-2026)")
-        print(f"- Concatenating {len(chunks)} optimized chunks...")
-        agg_df = pd.concat(chunks, ignore_index=True)
-        del chunks
-        gc.collect()
+                chunks.append(chunk)
+
+                if (i + 1) % 5 == 0:  # Progress every 500K rows
+                    print(f"  Processed {total_rows_read:,} rows, optimized dtypes...")
+                    gc.collect()
+
+            print(f"- Read {total_rows_read:,} total rows (all years: 1947-2026)")
+            print(f"- Concatenating {len(chunks)} optimized chunks...")
+            agg_df = pd.concat(chunks, ignore_index=True)
+            del chunks
+            gc.collect()
 
         print(f"- Loaded {len(agg_df):,} rows")
         memory_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
