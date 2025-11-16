@@ -4444,9 +4444,9 @@ def main():
         clf_final, calibrator, reg_final, spread_sigma, oof_df, game_metrics = _fit_game_models(
             games_df=games_df,
             use_neural=use_neural,
-            neural_device=neural_device,
-            neural_epochs=neural_epochs,
-            batch_size=batch_size,
+            neural_device=args.neural_device,
+            neural_epochs=args.neural_epochs,
+            batch_size=args.batch_size,
             lgb_log_period=lgb_log_period,
             n_jobs=N_JOBS,
             seed=seed,
