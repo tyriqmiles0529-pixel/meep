@@ -4434,7 +4434,7 @@ def main():
     models_dir.mkdir(parents=True, exist_ok=True)
 
     # Diagnostic: Check priors data availability
-    if verbose:
+    if args.verbose:
         # This section is now inside the 'else' block for raw data processing
         pass
 
@@ -4447,10 +4447,10 @@ def main():
             neural_device=args.neural_device,
             neural_epochs=args.neural_epochs,
             batch_size=args.batch_size,
-            lgb_log_period=lgb_log_period,
+            lgb_log_period=args.lgb_log_period,
             n_jobs=N_JOBS,
-            seed=seed,
-            verbose=verbose
+            seed=args.seed,
+            verbose=args.verbose
         )
         print(f"- Moneyline accuracy: {game_metrics['ml_accuracy']:.1%}")
         print(f"- Spread RMSE: {game_metrics['sp_rmse']:.2f}")
