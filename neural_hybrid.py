@@ -162,6 +162,11 @@ class GameNeuralHybrid:
             self.tabnet = TabNetClassifier(**self.tabnet_params)
         else:
             self.tabnet = TabNetRegressor(**self.tabnet_params)
+            # TabNet regression requires 2D targets: (n_samples, n_outputs)
+            if y_train_np.ndim == 1:
+                y_train_np = y_train_np.reshape(-1, 1)
+            if y_val_np.ndim == 1:
+                y_val_np = y_val_np.reshape(-1, 1)
 
         # Add dropout for regularization (not in params)
         self.tabnet.fit(
