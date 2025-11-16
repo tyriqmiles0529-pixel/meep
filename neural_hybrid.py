@@ -177,16 +177,22 @@ class GameNeuralHybrid:
 
         # 2. Generate embeddings
         print("  Generating TabNet embeddings...")
-        # Use explain() method to get embeddings (newer TabNet API)
-        # explain() returns (masks, embeddings) where embeddings are the learned representations
+        # TabNet internal representations can be accessed via forward pass
+        # Since predict() no longer returns embeddings, we use the model's internal state
+        # or simply use TabNet predictions as features for LightGBM
         try:
-            # Try newer API first (explain method)
-            explain_matrix, train_embeddings = self.tabnet.explain(X_train_np)
-            _, val_embeddings = self.tabnet.explain(X_val_np)
-        except (AttributeError, TypeError):
-            # Fallback to old API
-            _, train_embeddings = self.tabnet.predict(X_train_np, return_embeddings=True)
-            _, val_embeddings = self.tabnet.predict(X_val_np, return_embeddings=True)
+            # Get TabNet predictions as features (simpler, works with all versions)
+            if self.task == 'classification':
+                train_embeddings = self.tabnet.predict_proba(X_train_np)
+                val_embeddings = self.tabnet.predict_proba(X_val_np)
+            else:
+                train_embeddings = self.tabnet.predict(X_train_np).reshape(-1, 1)
+                val_embeddings = self.tabnet.predict(X_val_np).reshape(-1, 1)
+        except Exception as e:
+            print(f"  Warning: Could not get TabNet embeddings: {e}")
+            # Fallback: just use empty embeddings
+            train_embeddings = np.zeros((X_train_np.shape[0], 1))
+            val_embeddings = np.zeros((X_val_np.shape[0], 1))
 
         # 3. Combine raw features + embeddings for LightGBM
         X_train_combined = np.hstack([X_train_np, train_embeddings])
@@ -264,11 +270,14 @@ class GameNeuralHybrid:
 
         # LightGBM prediction (needs embeddings)
         try:
-            # Try newer API first (explain method)
-            _, embeddings = self.tabnet.explain(X_np)
-        except (AttributeError, TypeError):
-            # Fallback to old API
-            _, embeddings = self.tabnet.predict(X_np, return_embeddings=True)
+            # Use TabNet predictions as embeddings (works with all versions)
+            if self.task == 'classification':
+                embeddings = self.tabnet.predict_proba(X_np)
+            else:
+                embeddings = self.tabnet.predict(X_np).reshape(-1, 1)
+        except Exception as e:
+            print(f"  Warning: Could not get TabNet embeddings: {e}")
+            embeddings = np.zeros((X_np.shape[0], 1))
         X_combined = np.hstack([X_np, embeddings])
 
         if self.task == 'classification':
