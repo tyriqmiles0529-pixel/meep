@@ -4253,11 +4253,26 @@ def main():
         # The game-level features are duplicated for each player in a game, so we can just drop duplicates.
         game_identifiers = ['gid', 'date', 'home_tid', 'away_tid', 'home_score', 'away_score', 'season_end_year', 'season_decade', 'home_abbrev', 'away_abbrev']
         game_feature_cols = [c for c in GAME_FEATURES if c in agg_df.columns]
-        
+
         # Ensure essential identifier columns exist before using them
         existing_identifiers = [c for c in game_identifiers if c in agg_df.columns]
-        
-        games_df = agg_df[existing_identifiers + game_feature_cols].drop_duplicates(subset=['gid']).reset_index(drop=True)
+
+        # Find the game ID column (might be 'gid' or 'gameId')
+        gid_col = None
+        for col_name in ['gid', 'gameId', 'game_id']:
+            if col_name in agg_df.columns:
+                gid_col = col_name
+                break
+
+        if gid_col is None:
+            print("  WARNING: No game ID column found in aggregated data")
+            print(f"  Available columns: {list(agg_df.columns[:20])}...")
+            # Fallback: use entire row uniqueness (not ideal)
+            games_df = agg_df[existing_identifiers + game_feature_cols].drop_duplicates().reset_index(drop=True)
+        else:
+            print(f"  Using '{gid_col}' as game identifier")
+            games_df = agg_df[existing_identifiers + game_feature_cols].drop_duplicates(subset=[gid_col]).reset_index(drop=True)
+
         print(f"- Created games_df with {len(games_df):,} unique games.")
 
         # The aggregated file already contains priors, so we create empty placeholders for the rest of the script.
@@ -4434,7 +4449,7 @@ def main():
     models_dir.mkdir(parents=True, exist_ok=True)
 
     # Diagnostic: Check priors data availability
-    if args.verbose:
+    if verbose:
         # This section is now inside the 'else' block for raw data processing
         pass
 
@@ -4449,8 +4464,8 @@ def main():
             batch_size=args.batch_size,
             lgb_log_period=args.lgb_log_period,
             n_jobs=N_JOBS,
-            seed=args.seed,
-            verbose=args.verbose
+            seed=seed,
+            verbose=verbose
         )
         print(f"- Moneyline accuracy: {game_metrics['ml_accuracy']:.1%}")
         print(f"- Spread RMSE: {game_metrics['sp_rmse']:.2f}")
