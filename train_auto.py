@@ -4035,37 +4035,137 @@ def main():
         is_parquet = str(agg_path).endswith('.parquet')
 
         if is_parquet:
-            print(_sec("Loading Pre-Aggregated Dataset (Parquet - FAST)"))
+            print(_sec("Loading Pre-Aggregated Dataset (Parquet - CHUNKED)"))
             print(f"- Loading from: {agg_path}")
-            print("- PARQUET FORMAT: 10x faster than CSV, preserves dtypes")
+            print("- PARQUET FORMAT: Fast loading with chunked memory optimization")
+            print("- Loading in 5 chunks to prevent memory spikes (27GB -> ~10GB)")
 
-            agg_df = pd.read_parquet(agg_path)
-            print(f"- Loaded {len(agg_df):,} rows instantly")
+            # Use PyArrow for chunked reading by row groups
+            try:
+                import pyarrow.parquet as pq
 
-            # CRITICAL: Optimize dtypes immediately to reduce memory
-            print("- Optimizing dtypes to reduce memory (27GB -> ~10GB)...")
+                parquet_file = pq.ParquetFile(agg_path)
+                total_rows = parquet_file.metadata.num_rows
+                num_row_groups = parquet_file.metadata.num_row_groups
 
-            # Convert object columns to category (huge memory savings)
-            for col in agg_df.select_dtypes(include=['object']).columns:
-                num_unique = agg_df[col].nunique()
-                num_total = len(agg_df)
-                if num_unique / num_total < 0.5:
-                    agg_df[col] = agg_df[col].astype('category')
+                print(f"- Total rows: {total_rows:,}")
+                print(f"- Parquet file has {num_row_groups} row groups")
 
-            # Downcast float64 to float32 (50% savings)
-            for col in agg_df.select_dtypes(include=['float64']).columns:
-                agg_df[col] = agg_df[col].astype('float32')
+                # Group row groups into 5 chunks
+                num_chunks = 5
+                if num_row_groups >= num_chunks:
+                    # Split row groups evenly
+                    row_groups_per_chunk = num_row_groups // num_chunks
+                    remainder = num_row_groups % num_chunks
 
-            # Downcast int64 to int32 (50% savings)
-            for col in agg_df.select_dtypes(include=['int64']).columns:
-                col_min = agg_df[col].min()
-                col_max = agg_df[col].max()
-                if col_min >= -2147483648 and col_max <= 2147483647:
-                    agg_df[col] = agg_df[col].astype('int32')
+                    chunks = []
+                    current_rg = 0
 
-            gc.collect()
-            optimized_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
-            print(f"- Memory after optimization: {optimized_mb:.1f} MB ({optimized_mb/1024:.1f} GB)")
+                    for chunk_idx in range(num_chunks):
+                        # Distribute remainder row groups to first chunks
+                        n_groups = row_groups_per_chunk + (1 if chunk_idx < remainder else 0)
+                        if n_groups == 0:
+                            continue
+
+                        rg_indices = list(range(current_rg, current_rg + n_groups))
+                        print(f"  Chunk {chunk_idx+1}/{num_chunks}: reading row groups {rg_indices[0]}-{rg_indices[-1]}...")
+
+                        # Read only specific row groups (memory efficient!)
+                        chunk = parquet_file.read_row_groups(rg_indices).to_pandas()
+
+                        # OPTIMIZE DTYPES IMMEDIATELY (critical for memory)
+                        for col in chunk.select_dtypes(include=['object']).columns:
+                            num_unique = chunk[col].nunique()
+                            if num_unique / len(chunk) < 0.5:
+                                chunk[col] = chunk[col].astype('category')
+
+                        for col in chunk.select_dtypes(include=['float64']).columns:
+                            chunk[col] = chunk[col].astype('float32')
+
+                        for col in chunk.select_dtypes(include=['int64']).columns:
+                            col_min = chunk[col].min()
+                            col_max = chunk[col].max()
+                            if col_min >= -2147483648 and col_max <= 2147483647:
+                                chunk[col] = chunk[col].astype('int32')
+
+                        chunks.append(chunk)
+                        chunk_mem = chunk.memory_usage(deep=True).sum() / 1024**2
+                        print(f"    {len(chunk):,} rows, optimized to {chunk_mem:.1f} MB")
+
+                        current_rg += n_groups
+                        del chunk
+                        gc.collect()
+
+                else:
+                    # Not enough row groups, read all at once but in batches
+                    print(f"  Only {num_row_groups} row groups, reading in batches...")
+                    chunks = []
+                    batch_size = 1_000_000  # 1M rows at a time
+
+                    # Use PyArrow's batching
+                    batch_reader = parquet_file.iter_batches(batch_size=batch_size)
+                    chunk_idx = 0
+                    for batch in batch_reader:
+                        chunk = batch.to_pandas()
+                        chunk_idx += 1
+                        print(f"  Batch {chunk_idx}: {len(chunk):,} rows...")
+
+                        # OPTIMIZE DTYPES
+                        for col in chunk.select_dtypes(include=['object']).columns:
+                            num_unique = chunk[col].nunique()
+                            if num_unique / len(chunk) < 0.5:
+                                chunk[col] = chunk[col].astype('category')
+
+                        for col in chunk.select_dtypes(include=['float64']).columns:
+                            chunk[col] = chunk[col].astype('float32')
+
+                        for col in chunk.select_dtypes(include=['int64']).columns:
+                            col_min = chunk[col].min()
+                            col_max = chunk[col].max()
+                            if col_min >= -2147483648 and col_max <= 2147483647:
+                                chunk[col] = chunk[col].astype('int32')
+
+                        chunks.append(chunk)
+                        chunk_mem = chunk.memory_usage(deep=True).sum() / 1024**2
+                        print(f"    Optimized to {chunk_mem:.1f} MB")
+
+                        del chunk
+                        gc.collect()
+
+                print(f"- Concatenating {len(chunks)} optimized chunks...")
+                agg_df = pd.concat(chunks, ignore_index=True)
+                del chunks
+                gc.collect()
+
+                optimized_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
+                print(f"- Loaded {len(agg_df):,} rows")
+                print(f"- Memory after chunked optimization: {optimized_mb:.1f} MB ({optimized_mb/1024:.1f} GB)")
+
+            except ImportError:
+                # Fallback to regular loading if PyArrow not available
+                print("- PyArrow not available, falling back to standard loading...")
+                agg_df = pd.read_parquet(agg_path)
+                print(f"- Loaded {len(agg_df):,} rows")
+
+                # Standard dtype optimization
+                print("- Optimizing dtypes to reduce memory...")
+                for col in agg_df.select_dtypes(include=['object']).columns:
+                    num_unique = agg_df[col].nunique()
+                    if num_unique / len(agg_df) < 0.5:
+                        agg_df[col] = agg_df[col].astype('category')
+
+                for col in agg_df.select_dtypes(include=['float64']).columns:
+                    agg_df[col] = agg_df[col].astype('float32')
+
+                for col in agg_df.select_dtypes(include=['int64']).columns:
+                    col_min = agg_df[col].min()
+                    col_max = agg_df[col].max()
+                    if col_min >= -2147483648 and col_max <= 2147483647:
+                        agg_df[col] = agg_df[col].astype('int32')
+
+                gc.collect()
+                optimized_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
+                print(f"- Memory after optimization: {optimized_mb:.1f} MB ({optimized_mb/1024:.1f} GB)")
         else:
             print(_sec("Loading Pre-Aggregated Dataset (Chunked CSV - All Years)"))
             print(f"- Loading from: {agg_path}")
