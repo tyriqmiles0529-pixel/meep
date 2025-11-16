@@ -4073,17 +4073,12 @@ def main():
 
         print(f"- Loaded {len(agg_df):,} rows")
         memory_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
-        print(f"- Memory usage: {memory_mb:.1f} MB")
+        print(f"- Memory usage: {memory_mb:.1f} MB ({memory_mb/1024:.1f} GB)")
 
-        # Auto-enable memory limit if dataset is huge (>10GB) OR user explicitly requests it
-        auto_limit = memory_mb > 10000  # Auto-filter if > 10GB
-        if auto_limit and not args.memory_limit:
-            print(f"\n⚠️  AUTO-ENABLING MEMORY LIMIT: Dataset uses {memory_mb/1024:.1f} GB")
-            print(f"   This is much larger than expected (~6-8GB for 1.6M rows)")
-            print(f"   Filtering to 2002+ to prevent crashes...")
-
-        if args.memory_limit or auto_limit:
-            print("\n⚠️  MEMORY LIMIT MODE: Filtering to 2002+ seasons...")
+        # ONLY filter if user EXPLICITLY requests it with --memory-limit flag
+        # NO AUTO-FILTERING - keep all years by default
+        if args.memory_limit:
+            print("\n⚠️  USER-REQUESTED MEMORY LIMIT: Filtering to 2002+ seasons...")
             before_rows = len(agg_df)
             if 'season_end_year' in agg_df.columns:
                 agg_df = agg_df[agg_df['season_end_year'] >= 2002].copy()
@@ -4091,6 +4086,8 @@ def main():
                 after_rows = len(agg_df)
                 print(f"- Filtered: {before_rows:,} → {after_rows:,} rows ({(1-after_rows/before_rows)*100:.1f}% reduction)")
                 print(f"- New memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+        else:
+            print(f"- Keeping ALL years (1947-2026) - {len(agg_df):,} rows")
 
         # Final dtype optimization pass
         print(f"- Final dtype optimization...")
