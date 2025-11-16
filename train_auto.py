@@ -4052,6 +4052,16 @@ def main():
         games_df["away_abbrev"] = games_df["away_tid"].map(team_id_to_abbrev)
         games_df['home_team'] = games_df['home_abbrev']
         games_df['away_team'] = games_df['away_abbrev']
+    else:
+        # Ensure these columns exist even if mapping is empty
+        if 'home_abbrev' not in games_df.columns:
+            games_df['home_abbrev'] = games_df['home_tid'].astype(str)
+        if 'away_abbrev' not in games_df.columns:
+            games_df['away_abbrev'] = games_df['away_tid'].astype(str)
+        if 'home_team' not in games_df.columns:
+            games_df['home_team'] = games_df['home_abbrev']
+        if 'away_team' not in games_df.columns:
+            games_df['away_team'] = games_df['away_abbrev']
 
     # Now handle player data - either from aggregated file or raw CSV
     if args.aggregated_data:
