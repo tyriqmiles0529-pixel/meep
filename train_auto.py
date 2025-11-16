@@ -4072,10 +4072,17 @@ def main():
         gc.collect()
 
         print(f"- Loaded {len(agg_df):,} rows")
-        print(f"- Memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+        memory_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
+        print(f"- Memory usage: {memory_mb:.1f} MB")
 
-        # Apply year filter ONLY if user explicitly requests it
-        if args.memory_limit:
+        # Auto-enable memory limit if dataset is huge (>10GB) OR user explicitly requests it
+        auto_limit = memory_mb > 10000  # Auto-filter if > 10GB
+        if auto_limit and not args.memory_limit:
+            print(f"\n⚠️  AUTO-ENABLING MEMORY LIMIT: Dataset uses {memory_mb/1024:.1f} GB")
+            print(f"   This is much larger than expected (~6-8GB for 1.6M rows)")
+            print(f"   Filtering to 2002+ to prevent crashes...")
+
+        if args.memory_limit or auto_limit:
             print("\n⚠️  MEMORY LIMIT MODE: Filtering to 2002+ seasons...")
             before_rows = len(agg_df)
             if 'season_end_year' in agg_df.columns:
@@ -4298,9 +4305,28 @@ def main():
         pass
 
     # Train game models + OOF
+    if not args.skip_game_models:
+        print(_sec("Training Game Models"))
+        clf_final, calibrator, reg_final, spread_sigma, oof_df, game_metrics = _fit_game_models(
+            games_df=games_df,
+            use_neural=use_neural,
+            neural_device=neural_device,
+            neural_epochs=neural_epochs,
+            batch_size=batch_size,
+            lgb_log_period=lgb_log_period,
+            n_jobs=N_JOBS,
+            seed=seed,
+            verbose=verbose
+        )
+        print(f"- Moneyline accuracy: {game_metrics['ml_accuracy']:.1%}")
+        print(f"- Spread RMSE: {game_metrics['sp_rmse']:.2f}")
+    else:
+        # Initialize to None if skipping
+        clf_final, calibrator, reg_final, spread_sigma, oof_df, game_metrics = None, None, None, None, None, None
+        print("- Skipping game model training (--skip-game-models)")
 
     # Save game models
-    if not args.skip_game_models:
+    if not args.skip_game_models and clf_final is not None:
         import pickle
         # Neural hybrid models have built-in save() method
         if isinstance(clf_final, GameNeuralHybrid):
