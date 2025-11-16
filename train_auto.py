@@ -4661,7 +4661,9 @@ def main():
     # PLAYER MODELS (Non-windowed - Neural Hybrid Mode)
     # ========================================================================
     player_metrics: Dict[str, Dict[str, float]] = {}
-    if players_path and players_path.exists() and not args.enable_window_ensemble:
+    # Check if we have player data: either from CSV path OR from aggregated data
+    has_player_data = (players_path and players_path.exists()) or ('__LOADED_PLAYER_DATA' in globals())
+    if has_player_data and not args.enable_window_ensemble:
 
         # Determine which training mode to use
         if args.hybrid_player:
@@ -4861,7 +4863,7 @@ def main():
     # ========================================================================
     # SKIP OLD WINDOWED TRAINING CODE
     # ========================================================================
-    if players_path and players_path.exists() and args.enable_window_ensemble:
+    if has_player_data and args.enable_window_ensemble:
         print(_sec("Training player models per window (RAM-Efficient Mode)"))
 
         # Define cache directory
