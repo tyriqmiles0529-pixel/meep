@@ -4463,7 +4463,6 @@ def main():
             neural_epochs=args.neural_epochs,
             batch_size=args.batch_size,
             lgb_log_period=args.lgb_log_period,
-            n_jobs=N_JOBS,
             seed=seed,
             verbose=verbose
         )
