@@ -177,8 +177,16 @@ class GameNeuralHybrid:
 
         # 2. Generate embeddings
         print("  Generating TabNet embeddings...")
-        _, train_embeddings = self.tabnet.predict(X_train_np, return_embeddings=True)
-        _, val_embeddings = self.tabnet.predict(X_val_np, return_embeddings=True)
+        # Use explain() method to get embeddings (newer TabNet API)
+        # explain() returns (masks, embeddings) where embeddings are the learned representations
+        try:
+            # Try newer API first (explain method)
+            explain_matrix, train_embeddings = self.tabnet.explain(X_train_np)
+            _, val_embeddings = self.tabnet.explain(X_val_np)
+        except (AttributeError, TypeError):
+            # Fallback to old API
+            _, train_embeddings = self.tabnet.predict(X_train_np, return_embeddings=True)
+            _, val_embeddings = self.tabnet.predict(X_val_np, return_embeddings=True)
 
         # 3. Combine raw features + embeddings for LightGBM
         X_train_combined = np.hstack([X_train_np, train_embeddings])
@@ -255,7 +263,12 @@ class GameNeuralHybrid:
             tabnet_pred = self.tabnet.predict(X_np)
 
         # LightGBM prediction (needs embeddings)
-        _, embeddings = self.tabnet.predict(X_np, return_embeddings=True)
+        try:
+            # Try newer API first (explain method)
+            _, embeddings = self.tabnet.explain(X_np)
+        except (AttributeError, TypeError):
+            # Fallback to old API
+            _, embeddings = self.tabnet.predict(X_np, return_embeddings=True)
         X_combined = np.hstack([X_np, embeddings])
 
         if self.task == 'classification':
@@ -418,6 +431,7 @@ class NeuralHybridPredictor:
         self.sigma_model = None
         self.feature_names = None
         self.tabnet_embedding_dim = 32
+        self.embedding_pca = None  # Store PCA for consistent compression
         
     def fit(self, X, y, X_val=None, y_val=None, epochs=30, batch_size=2048):
         """
@@ -637,88 +651,107 @@ class NeuralHybridPredictor:
         return self
     
     def _get_embeddings(self, X):
-        """Extract embeddings from TabNet's last hidden layer."""
+        """
+        Extract embeddings from TabNet using the explain() method.
+
+        The explain() method returns attention masks which we can use as embeddings.
+        This is more reliable than trying to access internal layers.
+
+        Returns:
+            embeddings: numpy array of shape (n_samples, n_features or n_steps)
+        """
         if self.tabnet is None:
             raise ValueError("TabNet not trained yet")
 
         try:
             import torch
-            self.tabnet.network.eval()
 
-            # Process in batches to avoid memory issues
-            batch_size = 10000
-            all_embeddings = []
+            # APPROACH 1: Try using explain to get meaningful features
+            # explain() returns (M_explain, masks) where M_explain has shape (batch, n_steps, n_features)
+            # We can aggregate this to get learned importance scores
+            try:
+                M_explain, masks = self.tabnet.explain(X)
 
-            with torch.no_grad():
-                for i in range(0, len(X), batch_size):
-                    batch = X[i:i + batch_size]
-                    X_tensor = torch.from_numpy(batch).float()
-                    if self.use_gpu:
-                        X_tensor = X_tensor.cuda()
+                # M_explain shape: (batch, n_steps, n_features)
+                # Aggregate across features to get step-wise importance (batch, n_steps)
+                # This gives us a compressed representation
+                if M_explain.ndim == 3:
+                    # Sum across features for each step, giving (batch, n_steps)
+                    embeddings = M_explain.sum(axis=2)  # Shape: (batch, n_steps)
+                    print(f"  [INFO] Extracted {embeddings.shape[1]}-dim embeddings from explain (step aggregation)")
+                else:
+                    # Fallback to mean if shape is unexpected
+                    embeddings = M_explain.mean(axis=1, keepdims=True) if M_explain.ndim > 1 else M_explain
+                    print(f"  [INFO] Extracted {embeddings.shape[1]}-dim embeddings from explain (mean)")
 
-                    # Access TabNet's internal forward pass to get embeddings
-                    # TabNet architecture: input -> embedder -> encoder -> final layer
-                    # We want the output from the encoder (before final prediction layer)
+                # If we only got 1 dimension, try another approach
+                if embeddings.shape[1] == 1:
+                    raise ValueError("Only got 1-dim from explain, trying direct network access")
 
-                    # Get embedding from the input layer
-                    if hasattr(self.tabnet.network, 'embedder'):
-                        x = self.tabnet.network.embedder(X_tensor)
-                    else:
-                        x = X_tensor
+                return embeddings
 
-                    # Pass through TabNet encoder to get FULL 24-dimensional embeddings
-                    # Try to extract from the encoder's final step output
-                    try:
-                        # Method 1: Access encoder directly (most reliable for full embeddings)
-                        if hasattr(self.tabnet.network, 'encoder'):
-                            steps_output, _ = self.tabnet.network.encoder(x)
+            except Exception as e1:
+                print(f"  [DEBUG] explain() approach failed: {str(e1)[:50]}")
 
-                            # steps_output shape: (batch, n_steps, n_d+n_a) or (batch, n_d+n_a)
-                            if steps_output.ndim == 3:
-                                # Take last step output: shape (batch, 24)
-                                batch_embeddings = steps_output[:, -1, :].cpu().numpy()
-                                print(f"  [DEBUG] Using {batch_embeddings.shape[1]}-dim embeddings from encoder (3D)")
-                            elif steps_output.ndim == 2:
-                                # Already flattened: shape (batch, 24)
-                                batch_embeddings = steps_output.cpu().numpy()
-                                print(f"  [DEBUG] Using {batch_embeddings.shape[1]}-dim embeddings from encoder (2D)")
+                # APPROACH 2: Try direct network forward pass
+                self.tabnet.network.eval()
+
+                if isinstance(X, np.ndarray):
+                    X_tensor = torch.from_numpy(X).float()
+                else:
+                    X_tensor = torch.from_numpy(X.values).float()
+
+                if self.use_gpu:
+                    X_tensor = X_tensor.cuda()
+
+                with torch.no_grad():
+                    # Try to get intermediate representation
+                    # TabNet architecture: input -> embedder -> tabnet_encoder -> final_mapping
+
+                    # Check what attributes exist
+                    available_attrs = [attr for attr in dir(self.tabnet.network)
+                                     if not attr.startswith('_') and 'forward' in attr.lower()]
+
+                    # Try forward_masks if available
+                    if hasattr(self.tabnet.network, 'forward_masks'):
+                        out, M_loss = self.tabnet.network.forward_masks(X_tensor)
+                        embeddings = out.cpu().numpy()
+
+                        # If this is just the features, try to compress
+                        if embeddings.shape[1] == X.shape[1]:
+                            print(f"  [INFO] Got {embeddings.shape[1]}-dim from forward_masks (uncompressed)")
+
+                            # Use PCA to compress to reasonable dimension
+                            from sklearn.decomposition import PCA
+
+                            # If PCA already fitted (during training), use it
+                            if self.embedding_pca is not None:
+                                embeddings = self.embedding_pca.transform(embeddings)
+                                print(f"  [INFO] Compressed to {embeddings.shape[1]}-dim using fitted PCA")
                             else:
-                                raise ValueError(f"Unexpected steps_output shape: {steps_output.shape}")
+                                # First time - fit PCA (during training)
+                                # n_components must be <= min(n_samples, n_features)
+                                n_components = min(24, embeddings.shape[0], embeddings.shape[1])
 
-                        # Method 2: Use TabNet's forward pass
-                        elif hasattr(self.tabnet.network, 'forward_masks'):
-                            # Get output before final prediction layer
-                            output, _ = self.tabnet.network.forward_masks(x)
-                            batch_embeddings = output.cpu().numpy()
-                            print(f"  [DEBUG] Using {batch_embeddings.shape[1]}-dim embeddings from forward_masks")
-
+                                if n_components >= 2:
+                                    self.embedding_pca = PCA(n_components=n_components)
+                                    embeddings = self.embedding_pca.fit_transform(embeddings)
+                                    print(f"  [INFO] Fitted PCA and compressed to {embeddings.shape[1]}-dim")
+                                else:
+                                    print(f"  [WARNING] Too few samples ({embeddings.shape[0]}) for PCA, using mean")
+                                    embeddings = embeddings.mean(axis=1, keepdims=True)
                         else:
-                            # Fallback: 2-dim (predictions + attention)
-                            print("  [WARNING] Cannot access encoder, falling back to 2-dim embeddings")
-                            predictions = self.tabnet.predict(batch).reshape(-1, 1)
-                            M_explain, _ = self.tabnet.explain(batch)
-                            mean_attention = M_explain.mean(axis=1, keepdims=True)
-                            batch_embeddings = np.hstack([predictions, mean_attention])
-                            print(f"  [DEBUG] Using 2-dim embeddings: predictions + attention weights")
+                            print(f"  [INFO] Extracted {embeddings.shape[1]}-dim embeddings from forward_masks")
 
-                    except Exception as e:
-                        # Ultimate fallback
-                        print(f"  [WARNING] Embedding extraction failed: {str(e)[:60]}, using 2-dim fallback")
-                        predictions = self.tabnet.predict(batch).reshape(-1, 1)
-                        M_explain, _ = self.tabnet.explain(batch)
-                        mean_attention = M_explain.mean(axis=1, keepdims=True)
-                        batch_embeddings = np.hstack([predictions, mean_attention])
+                        return embeddings
 
-                    all_embeddings.append(batch_embeddings)
-
-            # Concatenate all batches
-            embeddings = np.vstack(all_embeddings)
-
-            return embeddings
+                    raise AttributeError(f"No suitable embedding extraction method found. Available: {available_attrs}")
 
         except Exception as e:
-            # Ultimate fallback: use predictions as simple embeddings
-            print(f"  Warning: Using predictions as embeddings ({str(e)[:60]}...)")
+            print(f"  [WARNING] All embedding extraction failed: {str(e)[:100]}")
+            print(f"  [FALLBACK] Using predictions as 1-dim embeddings")
+
+            # Fallback: just use predictions
             predictions = self.tabnet.predict(X)
             return predictions.reshape(-1, 1)
     
@@ -771,30 +804,33 @@ class NeuralHybridPredictor:
     def _analyze_feature_importance(self, feature_names):
         """Analyze which features (raw vs embeddings) are most important."""
         importance = self.lgbm.feature_importance(importance_type='gain')
-        
+
+        # Convert feature_names to strings (handles both string and int column names)
+        feature_names = [str(f) for f in feature_names]
+
         raw_features = [f for f in feature_names if not f.startswith('tabnet_emb_')]
         emb_features = [f for f in feature_names if f.startswith('tabnet_emb_')]
-        
+
         raw_indices = [i for i, f in enumerate(feature_names) if f in raw_features]
         emb_indices = [i for i, f in enumerate(feature_names) if f in emb_features]
-        
-        raw_importance = importance[raw_indices].sum()
-        emb_importance = importance[emb_indices].sum()
+
+        raw_importance = importance[raw_indices].sum() if raw_indices else 0
+        emb_importance = importance[emb_indices].sum() if emb_indices else 0
         total_importance = importance.sum()
-        
+
         print(f"\n{'─'*60}")
         print("Feature Importance Breakdown")
         print(f"{'─'*60}")
         print(f"Raw features:        {raw_importance/total_importance*100:.1f}% of importance")
         print(f"Deep embeddings:     {emb_importance/total_importance*100:.1f}% of importance")
         print(f"\nTop 10 most important features:")
-        
+
         top_features = sorted(
             zip(feature_names, importance),
             key=lambda x: x[1],
             reverse=True
         )[:10]
-        
+
         for i, (feat, imp) in enumerate(top_features, 1):
             feat_type = "🧠 Embedding" if feat.startswith('tabnet_emb_') else "📊 Raw"
             print(f"  {i:2d}. {feat_type:15s} {feat:40s} ({imp/total_importance*100:.1f}%)")
