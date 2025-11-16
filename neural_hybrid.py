@@ -271,7 +271,7 @@ class GameNeuralHybrid:
         if self.task == 'classification':
             tabnet_pred = self.tabnet.predict_proba(X_np)[:, 1]
         else:
-            tabnet_pred = self.tabnet.predict(X_np)
+            tabnet_pred = self.tabnet.predict(X_np).flatten()  # Flatten 2D to 1D
 
         # LightGBM prediction (needs embeddings)
         try:
@@ -279,7 +279,8 @@ class GameNeuralHybrid:
             if self.task == 'classification':
                 embeddings = self.tabnet.predict_proba(X_np)
             else:
-                embeddings = self.tabnet.predict(X_np).reshape(-1, 1)
+                tabnet_out = self.tabnet.predict(X_np)
+                embeddings = tabnet_out.reshape(-1, 1) if tabnet_out.ndim == 1 else tabnet_out
         except Exception as e:
             print(f"  Warning: Could not get TabNet embeddings: {e}")
             embeddings = np.zeros((X_np.shape[0], 1))
