@@ -4041,6 +4041,31 @@ def main():
 
             agg_df = pd.read_parquet(agg_path)
             print(f"- Loaded {len(agg_df):,} rows instantly")
+
+            # CRITICAL: Optimize dtypes immediately to reduce memory
+            print("- Optimizing dtypes to reduce memory (27GB -> ~10GB)...")
+
+            # Convert object columns to category (huge memory savings)
+            for col in agg_df.select_dtypes(include=['object']).columns:
+                num_unique = agg_df[col].nunique()
+                num_total = len(agg_df)
+                if num_unique / num_total < 0.5:
+                    agg_df[col] = agg_df[col].astype('category')
+
+            # Downcast float64 to float32 (50% savings)
+            for col in agg_df.select_dtypes(include=['float64']).columns:
+                agg_df[col] = agg_df[col].astype('float32')
+
+            # Downcast int64 to int32 (50% savings)
+            for col in agg_df.select_dtypes(include=['int64']).columns:
+                col_min = agg_df[col].min()
+                col_max = agg_df[col].max()
+                if col_min >= -2147483648 and col_max <= 2147483647:
+                    agg_df[col] = agg_df[col].astype('int32')
+
+            gc.collect()
+            optimized_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
+            print(f"- Memory after optimization: {optimized_mb:.1f} MB ({optimized_mb/1024:.1f} GB)")
         else:
             print(_sec("Loading Pre-Aggregated Dataset (Chunked CSV - All Years)"))
             print(f"- Loading from: {agg_path}")
