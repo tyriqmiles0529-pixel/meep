@@ -192,13 +192,25 @@ class HybridMultiTaskPlayer:
         # Train shared TabNet
         print("\nTraining shared TabNet encoder...")
         self.correlated_tabnet = TabNetRegressor(**self.correlated_tabnet_params)
+
+        # Scale batch sizes for large datasets (7.8M+ samples)
+        # More samples per batch = fewer batches per epoch = faster training
+        n_samples = len(X_np)
+        if n_samples > 1_000_000:
+            effective_batch = min(batch_size * 8, 32768)  # 32K batch size for huge datasets
+            effective_virtual = min(1024, effective_batch // 4)  # Larger virtual batch
+            print(f"   Large dataset ({n_samples:,} samples) - using batch_size={effective_batch}, virtual_batch_size={effective_virtual}")
+        else:
+            effective_batch = batch_size
+            effective_virtual = 256
+
         self.correlated_tabnet.fit(
             X_np, y_composite_2d,
             eval_set=eval_set,
             max_epochs=correlated_epochs,
             patience=10,
-            batch_size=batch_size,
-            virtual_batch_size=256,
+            batch_size=effective_batch,
+            virtual_batch_size=effective_virtual,
             eval_metric=['mae']
         )
 
@@ -267,13 +279,22 @@ class HybridMultiTaskPlayer:
             else:
                 eval_set = None
 
+            # Scale batch sizes for large datasets
+            n_samples = len(X_np)
+            if n_samples > 1_000_000:
+                effective_batch = min(batch_size * 8, 32768)
+                effective_virtual = min(1024, effective_batch // 4)
+            else:
+                effective_batch = batch_size
+                effective_virtual = 256
+
             tabnet.fit(
                 X_np, y_train_2d,
                 eval_set=eval_set,
                 max_epochs=independent_epochs,
                 patience=8,
-                batch_size=batch_size,
-                virtual_batch_size=256,
+                batch_size=effective_batch,
+                virtual_batch_size=effective_virtual,
                 eval_metric=['mae']
             )
 
