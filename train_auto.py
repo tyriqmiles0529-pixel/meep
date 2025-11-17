@@ -4688,8 +4688,7 @@ def main():
             agg_df = globals()['__LOADED_PLAYER_DATA']
 
             # Convert aggregated DataFrame into frames dictionary
-            # Each frame has the same features but different TARGET column
-            frames = {}
+            # MEMORY OPTIMIZATION: Don't copy data, just track column mappings
             prop_to_col = {
                 'points': 'points',
                 'assists': 'assists',
@@ -4715,23 +4714,23 @@ def main():
 
             print(f"   Found {len(numeric_cols)} numeric feature columns")
 
+            # MEMORY OPTIMIZATION: Store reference to agg_df and column mappings
+            # Instead of copying dataframe 5 times (5.7GB x 5 = 28GB), keep ONE reference
+            # This special marker tells hybrid training to use the optimized path
+            frames = {'__AGG_DF__': agg_df, '__NUMERIC_COLS__': numeric_cols, '__PROP_TO_COL__': prop_to_col}
+
             for prop, col in prop_to_col.items():
                 if col in agg_df.columns:
-                    # Create frame with features + TARGET
-                    frame_df = agg_df[numeric_cols].copy()
-                    frame_df['TARGET'] = agg_df[col].values
-
-                    # Remove rows with missing target
-                    frame_df = frame_df.dropna(subset=['TARGET'])
-
-                    frames[prop] = frame_df
-                    print(f"   {prop}: {len(frame_df):,} samples")
+                    n_valid = agg_df[col].notna().sum()
+                    frames[prop] = True  # Marker that this prop is available
+                    print(f"   {prop}: {n_valid:,} samples (column '{col}')")
                 else:
                     print(f"   {prop}: column '{col}' not found in aggregated data")
-                    frames[prop] = pd.DataFrame()
+                    frames[prop] = False
 
             # Note: OOF game predictions won't match aggregated data (different game IDs)
             print("Note: OOF game predictions not merged (games and players from different sources)")
+            print(f"   Memory footprint: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB (single copy)")
 
         else:
             # Build player frames from raw playerstats file
@@ -4756,63 +4755,130 @@ def main():
 
             # Check if all required frames exist
             required_props = ['points', 'assists', 'rebounds', 'minutes', 'threes']
-            missing_props = [p for p in required_props if p not in frames or frames[p].empty]
 
-            if missing_props:
-                print(f"⚠️  Missing frames for: {missing_props}")
-                print("   Falling back to single-task training")
-                args.hybrid_player = False  # Fallback
+            # Handle optimized aggregated data structure (memory-efficient)
+            if '__AGG_DF__' in frames:
+                # OPTIMIZED PATH: Use single dataframe reference
+                agg_df = frames['__AGG_DF__']
+                numeric_cols = frames['__NUMERIC_COLS__']
+                prop_to_col = frames['__PROP_TO_COL__']
+
+                missing_props = [p for p in required_props if not frames.get(p, False)]
+
+                if missing_props:
+                    print(f"⚠️  Missing props: {missing_props}")
+                    print("   Falling back to single-task training")
+                    args.hybrid_player = False
+                else:
+                    feature_cols = sorted(numeric_cols)
+                    print(f"\n📊 Using {len(feature_cols)} features (memory-optimized)")
+
+                    # Split train/val using indices ONLY (no data copying)
+                    from sklearn.model_selection import train_test_split
+
+                    n_samples = len(agg_df)
+                    train_idx, val_idx = train_test_split(
+                        range(n_samples),
+                        test_size=0.15,
+                        random_state=42
+                    )
+
+                    print(f"   Train samples: {len(train_idx):,}")
+                    print(f"   Val samples: {len(val_idx):,}")
+                    print(f"   Building training data (memory-efficient)...")
+
+                    # Extract features ONCE (not 5 times)
+                    X_all = agg_df[feature_cols].values.astype('float32')
+                    X_train = X_all[train_idx]
+                    X_val = X_all[val_idx]
+
+                    del X_all
+                    gc.collect()
+
+                    print(f"   X_train: {X_train.shape} ({X_train.nbytes / 1024**2:.1f} MB)")
+                    print(f"   X_val: {X_val.shape} ({X_val.nbytes / 1024**2:.1f} MB)")
+
+                    # Extract targets (just the column values, not copying features)
+                    y_train_dict = {}
+                    y_val_dict = {}
+
+                    for prop in required_props:
+                        col_name = prop_to_col[prop]
+                        y_all = agg_df[col_name].values.astype('float32')
+                        y_train_dict[prop] = y_all[train_idx]
+                        y_val_dict[prop] = y_all[val_idx]
+                        print(f"   {prop}: extracted targets")
+
+                    # Convert to DataFrame for hybrid model (it expects DataFrame input)
+                    X_train = pd.DataFrame(X_train, columns=feature_cols)
+                    X_val = pd.DataFrame(X_val, columns=feature_cols)
+
+                    # Free the original aggregated dataframe to save memory
+                    del agg_df
+                    frames['__AGG_DF__'] = None
+                    gc.collect()
+                    print(f"   Freed aggregated dataframe memory")
+
             else:
-                # Prepare data for hybrid training
-                # Get common features across all props
-                feature_cols = None
-                for prop in required_props:
-                    df = frames[prop]
-                    if 'TARGET' in df.columns:
-                        non_target_cols = [c for c in df.columns if c != 'TARGET']
-                        if feature_cols is None:
-                            feature_cols = set(non_target_cols)
-                        else:
-                            feature_cols = feature_cols.intersection(set(non_target_cols))
+                # LEGACY PATH: Use pre-built frames
+                missing_props = [p for p in required_props if p not in frames or frames[p].empty]
 
-                feature_cols = sorted(list(feature_cols))
-                print(f"\n📊 Using {len(feature_cols)} common features across all props")
+                if missing_props:
+                    print(f"⚠️  Missing frames for: {missing_props}")
+                    print("   Falling back to single-task training")
+                    args.hybrid_player = False  # Fallback
+                else:
+                    # Prepare data for hybrid training
+                    # Get common features across all props
+                    feature_cols = None
+                    for prop in required_props:
+                        df = frames[prop]
+                        if 'TARGET' in df.columns:
+                            non_target_cols = [c for c in df.columns if c != 'TARGET']
+                            if feature_cols is None:
+                                feature_cols = set(non_target_cols)
+                            else:
+                                feature_cols = feature_cols.intersection(set(non_target_cols))
 
-                # Split train/val (use points frame for split since all have same rows)
-                from sklearn.model_selection import train_test_split
+                    feature_cols = sorted(list(feature_cols))
+                    print(f"\n📊 Using {len(feature_cols)} common features across all props")
 
-                # Use first prop to determine split
-                first_df = frames['points']
-                train_idx, val_idx = train_test_split(
-                    range(len(first_df)),
-                    test_size=0.15,
-                    random_state=42
-                )
+                    # Split train/val (use points frame for split since all have same rows)
+                    from sklearn.model_selection import train_test_split
 
-                # Prepare X and y_dict
-                X_train_list = []
-                X_val_list = []
-                y_train_dict = {}
-                y_val_dict = {}
+                    # Use first prop to determine split
+                    first_df = frames['points']
+                    train_idx, val_idx = train_test_split(
+                        range(len(first_df)),
+                        test_size=0.15,
+                        random_state=42
+                    )
 
-                for prop in required_props:
-                    df = frames[prop]
-                    X = df[feature_cols]
-                    y = df['TARGET'].values
+                    # Prepare X and y_dict
+                    X_train_list = []
+                    X_val_list = []
+                    y_train_dict = {}
+                    y_val_dict = {}
 
-                    X_train_list.append(X.iloc[train_idx])
-                    X_val_list.append(X.iloc[val_idx])
-                    y_train_dict[prop] = y[train_idx]
-                    y_val_dict[prop] = y[val_idx]
+                    for prop in required_props:
+                        df = frames[prop]
+                        X = df[feature_cols]
+                        y = df['TARGET'].values
 
-                # Use first prop's features (all should be identical)
-                X_train = X_train_list[0]
-                X_val = X_val_list[0]
+                        X_train_list.append(X.iloc[train_idx])
+                        X_val_list.append(X.iloc[val_idx])
+                        y_train_dict[prop] = y[train_idx]
+                        y_val_dict[prop] = y[val_idx]
 
-                print(f"   Train samples: {len(X_train):,}")
-                print(f"   Val samples: {len(X_val):,}")
+                    # Use first prop's features (all should be identical)
+                    X_train = X_train_list[0]
+                    X_val = X_val_list[0]
 
-                # Train hybrid model
+                    print(f"   Train samples: {len(X_train):,}")
+                    print(f"   Val samples: {len(X_val):,}")
+
+            # Train hybrid model (common to both paths)
+            if args.hybrid_player:  # Check again in case it was set to False due to missing data
                 use_gpu = (args.neural_device == 'gpu') or (args.neural_device == 'auto' and torch.cuda.is_available())
                 hybrid_model = HybridMultiTaskPlayer(use_gpu=use_gpu)
 
