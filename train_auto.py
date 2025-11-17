@@ -3891,7 +3891,7 @@ def main():
     ap.add_argument("--lgb-log-period", type=int, default=0, help="Print LightGBM eval metrics every N iterations (0 = silent)")
     ap.add_argument("--n-jobs", type=int, default=-1, help="Threads for LightGBM/HistGBM (-1=all cores). Reduce to lower RAM usage.")
     ap.add_argument("--disable-neural", action="store_true", help="Disable neural hybrid and use only LightGBM (not recommended)")
-    ap.add_argument("--neural-epochs", type=int, default=30, help="Number of epochs for TabNet training (default: 30)")
+    ap.add_argument("--neural-epochs", type=int, default=12, help="Number of epochs for TabNet training (default: 12, ~48 min total)")
     ap.add_argument("--batch-size", type=int, default=8192, help="Batch size for neural network training.")
     ap.add_argument("--neural-device", type=str, default="auto", choices=["auto", "cpu", "gpu"], help="Device for neural training: auto (detect GPU), cpu, or gpu")
     ap.add_argument("--game-neural", action="store_true", help="Enable neural hybrid for game models (TabNet + LightGBM ensemble)")
@@ -4923,33 +4923,45 @@ def main():
                     interaction_count = 0
 
                     # Find relevant columns for interactions
-                    # Priority: Look for rolling averages first, then raw stats
-                    pts_cols = [c for c in feature_cols if 'points' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    ast_cols = [c for c in feature_cols if 'assists' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    reb_cols = [c for c in feature_cols if ('rebounds' in c.lower() or 'reboundsTotal' in c.lower()) and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    min_cols = [c for c in feature_cols if ('minutes' in c.lower() or 'numMinutes' in c.lower()) and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    usg_cols = [c for c in feature_cols if 'usg' in c.lower() or 'usage' in c.lower()]
-                    tpm_cols = [c for c in feature_cols if 'three' in c.lower() and 'made' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    fga_cols = [c for c in feature_cols if 'fieldgoalsattempted' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    tov_cols = [c for c in feature_cols if 'turnover' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    stl_cols = [c for c in feature_cols if 'steals' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    blk_cols = [c for c in feature_cols if 'blocks' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
-                    fgpct_cols = [c for c in feature_cols if 'fieldgoalspercentage' in c.lower()]
+                    # NOTE: Target columns (points, assists, reboundsTotal, numMinutes, threePointersMade)
+                    # are EXCLUDED from feature_cols to prevent leakage. Use per-100 stats instead.
 
-                    # Use first matching column or raw stat if available (fallback to raw stats)
-                    pts_col = pts_cols[0] if pts_cols else ('points' if 'points' in feature_cols else None)
-                    ast_col = ast_cols[0] if ast_cols else ('assists' if 'assists' in feature_cols else None)
-                    reb_col = reb_cols[0] if reb_cols else ('reboundsTotal' if 'reboundsTotal' in feature_cols else None)
-                    min_col = min_cols[0] if min_cols else ('numMinutes' if 'numMinutes' in feature_cols else None)
-                    usg_col = usg_cols[0] if usg_cols else None
-                    tpm_col = tpm_cols[0] if tpm_cols else ('threePointersMade' if 'threePointersMade' in feature_cols else None)
-                    fga_col = fga_cols[0] if fga_cols else ('fieldGoalsAttempted' if 'fieldGoalsAttempted' in feature_cols else None)
-                    tov_col = tov_cols[0] if tov_cols else ('turnovers' if 'turnovers' in feature_cols else None)
-                    stl_col = stl_cols[0] if stl_cols else ('steals' if 'steals' in feature_cols else None)
-                    blk_col = blk_cols[0] if blk_cols else ('blocks' if 'blocks' in feature_cols else None)
-                    fgpct_col = fgpct_cols[0] if fgpct_cols else ('fieldGoalsPercentage' if 'fieldGoalsPercentage' in feature_cols else None)
+                    # Per-100 possession stats (best proxies since targets are excluded)
+                    pts_col = 'per100_pts_per_100_poss' if 'per100_pts_per_100_poss' in feature_cols else None
+                    ast_col = 'per100_ast_per_100_poss' if 'per100_ast_per_100_poss' in feature_cols else None
+                    reb_col = 'per100_trb_per_100_poss' if 'per100_trb_per_100_poss' in feature_cols else None
+                    min_col = 'adv_mp' if 'adv_mp' in feature_cols else None  # Minutes played from advanced stats
+
+                    # Advanced metrics (these exist in feature_cols)
+                    usg_col = 'adv_usg_percent' if 'adv_usg_percent' in feature_cols else None
+                    per_col = 'adv_per' if 'adv_per' in feature_cols else None
+                    ts_col = 'adv_ts_percent' if 'adv_ts_percent' in feature_cols else None
+                    bpm_col = 'adv_bpm' if 'adv_bpm' in feature_cols else None
+                    vorp_col = 'adv_vorp' if 'adv_vorp' in feature_cols else None
+
+                    # Raw box score stats (NOT targets, so these should be available)
+                    tov_col = 'turnovers' if 'turnovers' in feature_cols else None
+                    stl_col = 'steals' if 'steals' in feature_cols else None
+                    blk_col = 'blocks' if 'blocks' in feature_cols else None
+                    fga_col = 'fieldGoalsAttempted' if 'fieldGoalsAttempted' in feature_cols else None
+                    fgpct_col = 'fieldGoalsPercentage' if 'fieldGoalsPercentage' in feature_cols else None
+                    fta_col = 'freeThrowsAttempted' if 'freeThrowsAttempted' in feature_cols else None
+
+                    # Percentage stats from advanced
+                    ast_pct_col = 'adv_ast_percent' if 'adv_ast_percent' in feature_cols else None
+                    trb_pct_col = 'adv_trb_percent' if 'adv_trb_percent' in feature_cols else None
+                    orb_pct_col = 'adv_orb_percent' if 'adv_orb_percent' in feature_cols else None
+                    drb_pct_col = 'adv_drb_percent' if 'adv_drb_percent' in feature_cols else None
+                    stl_pct_col = 'adv_stl_percent' if 'adv_stl_percent' in feature_cols else None
+                    blk_pct_col = 'adv_blk_percent' if 'adv_blk_percent' in feature_cols else None
+                    tov_pct_col = 'adv_tov_percent' if 'adv_tov_percent' in feature_cols else None
+
+                    # Offensive/Defensive ratings
+                    ortg_col = 'per100_o_rtg' if 'per100_o_rtg' in feature_cols else None
+                    drtg_col = 'per100_d_rtg' if 'per100_d_rtg' in feature_cols else None
 
                     print(f"   Found base columns: pts={pts_col}, ast={ast_col}, reb={reb_col}, min={min_col}")
+                    print(f"   Advanced metrics: usg={usg_col}, per={per_col}, ts={ts_col}, bpm={bpm_col}")
 
                     # Create interaction features
                     if pts_col and ast_col:
@@ -5061,6 +5073,75 @@ def main():
                                                   X_val[tov_col])
                         interaction_count += 1
 
+                    # ======== ADVANCED METRIC INTERACTIONS ========
+                    # These use the advanced stats that ARE in feature_cols
+
+                    # PER × Usage (high-efficiency high-usage = star player)
+                    if per_col and usg_col:
+                        X_train['per_x_usg'] = X_train[per_col] * X_train[usg_col]
+                        X_val['per_x_usg'] = X_val[per_col] * X_val[usg_col]
+                        interaction_count += 1
+
+                    # BPM × Minutes (impact when on court)
+                    if bpm_col and min_col:
+                        X_train['bpm_x_min'] = X_train[bpm_col] * X_train[min_col]
+                        X_val['bpm_x_min'] = X_val[bpm_col] * X_val[min_col]
+                        interaction_count += 1
+
+                    # True Shooting × FGA (efficient scoring volume)
+                    if ts_col and fga_col:
+                        X_train['ts_x_fga'] = X_train[ts_col] * X_train[fga_col]
+                        X_val['ts_x_fga'] = X_val[ts_col] * X_val[fga_col]
+                        interaction_count += 1
+
+                    # Offensive Rating - Defensive Rating (net rating)
+                    if ortg_col and drtg_col:
+                        X_train['net_rating'] = X_train[ortg_col] - X_train[drtg_col]
+                        X_val['net_rating'] = X_val[ortg_col] - X_val[drtg_col]
+                        interaction_count += 1
+
+                    # Assist% × Turnover% (ball handling efficiency)
+                    if ast_pct_col and tov_pct_col:
+                        X_train['ast_tov_pct_ratio'] = X_train[ast_pct_col] / (X_train[tov_pct_col] + 0.01)
+                        X_val['ast_tov_pct_ratio'] = X_val[ast_pct_col] / (X_val[tov_pct_col] + 0.01)
+                        interaction_count += 1
+
+                    # ORB% + DRB% (total rebounding skill)
+                    if orb_pct_col and drb_pct_col:
+                        X_train['total_reb_pct'] = X_train[orb_pct_col] + X_train[drb_pct_col]
+                        X_val['total_reb_pct'] = X_val[orb_pct_col] + X_val[drb_pct_col]
+                        interaction_count += 1
+
+                    # Steal% + Block% (perimeter + interior defense)
+                    if stl_pct_col and blk_pct_col:
+                        X_train['defensive_pct'] = X_train[stl_pct_col] + X_train[blk_pct_col]
+                        X_val['defensive_pct'] = X_val[stl_pct_col] + X_val[blk_pct_col]
+                        interaction_count += 1
+
+                    # FTA × TS% (free throw drawing + efficiency)
+                    if fta_col and ts_col:
+                        X_train['fta_x_ts'] = X_train[fta_col] * X_train[ts_col]
+                        X_val['fta_x_ts'] = X_val[fta_col] * X_val[ts_col]
+                        interaction_count += 1
+
+                    # VORP / Minutes (value density per minute)
+                    if vorp_col and min_col:
+                        X_train['vorp_per_min'] = X_train[vorp_col] / (X_train[min_col] + 1e-6)
+                        X_val['vorp_per_min'] = X_val[vorp_col] / (X_val[min_col] + 1e-6)
+                        interaction_count += 1
+
+                    # PER × TS% (efficient high-impact player)
+                    if per_col and ts_col:
+                        X_train['per_x_ts'] = X_train[per_col] * X_train[ts_col]
+                        X_val['per_x_ts'] = X_val[per_col] * X_val[ts_col]
+                        interaction_count += 1
+
+                    # Usage × Minutes (total offensive responsibility)
+                    if usg_col and min_col:
+                        X_train['usg_x_min'] = X_train[usg_col] * X_train[min_col]
+                        X_val['usg_x_min'] = X_val[usg_col] * X_val[min_col]
+                        interaction_count += 1
+
                     print(f"   ✓ Added {interaction_count} interaction features")
                     print(f"   Total features: {X_train.shape[1]} (was {len(feature_cols)})")
 
@@ -5137,7 +5218,7 @@ def main():
                     X_train, y_train_dict,
                     X_val, y_val_dict,
                     correlated_epochs=args.neural_epochs,
-                    independent_epochs=max(20, args.neural_epochs // 2),  # Fewer epochs for independent
+                    independent_epochs=9,  # Fixed 9 epochs for independent props (~36 min)
                     batch_size=args.batch_size
                 )
 

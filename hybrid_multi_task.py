@@ -207,7 +207,7 @@ class HybridMultiTaskPlayer:
 
         # Reduce epochs for large datasets (early stopping will kick in anyway)
         effective_epochs = min(correlated_epochs, 25) if n_samples > 1_000_000 else correlated_epochs
-        effective_patience = 5 if n_samples > 1_000_000 else 10  # More aggressive early stopping
+        effective_patience = 3  # Aggressive early stopping to save time
 
         self.correlated_tabnet.fit(
             X_np, y_composite_2d,
@@ -291,12 +291,12 @@ class HybridMultiTaskPlayer:
                 effective_batch = min(batch_size * 4, 16384)  # 16K batch (safer for T4 GPU)
                 effective_virtual = min(512, effective_batch // 4)
                 effective_epochs = min(independent_epochs, 20)  # Fewer epochs for large data
-                effective_patience = 4  # More aggressive early stopping
+                effective_patience = 3  # Aggressive early stopping to save time
             else:
                 effective_batch = batch_size
                 effective_virtual = 256
                 effective_epochs = independent_epochs
-                effective_patience = 8
+                effective_patience = 3  # Aggressive early stopping to save time
 
             tabnet.fit(
                 X_np, y_train_2d,
