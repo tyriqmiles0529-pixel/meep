@@ -4295,6 +4295,7 @@ def main():
 
         # The aggregated file already contains priors for players
         priors_players = pd.DataFrame()
+        # Team priors still need to be loaded for game models (Team Summaries.csv)
         priors_teams = pd.DataFrame()
         players_path = None  # This indicates we don't need to build player stats from a raw file.
 
@@ -4303,6 +4304,81 @@ def main():
         __LOADED_PLAYER_DATA = agg_df
 
         print(f"- Player data ready: {len(agg_df):,} player-game rows")
+
+        # IMPORTANT: Still need to load team priors for game models even when using aggregated player data
+        # Team Summaries.csv provides team-level O/D ratings, pace, Four Factors, etc.
+        if args.priors_dataset:
+            print(_sec("Loading Team Priors for Game Models"))
+            priors_path_str = args.priors_dataset
+            try:
+                if os.path.exists(priors_path_str):
+                    priors_root = Path(priors_path_str)
+                    log(f"Loading team priors from local path: {priors_root}", verbose)
+                elif "/" in priors_path_str and kagglehub:
+                    log(f"Downloading priors dataset from Kaggle: {priors_path_str}", verbose)
+                    priors_root = Path(kagglehub.dataset_download(priors_path_str))
+                    log(f"Priors downloaded to: {priors_root}", verbose)
+                else:
+                    priors_root = None
+                    log(f"Warning: Priors dataset not found: {priors_path_str}", verbose)
+
+                if priors_root:
+                    # Load ONLY team priors (player priors already in aggregated data)
+                    _, priors_teams = load_basketball_reference_priors(priors_root, verbose, seasons_to_keep=None)
+                    if not priors_teams.empty:
+                        log(f"✓ Loaded team priors: {len(priors_teams):,} rows", verbose)
+                        log(f"  Columns: {list(priors_teams.columns)}", verbose)
+
+                        # Merge team priors into games_df for game models
+                        if "abbreviation" in priors_teams.columns and "season_end_year" in games_df.columns:
+                            if "home_abbrev" in games_df.columns and "away_abbrev" in games_df.columns:
+                                log("Merging team priors into games_df...", verbose)
+
+                                home_priors = priors_teams.rename(columns={
+                                    "abbreviation": "home_abbrev", "season_for_game": "season_end_year",
+                                    "o_rtg": "home_o_rtg_prior", "d_rtg": "home_d_rtg_prior",
+                                    "pace": "home_pace_prior", "srs": "home_srs_prior",
+                                    "e_fg_percent": "home_efg_prior", "tov_percent": "home_tov_pct_prior",
+                                    "orb_percent": "home_orb_pct_prior", "ft_fga": "home_ftr_prior",
+                                    "opp_e_fg_percent": "home_opp_efg_prior", "opp_tov_percent": "home_opp_tov_pct_prior",
+                                    "drb_percent": "home_drb_pct_prior", "opp_ft_fga": "home_opp_ftr_prior",
+                                    "ts_percent": "home_ts_pct_prior", "x3p_ar": "home_3par_prior", "mov": "home_mov_prior"
+                                })
+                                home_prior_cols = [c for c in home_priors.columns if c.startswith("home_")] + ["season_end_year"]
+                                # Only keep columns that exist
+                                home_prior_cols = [c for c in home_prior_cols if c in home_priors.columns]
+                                if "home_abbrev" in home_prior_cols:
+                                    games_df = games_df.merge(home_priors[home_prior_cols], on=["home_abbrev", "season_end_year"], how="left")
+                                    log(f"  Merged home team priors", verbose)
+
+                                away_priors = priors_teams.rename(columns={
+                                    "abbreviation": "away_abbrev", "season_for_game": "season_end_year",
+                                    "o_rtg": "away_o_rtg_prior", "d_rtg": "away_d_rtg_prior",
+                                    "pace": "away_pace_prior", "srs": "away_srs_prior",
+                                    "e_fg_percent": "away_efg_prior", "tov_percent": "away_tov_pct_prior",
+                                    "orb_percent": "away_orb_pct_prior", "ft_fga": "away_ftr_prior",
+                                    "opp_e_fg_percent": "away_opp_efg_prior", "opp_tov_percent": "away_opp_tov_pct_prior",
+                                    "drb_percent": "away_drb_pct_prior", "opp_ft_fga": "away_opp_ftr_prior",
+                                    "ts_percent": "away_ts_pct_prior", "x3p_ar": "away_3par_prior", "mov": "away_mov_prior"
+                                })
+                                away_prior_cols = [c for c in away_priors.columns if c.startswith("away_")] + ["season_end_year"]
+                                away_prior_cols = [c for c in away_prior_cols if c in away_priors.columns]
+                                if "away_abbrev" in away_prior_cols:
+                                    games_df = games_df.merge(away_priors[away_prior_cols], on=["away_abbrev", "season_end_year"], how="left")
+                                    log(f"  Merged away team priors", verbose)
+
+                                # Count how many priors were successfully merged
+                                if "home_o_rtg_prior" in games_df.columns:
+                                    filled_priors = games_df["home_o_rtg_prior"].notna().sum()
+                                    log(f"✓ Team priors merged: {filled_priors:,}/{len(games_df):,} games have prior data", verbose)
+                            else:
+                                log("Warning: games_df missing home_abbrev/away_abbrev columns, cannot merge team priors", verbose)
+                        else:
+                            log("Warning: Cannot merge team priors - missing abbreviation or season_end_year columns", verbose)
+            except Exception as e:
+                log(f"Warning: Failed to load team priors: {e}", verbose)
+                import traceback
+                log(f"Traceback: {traceback.format_exc()}", verbose)
 
     else:
         # Use raw PlayerStatistics.csv from Kaggle
