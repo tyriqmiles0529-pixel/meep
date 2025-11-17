@@ -4212,7 +4212,16 @@ def main():
                         gc.collect()
 
                 print(f"- Concatenating {len(chunks)} optimized chunks...")
-                agg_df = pd.concat(chunks, ignore_index=True)
+                # Memory-efficient concatenation: delete each chunk after concat
+                agg_df = chunks[0]
+                del chunks[0]
+                gc.collect()
+
+                for i, chunk in enumerate(chunks):
+                    agg_df = pd.concat([agg_df, chunk], ignore_index=True)
+                    del chunk
+                    if (i + 1) % 2 == 0:  # GC every 2 chunks
+                        gc.collect()
                 del chunks
                 gc.collect()
 
