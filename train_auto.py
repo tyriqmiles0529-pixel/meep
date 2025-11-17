@@ -5114,11 +5114,12 @@ def main():
                         X_val['pts_min_usg'] = X_val[pts_col] / (X_val[min_col] + 1e-6) * X_val[usg_col]
                         interaction_count += 1
 
-                    # 3-point volume (3PM * usage indicates shooting role)
-                    if tpm_col and usg_col:
-                        X_train['tpm_x_usg'] = X_train[tpm_col] * X_train[usg_col]
-                        X_val['tpm_x_usg'] = X_val[tpm_col] * X_val[usg_col]
-                        interaction_count += 1
+                    # 3-point shooting rate × usage (shooting role indicator)
+                    # Note: tpm_col not available in per-100 stats, skip this interaction
+                    # if tpm_col and usg_col:
+                    #     X_train['tpm_x_usg'] = X_train[tpm_col] * X_train[usg_col]
+                    #     X_val['tpm_x_usg'] = X_val[tpm_col] * X_val[usg_col]
+                    #     interaction_count += 1
 
                     # Rebound + assist (versatility indicator)
                     if reb_col and ast_col:
