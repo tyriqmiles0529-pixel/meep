@@ -3282,7 +3282,35 @@ def build_player_features(
         else:
             # No match - fill with NaN (models trained to handle this)
             if DEBUG_MODE: print(f"   ⚠️  No priors match for {player_name}")
-    
+
+    # ===== FEATURE INTERACTIONS - Make features "talk" to each other =====
+    # These capture synergies: high-usage scorers, playmaking bigs, all-around players
+
+    # Get core stats for interactions
+    pts_L5 = feats.get("points_L5", 0)
+    ast_L5 = feats.get("assists_L5", 0)
+    reb_L5 = feats.get("rebounds_L5", 0)
+    min_L5 = feats.get("minutes_per_game_L5", feats.get("minutes", 24))
+    usg_L5 = feats.get("usage_rate_L5", 22)
+    tpm_L5 = feats.get("threes_L5", 0)
+
+    # Multiplicative interactions (synergies)
+    feats["pts_x_ast"] = pts_L5 * ast_L5  # Scoring playmakers (LeBron, Luka, Jokic)
+    feats["pts_x_reb"] = pts_L5 * reb_L5  # Dominant forwards (Giannis, AD)
+    feats["ast_x_reb"] = ast_L5 * reb_L5  # Playmaking bigs (Jokic, Sabonis)
+    feats["pts_x_usg"] = pts_L5 * usg_L5  # Volume scorers (Dame, Booker)
+    feats["ast_x_usg"] = ast_L5 * usg_L5  # Ball-dominant creators (Harden, Trae)
+    feats["reb_x_min"] = reb_L5 * min_L5  # Minutes drive rebounds (Gobert)
+    feats["tpm_x_usg"] = tpm_L5 * usg_L5  # Volume 3PT shooters (Curry, Lillard)
+
+    # Rate interactions (per-minute efficiency)
+    feats["pts_per_min"] = pts_L5 / (min_L5 + 1e-6)  # Scoring efficiency
+    feats["ast_per_min"] = ast_L5 / (min_L5 + 1e-6)  # Playmaking efficiency
+    feats["reb_per_min"] = reb_L5 / (min_L5 + 1e-6)  # Rebounding rate
+
+    # Triple interaction: all-around player score
+    feats["pts_ast_reb"] = pts_L5 * ast_L5 * reb_L5  # Triple-double potential
+
     return pd.DataFrame([feats])
 
 

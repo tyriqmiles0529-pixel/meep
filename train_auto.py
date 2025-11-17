@@ -4916,6 +4916,88 @@ def main():
                     X_train = pd.DataFrame(X_train, columns=feature_cols)
                     X_val = pd.DataFrame(X_val, columns=feature_cols)
 
+                    # =========================================================
+                    # ADD FEATURE INTERACTIONS - Make features "talk" to each other
+                    # =========================================================
+                    print(f"   Adding feature interactions...")
+                    interaction_count = 0
+
+                    # Find relevant columns for interactions
+                    pts_cols = [c for c in feature_cols if 'points' in c.lower() and 'L5' in c]
+                    ast_cols = [c for c in feature_cols if 'assists' in c.lower() and 'L5' in c]
+                    reb_cols = [c for c in feature_cols if 'rebounds' in c.lower() or 'reboundsTotal' in c.lower() and 'L5' in c]
+                    min_cols = [c for c in feature_cols if 'minutes' in c.lower() or 'numMinutes' in c.lower() and 'L5' in c]
+                    usg_cols = [c for c in feature_cols if 'usg' in c.lower() or 'usage' in c.lower()]
+                    tpm_cols = [c for c in feature_cols if 'three' in c.lower() and 'L5' in c]
+
+                    # Use first matching column or raw stat if available
+                    pts_col = pts_cols[0] if pts_cols else ('points' if 'points' in feature_cols else None)
+                    ast_col = ast_cols[0] if ast_cols else ('assists' if 'assists' in feature_cols else None)
+                    reb_col = reb_cols[0] if reb_cols else ('reboundsTotal' if 'reboundsTotal' in feature_cols else None)
+                    min_col = min_cols[0] if min_cols else ('numMinutes' if 'numMinutes' in feature_cols else None)
+                    usg_col = usg_cols[0] if usg_cols else None
+                    tpm_col = tpm_cols[0] if tpm_cols else ('threePointersMade' if 'threePointersMade' in feature_cols else None)
+
+                    # Create interaction features
+                    if pts_col and ast_col:
+                        X_train['pts_x_ast'] = X_train[pts_col] * X_train[ast_col]
+                        X_val['pts_x_ast'] = X_val[pts_col] * X_val[ast_col]
+                        interaction_count += 1
+
+                    if pts_col and reb_col:
+                        X_train['pts_x_reb'] = X_train[pts_col] * X_train[reb_col]
+                        X_val['pts_x_reb'] = X_val[pts_col] * X_val[reb_col]
+                        interaction_count += 1
+
+                    if ast_col and reb_col:
+                        X_train['ast_x_reb'] = X_train[ast_col] * X_train[reb_col]
+                        X_val['ast_x_reb'] = X_val[ast_col] * X_val[reb_col]
+                        interaction_count += 1
+
+                    if pts_col and usg_col:
+                        X_train['pts_x_usg'] = X_train[pts_col] * X_train[usg_col]
+                        X_val['pts_x_usg'] = X_val[pts_col] * X_val[usg_col]
+                        interaction_count += 1
+
+                    if ast_col and usg_col:
+                        X_train['ast_x_usg'] = X_train[ast_col] * X_train[usg_col]
+                        X_val['ast_x_usg'] = X_val[ast_col] * X_val[usg_col]
+                        interaction_count += 1
+
+                    if reb_col and min_col:
+                        X_train['reb_x_min'] = X_train[reb_col] * X_train[min_col]
+                        X_val['reb_x_min'] = X_val[reb_col] * X_val[min_col]
+                        interaction_count += 1
+
+                    if tpm_col and usg_col:
+                        X_train['tpm_x_usg'] = X_train[tpm_col] * X_train[usg_col]
+                        X_val['tpm_x_usg'] = X_val[tpm_col] * X_val[usg_col]
+                        interaction_count += 1
+
+                    if pts_col and min_col:
+                        X_train['pts_per_min'] = X_train[pts_col] / (X_train[min_col] + 1e-6)
+                        X_val['pts_per_min'] = X_val[pts_col] / (X_val[min_col] + 1e-6)
+                        interaction_count += 1
+
+                    if ast_col and min_col:
+                        X_train['ast_per_min'] = X_train[ast_col] / (X_train[min_col] + 1e-6)
+                        X_val['ast_per_min'] = X_val[ast_col] / (X_val[min_col] + 1e-6)
+                        interaction_count += 1
+
+                    if reb_col and min_col:
+                        X_train['reb_per_min'] = X_train[reb_col] / (X_train[min_col] + 1e-6)
+                        X_val['reb_per_min'] = X_val[reb_col] / (X_val[min_col] + 1e-6)
+                        interaction_count += 1
+
+                    # Triple interaction: all-around player score
+                    if pts_col and ast_col and reb_col:
+                        X_train['pts_ast_reb'] = X_train[pts_col] * X_train[ast_col] * X_train[reb_col]
+                        X_val['pts_ast_reb'] = X_val[pts_col] * X_val[ast_col] * X_val[reb_col]
+                        interaction_count += 1
+
+                    print(f"   ✓ Added {interaction_count} interaction features")
+                    print(f"   Total features: {X_train.shape[1]} (was {len(feature_cols)})")
+
                     # Free the original aggregated dataframe to save memory
                     del agg_df
                     frames['__AGG_DF__'] = None
