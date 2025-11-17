@@ -53,6 +53,14 @@ from scipy import stats
 from nba_api.stats.endpoints import LeagueDashTeamStats
 from nba_api.stats.static import teams as nba_teams
 
+# Optional SHAP explainability
+try:
+    from explainability import SHAPExplainer, add_shap_to_prediction
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+    print("Note: SHAP explainability not available. Install with: pip install shap")
+
 # ========= RUNTIME / FAST MODE =========
 FAST_MODE = False  # set to False for full runs
 REQUEST_TIMEOUT = 4 if FAST_MODE else 10
@@ -72,10 +80,11 @@ SAFE_MARGIN = float(os.getenv("SAFE_MARGIN", "1.0"))  # Extra points/rebounds/as
 # ========= CONFIG =========
 # API-Sports (schedule + player stats)
 API_KEY = os.getenv("API_SPORTS_KEY") or os.getenv("APISPORTS_KEY") or ""
-if not API_KEY:
+if not API_KEY and __name__ == "__main__":
     print("⚠️  Warning: API_SPORTS_KEY not set. Add to keys.py or environment variable.")
-    if not API_KEY:
-        raise ValueError("❌ API key not found. Set API_SPORTS_KEY or edit API_KEY in this file.")
+    raise ValueError("❌ API key not found. Set API_SPORTS_KEY or edit API_KEY in this file.")
+elif not API_KEY:
+    print("Note: API_SPORTS_KEY not set (OK for testing/importing)")
 
 BASE_URL = "https://v1.basketball.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
@@ -3510,13 +3519,26 @@ def analyze_player_prop(prop: dict, matchup_context: dict) -> Optional[dict]:
         "elg": round(elg, 8), "composite_score": round(elg, 8),
         "games_analyzed": int(len(vl) + len(vc)), "pace_factor": round(pace, 3), "defense_factor": round(defense, 3)
     })
-    
+
+    # Add SHAP explanation if available and ML model was used
+    if SHAP_AVAILABLE and use_ml and MODEL.available(prop["prop_type"]):
+        try:
+            model = MODEL.player_models.get(prop["prop_type"])
+            if model and feats_row is not None:
+                prop = add_shap_to_prediction(prop, model, feats_row, prop["prop_type"], top_n=3)
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"   SHAP explanation failed: {e}")
+            prop["why"] = "Explanation unavailable"
+    else:
+        prop["why"] = "ML model not used" if not use_ml else "SHAP not available"
+
     # ACCURACY FILTER: Only recommend high-confidence bets
     if p_mean < (MIN_WIN_PROBABILITY / 100.0):
         if DEBUG_MODE:
             print(f"   Filtered out {prop.get('player')} {prop.get('prop_type')} - confidence too low ({p_mean*100:.1f}% < {MIN_WIN_PROBABILITY}%)")
         return None
-    
+
     return prop
 
 # Global cache for team stats (fetched once per run)
@@ -4090,6 +4112,9 @@ def run_analysis():
             print(f"   Profit:   ${p['potential_profit']:.2f}")
             print(f"   EV:       {p['ev']:+.2f}% | Win Prob: {p['win_prob']:.1f}%")
             print(f"   ELG Score: {score_val:.6f}")
+            # Display SHAP explanation if available
+            if p.get("why"):
+                print(f"   Why:      {p['why']}")
     
     # Display Parlays
     if parlays:
