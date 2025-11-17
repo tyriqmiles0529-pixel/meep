@@ -4727,7 +4727,7 @@ def main():
 
             min_year = int(games_df["season_end_year"].min())
             max_year = int(games_df["season_end_year"].max())
-            window_size = 5
+            window_size = 3
 
             # Get all unique seasons and split into exact 5-year windows
             # Convert to integers to avoid numpy float issues
@@ -5507,7 +5507,7 @@ def main():
 
         all_seasons = sorted([int(s) for s in seasons_df[year_col].dropna().unique()])
         max_year = int(seasons_df[year_col].max())
-        window_size = 5
+        window_size = 3
         player_windows_to_process = []
         
         print("\n" + "="*70)
@@ -5579,8 +5579,16 @@ def main():
                     'fieldGoalsMade', 'fieldGoalsAttempted', 'freeThrowsMade',
                     'freeThrowsAttempted', player_year_col
                 ]
-                adv_cols = [c for c in window_df.columns if c.startswith('adv_')][:10]
+                # Add ALL advanced stats (important for player archetypes)
+                adv_cols = [c for c in window_df.columns if c.startswith('adv_')]
                 essential_cols.extend(adv_cols)
+                # Add ALL per-100 stats (pace-adjusted, very predictive)
+                per100_cols = [c for c in window_df.columns if c.startswith('per100_')]
+                essential_cols.extend(per100_cols)
+                # Add key shooting stats (critical for 3PT predictions)
+                shoot_cols = [c for c in window_df.columns if c.startswith('shoot_') and
+                             any(x in c for x in ['percent_fga_from', 'fg_percent_from', 'corner', 'x3p'])]
+                essential_cols.extend(shoot_cols)
                 cols_to_keep = [c for c in essential_cols if c in window_df.columns]
                 window_df = window_df[cols_to_keep].copy()
 
