@@ -1,0 +1,168 @@
+#!/usr/bin/env python
+"""
+Data Loading Module for NBA Prediction Models
+
+Handles loading aggregated player data with memory optimization.
+"""
+
+import pandas as pd
+import pyarrow.parquet as pq
+import gc
+from pathlib import Path
+from typing import Optional, Tuple
+
+
+def load_aggregated_player_data(
+    parquet_path: str,
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Load aggregated player data from Parquet file with memory optimization.
+
+    Args:
+        parquet_path: Path to aggregated_nba_data.parquet
+        min_year: Optional minimum season year (e.g., 1997, 2002)
+        max_year: Optional maximum season year (e.g., 2024)
+        verbose: Print loading progress
+
+    Returns:
+        DataFrame with player-game rows
+    """
+    if verbose:
+        print("="*70)
+        print("LOADING AGGREGATED PLAYER DATA")
+        print("="*70)
+        print(f"- Loading from: {parquet_path}")
+        print("- PARQUET FORMAT: Fast loading with chunked memory optimization")
+        if min_year:
+            print(f"- FILTER: Keeping only {min_year}+ data to reduce memory")
+        if max_year:
+            print(f"- FILTER: Keeping only data up to {max_year}")
+
+    # Open Parquet file
+    parquet_file = pq.ParquetFile(parquet_path)
+    total_rows = parquet_file.metadata.num_rows
+    num_row_groups = parquet_file.num_row_groups
+
+    if verbose:
+        print(f"- Total rows in file: {total_rows:,}")
+        print(f"- Parquet file has {num_row_groups} row groups")
+
+    # CRITICAL: Select only essential columns (saves 10+ GB RAM!)
+    all_columns = [field.name for field in parquet_file.schema_arrow]
+
+    # Drop duplicate/redundant columns that bloat memory
+    columns_to_drop = set()
+    for col in all_columns:
+        # Drop duplicate columns from merged Basketball Reference tables
+        if '_dup' in col:  # player_per100_dup, team_shoot_dup, etc.
+            columns_to_drop.add(col)
+        # Drop redundant league columns (all "NBA")
+        elif col in ['adv_lg', 'per100_lg', 'shoot_lg', 'pbp_lg']:
+            columns_to_drop.add(col)
+        # Drop duplicate name/id columns (keep firstName, lastName, personId)
+        elif col in ['player', 'player_name', 'player_id']:
+            columns_to_drop.add(col)
+        # Drop redundant age/pos/game columns (metadata duplicates)
+        elif col in ['per100_age', 'shoot_age', 'pbp_age',
+                     'per100_pos', 'shoot_pos', 'pbp_pos',
+                     'per100_g', 'per100_gs', 'per100_mp',
+                     'shoot_g', 'shoot_gs', 'shoot_mp',
+                     'pbp_g', 'pbp_gs', 'pbp_mp',
+                     'adv_age', 'adv_pos', 'adv_g', 'adv_gs', 'adv_mp']:
+            columns_to_drop.add(col)
+        # Drop cumulative stats (not useful for per-game prediction)
+        elif col in ['adv_ows', 'adv_dws', 'adv_ws']:
+            columns_to_drop.add(col)
+
+    columns_to_load = [c for c in all_columns if c not in columns_to_drop]
+
+    if verbose:
+        print(f"- MEMORY OPTIMIZATION: Dropping {len(columns_to_drop)} redundant columns")
+        print(f"- Loading {len(columns_to_load)} essential columns (was {len(all_columns)})")
+
+    # Load in chunks to avoid memory spikes
+    # Load ONE row group at a time to prevent 2.5GB malloc errors
+    chunks = []
+
+    for rg_idx in range(num_row_groups):
+        if verbose and rg_idx % 5 == 0:
+            print(f"  Loading row group {rg_idx+1}/{num_row_groups}...")
+
+        # Read single row group with column filtering
+        chunk = parquet_file.read_row_group(rg_idx, columns=columns_to_load).to_pandas()
+
+        # Apply year filter immediately if specified
+        if min_year or max_year:
+            year_col = None
+            for col_name in ['season', 'game_year', 'season_end_year', 'year']:
+                if col_name in chunk.columns:
+                    year_col = col_name
+                    break
+
+            if year_col:
+                rows_before = len(chunk)
+                if min_year:
+                    chunk = chunk[chunk[year_col] >= min_year]
+                if max_year:
+                    chunk = chunk[chunk[year_col] <= max_year]
+
+                if verbose and rg_idx % 5 == 0 and len(chunk) < rows_before:
+                    print(f"    Filtered: {rows_before:,} → {len(chunk):,} rows")
+
+        # Optimize dtypes
+        for col in chunk.select_dtypes(include=['object']).columns:
+            chunk[col] = chunk[col].astype('category')
+
+        for col in chunk.select_dtypes(include=['float64']).columns:
+            chunk[col] = pd.to_numeric(chunk[col], downcast='float', errors='ignore')
+
+        for col in chunk.select_dtypes(include=['int64']).columns:
+            chunk[col] = pd.to_numeric(chunk[col], downcast='integer', errors='ignore')
+
+        chunks.append(chunk)
+
+    # Combine chunks
+    if verbose:
+        print("- Concatenating chunks...")
+
+    agg_df = pd.concat(chunks, ignore_index=True)
+    del chunks
+    gc.collect()
+
+    if verbose:
+        mem_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
+        print(f"✓ Loaded {len(agg_df):,} player-game rows")
+        print(f"✓ Memory usage: {mem_mb:.1f} MB ({mem_mb/1024:.1f} GB)")
+        print(f"✓ Columns: {len(agg_df.columns)}")
+
+        # Show year range
+        year_col = None
+        for col_name in ['season', 'game_year', 'season_end_year', 'year']:
+            if col_name in agg_df.columns:
+                year_col = col_name
+                break
+        if year_col:
+            min_yr = int(agg_df[year_col].min())
+            max_yr = int(agg_df[year_col].max())
+            print(f"✓ Year range: {min_yr}-{max_yr}")
+        print("="*70)
+
+    return agg_df
+
+
+def get_year_column(df: pd.DataFrame) -> str:
+    """Find the year column in the dataframe."""
+    for col_name in ['season', 'season_end_year', 'game_year', 'year']:
+        if col_name in df.columns:
+            return col_name
+    raise KeyError(f"No year column found. Available columns: {list(df.columns)[:20]}")
+
+
+def get_season_range(df: pd.DataFrame) -> Tuple[int, int]:
+    """Get the min and max season years from the dataframe."""
+    year_col = get_year_column(df)
+    seasons = df[year_col].dropna().unique()
+    return int(min(seasons)), int(max(seasons))
