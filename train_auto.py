@@ -4366,8 +4366,8 @@ def main():
                 after_rows = len(agg_df)
                 print(f"- Filtered: {before_rows:,} → {after_rows:,} rows ({(1-after_rows/before_rows)*100:.1f}% reduction)")
                 print(f"- New memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-        elif getattr(args, 'min_year', None) and not is_parquet:
-            # Only filter here for CSV files (Parquet already filtered during chunked load)
+        elif getattr(args, 'min_year', None):
+            # Filter by year for BOTH CSV and Parquet files
             min_year = args.min_year
             print(f"\n⚠️  Filtering to {min_year}+ seasons (post-merger/modern era)...")
             before_rows = len(agg_df)
