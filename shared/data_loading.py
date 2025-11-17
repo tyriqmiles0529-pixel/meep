@@ -268,32 +268,54 @@ def load_player_data(
     verbose: bool = True
 ) -> pd.DataFrame:
     """
-    Load player data from Parquet OR CSV (auto-detects format).
+    Load player data from Parquet, CSV file, or CSV directory (auto-detects format).
 
     Args:
-        data_source: Path to .parquet or .csv file
+        data_source: Path to:
+            - .parquet file (aggregated data)
+            - .csv file (PlayerStatistics.csv only)
+            - directory containing all 7 Basketball Reference CSVs
         min_year: Optional minimum season year
         max_year: Optional maximum season year
         verbose: Print loading progress
 
     Returns:
-        DataFrame with player-game rows
+        DataFrame with player-game rows (with advanced stats if CSVs available)
     """
     data_path = Path(data_source)
 
     if not data_path.exists():
-        raise FileNotFoundError(f"Data file not found: {data_source}")
+        raise FileNotFoundError(f"Data source not found: {data_source}")
 
     # Auto-detect format
-    if data_path.suffix.lower() == '.parquet':
+    if data_path.is_dir():
+        # Directory with multiple CSVs - aggregate them all
+        if verbose:
+            print("📁 Detected CSV directory (will merge all Basketball Reference tables)")
+        from .csv_aggregation import load_and_merge_csvs
+        return load_and_merge_csvs(str(data_path), min_year, max_year, verbose)
+
+    elif data_path.suffix.lower() == '.parquet':
         if verbose:
             print("📦 Detected Parquet format")
         return load_aggregated_player_data(str(data_path), min_year, max_year, verbose)
 
     elif data_path.suffix.lower() == '.csv':
-        if verbose:
-            print("📄 Detected CSV format")
-        return load_from_kaggle_csvs(str(data_path), min_year, max_year, verbose)
+        # Single CSV file - check if it's in a directory with other BR tables
+        parent_dir = data_path.parent
+        has_advanced = (parent_dir / "Player Advanced.csv").exists()
+        has_per100 = (parent_dir / "Player Per 100 Poss.csv").exists()
+
+        if has_advanced or has_per100:
+            if verbose:
+                print("📄 Detected CSV file with Basketball Reference tables in same directory")
+                print("   Will merge all available tables for advanced stats")
+            from .csv_aggregation import load_and_merge_csvs
+            return load_and_merge_csvs(str(parent_dir), min_year, max_year, verbose)
+        else:
+            if verbose:
+                print("📄 Detected CSV format (PlayerStatistics.csv only, no advanced stats)")
+            return load_from_kaggle_csvs(str(data_path), min_year, max_year, verbose)
 
     else:
-        raise ValueError(f"Unsupported file format: {data_path.suffix}. Use .parquet or .csv")
+        raise ValueError(f"Unsupported file format: {data_path.suffix}. Use .parquet, .csv, or directory")
