@@ -205,15 +205,20 @@ class HybridMultiTaskPlayer:
             effective_batch = batch_size
             effective_virtual = 256
 
+        # Reduce epochs for large datasets (early stopping will kick in anyway)
+        effective_epochs = min(correlated_epochs, 20) if n_samples > 1_000_000 else correlated_epochs
+        effective_patience = 5 if n_samples > 1_000_000 else 10  # More aggressive early stopping
+
         self.correlated_tabnet.fit(
             X_np, y_composite_2d,
             eval_set=eval_set,
-            max_epochs=correlated_epochs,
-            patience=10,
+            max_epochs=effective_epochs,
+            patience=effective_patience,
             batch_size=effective_batch,
             virtual_batch_size=effective_virtual,
             eval_metric=['mae']
         )
+        print(f"   (max_epochs={effective_epochs}, patience={effective_patience})")
 
         print(f"✓ Shared TabNet trained - 32-dim embeddings")
 
@@ -285,19 +290,24 @@ class HybridMultiTaskPlayer:
             if n_samples > 1_000_000:
                 effective_batch = min(batch_size * 4, 16384)  # 16K batch (safer for T4 GPU)
                 effective_virtual = min(512, effective_batch // 4)
+                effective_epochs = min(independent_epochs, 15)  # Fewer epochs for large data
+                effective_patience = 4  # More aggressive early stopping
             else:
                 effective_batch = batch_size
                 effective_virtual = 256
+                effective_epochs = independent_epochs
+                effective_patience = 8
 
             tabnet.fit(
                 X_np, y_train_2d,
                 eval_set=eval_set,
-                max_epochs=independent_epochs,
-                patience=8,
+                max_epochs=effective_epochs,
+                patience=effective_patience,
                 batch_size=effective_batch,
                 virtual_batch_size=effective_virtual,
                 eval_metric=['mae']
             )
+            print(f"    (max_epochs={effective_epochs}, patience={effective_patience})")
 
             # Get embeddings
             _, train_emb = tabnet.predict(X_np, return_embeddings=True)
