@@ -4220,7 +4220,10 @@ def main():
             chunk_size = 100000  # Process 100K rows at a time
             total_rows_read = 0
 
-            for i, chunk in enumerate(pd.read_csv(agg_path, chunksize=chunk_size, low_memory=False)):
+            # Detect if file is gzip compressed
+            compression = 'gzip' if str(agg_path).endswith('.gzip') or str(agg_path).endswith('.gz') else None
+
+            for i, chunk in enumerate(pd.read_csv(agg_path, chunksize=chunk_size, low_memory=False, compression=compression)):
                 total_rows_read += len(chunk)
 
                 # AGGRESSIVE DTYPE OPTIMIZATION PER CHUNK (critical for large datasets)
@@ -4412,11 +4415,14 @@ def main():
             seed=seed,
             verbose=verbose
         )
+        # Assign to oof_games for player model training
+        oof_games = oof_df
         print(f"- Moneyline accuracy: {game_metrics['ml_accuracy']:.1%}")
         print(f"- Spread RMSE: {game_metrics['sp_rmse']:.2f}")
     else:
         # Initialize to None if skipping
         clf_final, calibrator, reg_final, spread_sigma, oof_df, game_metrics = None, None, None, None, None, None
+        oof_games = None
         print("- Skipping game model training (--skip-game-models)")
 
     # Save game models
@@ -4679,19 +4685,53 @@ def main():
         # If aggregated data was loaded, use it directly. Otherwise, build from raw files.
         if '__LOADED_PLAYER_DATA' in globals():
             print("- Using pre-loaded aggregated data for player frames.")
-            frames = globals()['__LOADED_PLAYER_DATA']
-            # Merge OOF game predictions into the frames
-            if oof_games is not None and not oof_games.empty:
-                for key in frames:
-                    if not frames[key].empty:
-                        # Ensure 'gid' column exists for merging
-                        if 'gid' not in frames[key].columns and 'gid_key' in frames[key].columns:
-                             frames[key]['gid'] = frames[key]['gid_key']
+            agg_df = globals()['__LOADED_PLAYER_DATA']
 
-                        if 'gid' in frames[key].columns:
-                            frames[key] = frames[key].merge(oof_games[["gid", "oof_ml_prob", "oof_spread_pred"]], on="gid", how="left")
-                        else:
-                            print(f"Warning: 'gid' column not found in frame '{key}', cannot merge OOF predictions.")
+            # Convert aggregated DataFrame into frames dictionary
+            # Each frame has the same features but different TARGET column
+            frames = {}
+            prop_to_col = {
+                'points': 'points',
+                'assists': 'assists',
+                'rebounds': 'reboundsTotal',
+                'minutes': 'numMinutes',
+                'threes': 'threePointersMade'
+            }
+
+            # Identify feature columns (exclude target columns and identifiers)
+            id_cols = ['firstName', 'lastName', 'personId', 'gameId', 'gameDate', 'playerteamCity',
+                       'playerteamName', 'opponentteamCity', 'opponentteamName', 'gameType', 'gameLabel',
+                       'gameSubLabel', 'player_name', 'player_game_id', 'team', 'adv_lg', 'player',
+                       'player_id', 'team_sum_abbreviation', 'team_sum_arena', 'season', 'adv_pos',
+                       'per100_pos', 'shoot_pos', 'pbp_pos', 'per100_lg', 'shoot_lg', 'pbp_lg']
+            target_cols = list(prop_to_col.values())
+            feature_cols = [c for c in agg_df.columns if c not in id_cols and c not in target_cols]
+
+            # Filter to numeric columns only
+            numeric_cols = []
+            for c in feature_cols:
+                if agg_df[c].dtype in ['float32', 'float64', 'int32', 'int64', 'float16', 'int16', 'int8']:
+                    numeric_cols.append(c)
+
+            print(f"   Found {len(numeric_cols)} numeric feature columns")
+
+            for prop, col in prop_to_col.items():
+                if col in agg_df.columns:
+                    # Create frame with features + TARGET
+                    frame_df = agg_df[numeric_cols].copy()
+                    frame_df['TARGET'] = agg_df[col].values
+
+                    # Remove rows with missing target
+                    frame_df = frame_df.dropna(subset=['TARGET'])
+
+                    frames[prop] = frame_df
+                    print(f"   {prop}: {len(frame_df):,} samples")
+                else:
+                    print(f"   {prop}: column '{col}' not found in aggregated data")
+                    frames[prop] = pd.DataFrame()
+
+            # Note: OOF game predictions won't match aggregated data (different game IDs)
+            print("Note: OOF game predictions not merged (games and players from different sources)")
 
         else:
             # Build player frames from raw playerstats file
