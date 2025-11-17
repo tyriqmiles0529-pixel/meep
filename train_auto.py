@@ -3922,6 +3922,8 @@ def main():
                     help="Start training from this year (e.g., 1974 for earliest priors data). Auto-determined if not set.")
     ap.add_argument("--memory-limit", action="store_true",
                     help="OPTIONAL: Filter to 2002+ data after chunked loading if still running out of memory. NOTE: Chunked loading is now ALWAYS enabled (loads all years by default).")
+    ap.add_argument("--min-year", type=int, default=None,
+                    help="Filter aggregated data to this year and later (e.g., 1976 for post-merger, 1980 for 3-point era). Reduces memory usage.")
     ap.add_argument("--add-rolling-features", action="store_true",
                     help="Add L5/L10 rolling averages and trends. Improves predictions but uses ~400MB extra RAM. Recommended for Colab Pro.")
     ap.add_argument("--add-opponent-features", action="store_true",
@@ -4267,7 +4269,7 @@ def main():
         memory_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
         print(f"- Memory usage: {memory_mb:.1f} MB ({memory_mb/1024:.1f} GB)")
 
-        # ONLY filter if user EXPLICITLY requests it with --memory-limit flag
+        # ONLY filter if user EXPLICITLY requests it with --memory-limit or --min-year flag
         # NO AUTO-FILTERING - keep all years by default
         if args.memory_limit:
             print("\n⚠️  USER-REQUESTED MEMORY LIMIT: Filtering to 2002+ seasons...")
@@ -4278,6 +4280,28 @@ def main():
                 after_rows = len(agg_df)
                 print(f"- Filtered: {before_rows:,} → {after_rows:,} rows ({(1-after_rows/before_rows)*100:.1f}% reduction)")
                 print(f"- New memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+        elif getattr(args, 'min_year', None):
+            min_year = args.min_year
+            print(f"\n⚠️  Filtering to {min_year}+ seasons (post-merger/modern era)...")
+            before_rows = len(agg_df)
+
+            # Try different year column names
+            year_col = None
+            for col in ['season_end_year', 'game_year', 'season', 'year']:
+                if col in agg_df.columns:
+                    year_col = col
+                    break
+
+            if year_col:
+                agg_df = agg_df[agg_df[year_col] >= min_year].copy()
+                gc.collect()
+                after_rows = len(agg_df)
+                print(f"- Filtered: {before_rows:,} → {after_rows:,} rows ({(1-after_rows/before_rows)*100:.1f}% reduction)")
+                new_memory = agg_df.memory_usage(deep=True).sum() / 1024**2
+                print(f"- New memory usage: {new_memory:.1f} MB ({new_memory/1024:.1f} GB)")
+                print(f"- Years kept: {min_year}-2026 (NBA {'post-merger' if min_year <= 1976 else 'modern'} era)")
+            else:
+                print(f"  ⚠️ No year column found. Keeping all data.")
         else:
             print(f"- Keeping ALL years (1947-2026) - {len(agg_df):,} rows")
 
