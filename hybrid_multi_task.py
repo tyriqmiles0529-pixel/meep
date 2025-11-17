@@ -195,10 +195,11 @@ class HybridMultiTaskPlayer:
 
         # Scale batch sizes for large datasets (7.8M+ samples)
         # More samples per batch = fewer batches per epoch = faster training
+        # BUT: Too large = GPU OOM. T4 has 16GB VRAM, safe limit ~16K batch
         n_samples = len(X_np)
         if n_samples > 1_000_000:
-            effective_batch = min(batch_size * 8, 32768)  # 32K batch size for huge datasets
-            effective_virtual = min(1024, effective_batch // 4)  # Larger virtual batch
+            effective_batch = min(batch_size * 4, 16384)  # 16K batch (safer for T4 GPU)
+            effective_virtual = min(512, effective_batch // 4)  # Virtual batch = batch/4
             print(f"   Large dataset ({n_samples:,} samples) - using batch_size={effective_batch}, virtual_batch_size={effective_virtual}")
         else:
             effective_batch = batch_size
@@ -282,8 +283,8 @@ class HybridMultiTaskPlayer:
             # Scale batch sizes for large datasets
             n_samples = len(X_np)
             if n_samples > 1_000_000:
-                effective_batch = min(batch_size * 8, 32768)
-                effective_virtual = min(1024, effective_batch // 4)
+                effective_batch = min(batch_size * 4, 16384)  # 16K batch (safer for T4 GPU)
+                effective_virtual = min(512, effective_batch // 4)
             else:
                 effective_batch = batch_size
                 effective_virtual = 256
