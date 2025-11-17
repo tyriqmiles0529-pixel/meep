@@ -5569,12 +5569,27 @@ def main():
                 if player_year_col is None:
                     raise KeyError(f"No year column found in aggregated data. Available: {list(agg_df.columns)[:20]}")
                 window_df = agg_df[agg_df[player_year_col].isin(padded_seasons)].copy()
-                
+                print(f"  • Filtered aggregated data for window: {len(window_df):,} rows")
+
+                # Memory optimization: Keep only essential columns
+                essential_cols = [
+                    'personId', 'gameId', 'gameDate', 'firstName', 'lastName',
+                    'home', 'numMinutes', 'points', 'assists', 'blocks', 'steals',
+                    'reboundsTotal', 'threePointersMade', 'threePointersAttempted',
+                    'fieldGoalsMade', 'fieldGoalsAttempted', 'freeThrowsMade',
+                    'freeThrowsAttempted', player_year_col
+                ]
+                adv_cols = [c for c in window_df.columns if c.startswith('adv_')][:10]
+                essential_cols.extend(adv_cols)
+                cols_to_keep = [c for c in essential_cols if c in window_df.columns]
+                window_df = window_df[cols_to_keep].copy()
+
                 temp_player_csv = Path(f".window_agg_{start_year}_{end_year}_players.csv")
                 window_df.to_csv(temp_player_csv, index=False)
                 player_data_path = temp_player_csv
-                print(f"  • Created temporary window CSV from aggregated data: {len(window_df):,} rows")
+                print(f"  • Optimized CSV: {len(window_df):,} rows, {len(cols_to_keep)} columns")
                 del window_df
+                gc.collect()
             else:
                 # Original logic for raw data
                 temp_player_csv = Path(f".window_{start_year}_{end_year}_players.csv")
