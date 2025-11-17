@@ -117,9 +117,9 @@ def train_one_window(window_start: int, window_end: int):
 
     print(f"Training window: {window_start}-{window_end}")
 
-    # Load data from Modal volume (CSV = guaranteed 1947-2026)
+    # Load data from Modal volume (CSV directory = full aggregation!)
     agg_df = load_player_data(
-        "/data/PlayerStatistics.csv",  # Use CSV for full data!
+        "/data/csv_dir/",  # Directory with all 7 BR CSV files
         verbose=True
     )
 
@@ -167,8 +167,8 @@ def train_all_windows():
     """Orchestrate training of all windows"""
     from shared.data_loading import load_player_data, get_year_column
 
-    # Load data to discover windows (CSV = full 1947-2026)
-    agg_df = load_player_data("/data/PlayerStatistics.csv", verbose=True)
+    # Load data to discover windows (CSV directory = full aggregation)
+    agg_df = load_player_data("/data/csv_dir/", verbose=True)
     year_col = get_year_column(agg_df)
     all_seasons = sorted([int(s) for s in agg_df[year_col].dropna().unique()])
 
