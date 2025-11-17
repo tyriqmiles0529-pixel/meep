@@ -21,15 +21,15 @@ from typing import Dict, List, Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from shared.data_loading import load_aggregated_player_data, get_year_column, get_season_range
+from shared.data_loading import load_player_data, get_year_column, get_season_range
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train NBA Player Prediction Models')
 
     # Data sources
-    parser.add_argument('--aggregated-data', type=str, required=True,
-                        help='Path to aggregated_nba_data.parquet')
+    parser.add_argument('--data', '--aggregated-data', type=str, required=True, dest='data',
+                        help='Path to data file (.parquet or .csv - auto-detected)')
 
     # Training parameters
     parser.add_argument('--window-size', type=int, default=3,
@@ -198,7 +198,7 @@ def main():
     print("="*70)
     print("NBA PLAYER MODEL TRAINING (WINDOWED ENSEMBLE)")
     print("="*70)
-    print(f"Data source: {args.aggregated_data}")
+    print(f"Data source: {args.data}")
     print(f"Window size: {args.window_size} years")
     print(f"Neural epochs: {args.neural_epochs}")
     print(f"Cache directory: {args.cache_dir}")
@@ -211,9 +211,9 @@ def main():
     # Create cache directory
     os.makedirs(args.cache_dir, exist_ok=True)
 
-    # Load aggregated player data
-    agg_df = load_aggregated_player_data(
-        args.aggregated_data,
+    # Load player data (auto-detects Parquet or CSV)
+    agg_df = load_player_data(
+        args.data,
         min_year=args.min_year,
         max_year=args.max_year,
         verbose=args.verbose

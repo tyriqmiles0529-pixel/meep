@@ -9,7 +9,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import gc
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 
 def load_aggregated_player_data(
@@ -166,3 +166,134 @@ def get_season_range(df: pd.DataFrame) -> Tuple[int, int]:
     year_col = get_year_column(df)
     seasons = df[year_col].dropna().unique()
     return int(min(seasons)), int(max(seasons))
+
+
+def load_from_kaggle_csvs(
+    player_csv_path: str,
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Load player data directly from Kaggle CSV files.
+
+    Loads PlayerStatistics.csv from the Kaggle dataset:
+    /kaggle/input/historical-nba-data-and-player-box-scores/PlayerStatistics.csv
+
+    Args:
+        player_csv_path: Path to PlayerStatistics.csv
+        min_year: Optional minimum season year
+        max_year: Optional maximum season year
+        verbose: Print loading progress
+
+    Returns:
+        DataFrame with player-game rows
+    """
+    if verbose:
+        print("="*70)
+        print("LOADING PLAYER DATA FROM CSV")
+        print("="*70)
+        print(f"- Loading from: {player_csv_path}")
+        if min_year:
+            print(f"- FILTER: Keeping only {min_year}+ data")
+        if max_year:
+            print(f"- FILTER: Keeping only data up to {max_year}")
+
+    # Load PlayerStatistics.csv
+    # This has all game-level player stats from 1947-2026
+    if verbose:
+        print("- Reading CSV file...")
+
+    df = pd.read_csv(player_csv_path, low_memory=False)
+
+    if verbose:
+        print(f"- Loaded {len(df):,} rows")
+        print(f"- Columns: {len(df.columns)}")
+
+    # Apply year filter if specified
+    if min_year or max_year:
+        # Find year column
+        year_col = None
+        for col_name in ['season', 'season_end_year', 'game_year', 'year']:
+            if col_name in df.columns:
+                year_col = col_name
+                break
+
+        if year_col:
+            rows_before = len(df)
+            if min_year:
+                df = df[df[year_col] >= min_year]
+            if max_year:
+                df = df[df[year_col] <= max_year]
+
+            if verbose:
+                print(f"- Filtered by year: {rows_before:,} → {len(df):,} rows")
+
+    # Optimize dtypes to save memory
+    if verbose:
+        print("- Optimizing dtypes...")
+
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].astype('category')
+
+    for col in df.select_dtypes(include=['float64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='float', errors='ignore')
+
+    for col in df.select_dtypes(include=['int64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='integer', errors='ignore')
+
+    if verbose:
+        mem_mb = df.memory_usage(deep=True).sum() / 1024**2
+        print(f"✓ Final data: {len(df):,} rows, {len(df.columns)} columns")
+        print(f"✓ Memory usage: {mem_mb:.1f} MB ({mem_mb/1024:.1f} GB)")
+
+        # Show year range
+        try:
+            year_col = get_year_column(df)
+            min_yr = int(df[year_col].min())
+            max_yr = int(df[year_col].max())
+            print(f"✓ Year range: {min_yr}-{max_yr}")
+        except:
+            pass
+
+        print("="*70)
+
+    return df
+
+
+def load_player_data(
+    data_source: Union[str, Path],
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Load player data from Parquet OR CSV (auto-detects format).
+
+    Args:
+        data_source: Path to .parquet or .csv file
+        min_year: Optional minimum season year
+        max_year: Optional maximum season year
+        verbose: Print loading progress
+
+    Returns:
+        DataFrame with player-game rows
+    """
+    data_path = Path(data_source)
+
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data file not found: {data_source}")
+
+    # Auto-detect format
+    if data_path.suffix.lower() == '.parquet':
+        if verbose:
+            print("📦 Detected Parquet format")
+        return load_aggregated_player_data(str(data_path), min_year, max_year, verbose)
+
+    elif data_path.suffix.lower() == '.csv':
+        if verbose:
+            print("📄 Detected CSV format")
+        return load_from_kaggle_csvs(str(data_path), min_year, max_year, verbose)
+
+    else:
+        raise ValueError(f"Unsupported file format: {data_path.suffix}. Use .parquet or .csv")
