@@ -176,12 +176,16 @@ class HybridMultiTaskPlayer:
             y_norm = (y_dict[prop] - y_dict[prop].min()) / (y_dict[prop].max() - y_dict[prop].min() + 1e-8)
             y_composite += weight * y_norm
 
+        # TabNet requires 2D targets: (n_samples, 1) for single regression
+        y_composite_2d = y_composite.reshape(-1, 1)
+
         if X_val is not None:
             y_val_composite = np.zeros(len(X_val))
             for prop, weight in weights.items():
                 y_val_norm = (y_val_dict[prop] - y_dict[prop].min()) / (y_dict[prop].max() - y_dict[prop].min() + 1e-8)
                 y_val_composite += weight * y_val_norm
-            eval_set = [(X_val_np, y_val_composite)]
+            y_val_composite_2d = y_val_composite.reshape(-1, 1)
+            eval_set = [(X_val_np, y_val_composite_2d)]
         else:
             eval_set = None
 
@@ -189,7 +193,7 @@ class HybridMultiTaskPlayer:
         print("\nTraining shared TabNet encoder...")
         self.correlated_tabnet = TabNetRegressor(**self.correlated_tabnet_params)
         self.correlated_tabnet.fit(
-            X_np, y_composite,
+            X_np, y_composite_2d,
             eval_set=eval_set,
             max_epochs=correlated_epochs,
             patience=10,
@@ -255,13 +259,16 @@ class HybridMultiTaskPlayer:
             print(f"  Training TabNet...")
             tabnet = TabNetRegressor(**self.independent_tabnet_params)
 
+            # TabNet requires 2D targets: (n_samples, 1)
+            y_train_2d = y_dict[prop].reshape(-1, 1)
             if X_val is not None:
-                eval_set = [(X_val_np, y_val_dict[prop])]
+                y_val_2d = y_val_dict[prop].reshape(-1, 1)
+                eval_set = [(X_val_np, y_val_2d)]
             else:
                 eval_set = None
 
             tabnet.fit(
-                X_np, y_dict[prop],
+                X_np, y_train_2d,
                 eval_set=eval_set,
                 max_epochs=independent_epochs,
                 patience=8,
