@@ -338,11 +338,204 @@ def add_minutes_context(
     return df
 
 
+def add_home_away_splits(
+    df: pd.DataFrame,
+    home_col: str = 'home_flag',
+    player_col: str = 'personId',
+    stat_cols: List[str] = None,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Add home/away performance split features.
+
+    Some players perform drastically different at home vs away.
+    This captures that pattern.
+    """
+
+    if stat_cols is None:
+        stat_cols = ['points', 'assists', 'reboundsTotal', 'numMinutes', 'threePointersMade']
+
+    available_cols = [c for c in stat_cols if c in df.columns]
+
+    # Check for home/away indicator
+    if home_col not in df.columns:
+        # Try alternative column names
+        for alt in ['isHomeGame', 'home', 'is_home', 'homeGame']:
+            if alt in df.columns:
+                home_col = alt
+                break
+        else:
+            if verbose:
+                print(f"⚠️  Home/away indicator column not found. Skipping home/away splits.")
+            return df
+
+    if verbose:
+        print(f"Computing home/away split features for {len(available_cols)} stats...")
+
+    new_features = {}
+
+    # Sort by player and date for temporal calculations
+    if 'gameDate' in df.columns:
+        df = df.sort_values([player_col, 'gameDate']).reset_index(drop=True)
+
+    for col in available_cols:
+        # Home game averages (expanding, shifted to avoid leakage)
+        home_mask = df[home_col] == 1
+        away_mask = df[home_col] == 0
+
+        # Player's home game average
+        home_avg_col = f'{col}_home_avg'
+        home_avg = df.groupby(player_col).apply(
+            lambda g: g[col].where(g[home_col] == 1).shift(1).expanding(min_periods=3).mean()
+        ).reset_index(level=0, drop=True)
+        new_features[home_avg_col] = home_avg.fillna(df[col].mean())
+
+        # Player's away game average
+        away_avg_col = f'{col}_away_avg'
+        away_avg = df.groupby(player_col).apply(
+            lambda g: g[col].where(g[home_col] == 0).shift(1).expanding(min_periods=3).mean()
+        ).reset_index(level=0, drop=True)
+        new_features[away_avg_col] = away_avg.fillna(df[col].mean())
+
+        # Home boost (% improvement at home)
+        boost_col = f'{col}_home_boost'
+        new_features[boost_col] = (
+            (new_features[home_avg_col] - new_features[away_avg_col]) /
+            (new_features[away_avg_col] + 1e-6)
+        ).fillna(0)
+
+    # Add features
+    if verbose:
+        print(f"Adding {len(new_features)} home/away split features...")
+
+    for col_name, values in new_features.items():
+        df[col_name] = values.astype('float32')
+
+    gc.collect()
+
+    if verbose:
+        print(f"✓ Added {len(new_features)} home/away features")
+
+    return df
+
+
+def add_pace_features(
+    df: pd.DataFrame,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Add pace/tempo adjustment features.
+
+    Fast-paced games = more possessions = higher stats.
+    This is a MAJOR factor for prop predictions.
+    """
+
+    if verbose:
+        print("Computing pace/tempo adjustment features...")
+
+    new_features = {}
+
+    # Check for team pace columns
+    has_team_pace = any(col in df.columns for col in ['team_pace', 'home_pace', 'team_sum_pace'])
+
+    if not has_team_pace:
+        if verbose:
+            print("  ⚠️  No team pace columns found. Computing from possessions proxy...")
+
+        # Estimate pace from available stats (possessions ≈ FGA + 0.44*FTA - ORB + TOV)
+        if all(col in df.columns for col in ['fieldGoalsAttempted', 'freeThrowsAttempted', 'reboundsOffensive', 'turnovers']):
+            # This is player's individual pace contribution
+            df['player_pace_proxy'] = (
+                df['fieldGoalsAttempted'] +
+                0.44 * df['freeThrowsAttempted'] -
+                df['reboundsOffensive'] +
+                df['turnovers']
+            ).astype('float32')
+
+            # Player's typical pace
+            player_col = 'personId' if 'personId' in df.columns else 'player_id'
+            new_features['player_pace_L10'] = df.groupby(player_col)['player_pace_proxy'].transform(
+                lambda x: x.shift(1).rolling(window=10, min_periods=3).mean()
+            ).fillna(df['player_pace_proxy'].mean())
+
+            # Pace deviation (current game vs player's normal)
+            new_features['pace_deviation'] = (
+                df['player_pace_proxy'] - new_features['player_pace_L10']
+            ).fillna(0)
+
+    else:
+        # Use actual team pace data
+        pace_col = None
+        for col in ['team_pace', 'team_sum_pace', 'home_pace']:
+            if col in df.columns:
+                pace_col = col
+                break
+
+        if pace_col:
+            if verbose:
+                print(f"  Using {pace_col} for pace adjustments...")
+
+            # Expected game pace (league average = 100)
+            new_features['expected_game_pace'] = df[pace_col].fillna(100)
+
+            # Pace factor (above/below average)
+            league_avg_pace = df[pace_col].mean() if df[pace_col].notna().sum() > 0 else 100
+            new_features['pace_factor'] = (df[pace_col] / league_avg_pace).fillna(1.0)
+
+            # Pace-adjusted scoring (if points available)
+            if 'points' in df.columns:
+                new_features['pts_pace_adjusted'] = (
+                    df['points'] / (new_features['pace_factor'] + 0.01)
+                ).fillna(df['points'].mean())
+
+    # Rest days impact (more granular)
+    if 'days_rest' in df.columns or 'rest_days' in df.columns:
+        rest_col = 'days_rest' if 'days_rest' in df.columns else 'rest_days'
+
+        # Categorize rest impact
+        # 0 days (B2B): penalty
+        # 1 day: baseline
+        # 2-3 days: slight boost
+        # 4+ days: rust factor
+        def rest_impact(days):
+            if pd.isna(days):
+                return 0
+            if days == 0:
+                return -0.05  # 5% penalty
+            elif days == 1:
+                return 0
+            elif days <= 3:
+                return 0.02  # 2% boost
+            else:
+                return -0.02  # Rust factor
+
+        new_features['rest_impact_factor'] = df[rest_col].apply(rest_impact).astype('float32')
+
+    # Add features
+    if verbose:
+        print(f"Adding {len(new_features)} pace/tempo features...")
+
+    for col_name, values in new_features.items():
+        if isinstance(values, pd.Series):
+            df[col_name] = values.astype('float32')
+        else:
+            df[col_name] = values
+
+    gc.collect()
+
+    if verbose:
+        print(f"✓ Added {len(new_features)} pace features")
+
+    return df
+
+
 def enhance_aggregated_data(
     df: pd.DataFrame,
     add_rolling: bool = True,
     add_opponent: bool = True,
     add_minutes: bool = True,
+    add_home_away: bool = False,
+    add_pace: bool = False,
     verbose: bool = True
 ) -> pd.DataFrame:
     """
@@ -366,6 +559,12 @@ def enhance_aggregated_data(
 
     if add_minutes:
         df = add_minutes_context(df, verbose=verbose)
+
+    if add_home_away:
+        df = add_home_away_splits(df, verbose=verbose)
+
+    if add_pace:
+        df = add_pace_features(df, verbose=verbose)
 
     if verbose:
         final_cols = len(df.columns)

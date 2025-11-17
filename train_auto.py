@@ -3928,6 +3928,10 @@ def main():
                     help="Add opponent defensive adjustment features (how many points/ast/reb opponent typically allows)")
     ap.add_argument("--add-minutes-context", action="store_true",
                     help="Add minutes projection context (expected minutes, volatility, trend)")
+    ap.add_argument("--add-home-away-splits", action="store_true",
+                    help="Add home/away performance splits (some players perform differently at home vs away)")
+    ap.add_argument("--add-pace-features", action="store_true",
+                    help="Add pace/tempo adjustment features (fast-paced games = more possessions = higher stats)")
 
     args = ap.parse_args()
 
@@ -4302,11 +4306,11 @@ def main():
         # =====================================================
         # ADD TEMPORAL FEATURES (OPTIONAL - memory intensive)
         # =====================================================
-        if args.add_rolling_features or args.add_opponent_features or args.add_minutes_context:
+        if args.add_rolling_features or args.add_opponent_features or args.add_minutes_context or getattr(args, 'add_home_away_splits', False) or getattr(args, 'add_pace_features', False):
             print(_sec("Adding Temporal Features"))
 
             try:
-                from rolling_features import add_rolling_features, add_opponent_features, add_minutes_context
+                from rolling_features import add_rolling_features, add_opponent_features, add_minutes_context, add_home_away_splits, add_pace_features
 
                 initial_cols = len(agg_df.columns)
 
@@ -4349,6 +4353,20 @@ def main():
                         player_col='personId' if 'personId' in agg_df.columns else 'player_id',
                         verbose=True
                     )
+                    gc.collect()
+
+                if getattr(args, 'add_home_away_splits', False):
+                    print("🏠 Adding home/away split features...")
+                    agg_df = add_home_away_splits(
+                        agg_df,
+                        player_col='personId' if 'personId' in agg_df.columns else 'player_id',
+                        verbose=True
+                    )
+                    gc.collect()
+
+                if getattr(args, 'add_pace_features', False):
+                    print("🏃 Adding pace/tempo adjustment features...")
+                    agg_df = add_pace_features(agg_df, verbose=True)
                     gc.collect()
 
                 final_cols = len(agg_df.columns)
