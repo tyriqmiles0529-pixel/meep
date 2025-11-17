@@ -4263,6 +4263,24 @@ def main():
                     print(f"- Filtered to {min_year_filter}+ during loading (reduced from {total_rows:,} rows)")
                 print(f"- Memory after chunked optimization: {optimized_mb:.1f} MB ({optimized_mb/1024:.1f} GB)")
 
+                # POST-LOAD YEAR FILTER: Apply if not done during chunk loading
+                if min_year_filter and len(agg_df) > 0:
+                    year_col = None
+                    for col_name in ['season', 'game_year', 'season_end_year', 'year']:
+                        if col_name in agg_df.columns:
+                            year_col = col_name
+                            break
+
+                    if year_col:
+                        rows_before = len(agg_df)
+                        agg_df = agg_df[agg_df[year_col] >= min_year_filter].copy()
+                        rows_after = len(agg_df)
+                        if rows_after < rows_before:
+                            gc.collect()
+                            new_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
+                            print(f"- POST-LOAD FILTER: {rows_before:,} -> {rows_after:,} rows (kept {min_year_filter}+)")
+                            print(f"- Memory after year filter: {new_mb:.1f} MB ({new_mb/1024:.1f} GB)")
+
             except ImportError:
                 # Fallback to regular loading if PyArrow not available
                 print("- PyArrow not available, falling back to standard loading...")
