@@ -5575,32 +5575,36 @@ def main():
                 essential_cols = [
                     'personId', 'gameId', 'gameDate', 'firstName', 'lastName',
                     'home', 'numMinutes', 'points', 'assists', 'blocks', 'steals',
-                    'reboundsTotal', 'threePointersMade', 'threePointersAttempted',
+                    'threePointersMade', 'threePointersAttempted',
                     'fieldGoalsMade', 'fieldGoalsAttempted', 'freeThrowsMade',
                     'freeThrowsAttempted', player_year_col
                 ]
 
-                # Add high-value basic stats
+                # Add high-value basic stats (non-redundant)
                 high_value_basic = [
-                    'reboundsDefensive', 'reboundsOffensive',  # Rebound type breakdown
-                    'fieldGoalsPercentage', 'threePointersPercentage', 'freeThrowsPercentage',  # Efficiency
-                    'foulsPersonal',  # Foul trouble
-                    'win'  # Game outcome (player impact on wins)
+                    'reboundsDefensive', 'reboundsOffensive',  # Split is more predictive than total
+                    'foulsPersonal',  # Foul trouble predictor
+                    'win'  # Game outcome context
                 ]
                 essential_cols.extend(high_value_basic)
 
-                # Add ALL advanced stats (important for player archetypes)
-                adv_cols = [c for c in window_df.columns if c.startswith('adv_')]
+                # Add advanced stats (exclude metadata and cumulative stats)
+                adv_cols = [c for c in window_df.columns if c.startswith('adv_') and
+                           c not in ['adv_lg', 'adv_age', 'adv_pos', 'adv_g', 'adv_gs', 'adv_mp',
+                                    'adv_ows', 'adv_dws', 'adv_ws']]  # Keep adv_ws_48 (rate stat)
                 essential_cols.extend(adv_cols)
 
-                # Add ALL per-100 stats (pace-adjusted, very predictive)
-                per100_cols = [c for c in window_df.columns if c.startswith('per100_')]
+                # Add per-100 stats (exclude metadata and redundant percentages)
+                per100_cols = [c for c in window_df.columns if c.startswith('per100_') and
+                              c not in ['per100_lg', 'per100_age', 'per100_pos', 'per100_g', 'per100_gs', 'per100_mp',
+                                       'per100_fg_percent', 'per100_ft_percent']]  # Keep x3p_percent (most predictive)
                 essential_cols.extend(per100_cols)
 
-                # Add key shooting stats (critical for 3PT predictions)
+                # Add key shooting stats (exclude low-value zones and duplicates)
                 shoot_cols = [c for c in window_df.columns if c.startswith('shoot_') and
-                             any(x in c for x in ['percent_fga_from', 'fg_percent_from', 'corner', 'x3p',
-                                                  'avg_dist', 'assisted_x2p', 'dunks'])]
+                             any(x in c for x in ['avg_dist', 'assisted', 'corner', 'x3p']) and
+                             c not in ['shoot_num_of_dunks', 'shoot_percent_fga_from_x3_10_range',
+                                      'shoot_percent_fga_from_x10_16_range', 'shoot_fg_percent_from_x3_10_range']]
                 essential_cols.extend(shoot_cols)
 
                 # Add high-value PBP stats (plus/minus, playmaking, finishing)
