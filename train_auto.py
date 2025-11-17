@@ -4092,7 +4092,13 @@ def main():
             print(_sec("Loading Pre-Aggregated Dataset (Parquet - CHUNKED)"))
             print(f"- Loading from: {agg_path}")
             print("- PARQUET FORMAT: Fast loading with chunked memory optimization")
-            print("- Loading in 5 chunks to prevent memory spikes (27GB -> ~10GB)")
+
+            # Check if min_year filter is active
+            min_year_filter = getattr(args, 'min_year', None)
+            if min_year_filter:
+                print(f"- FILTERING DURING LOAD: Keeping only {min_year_filter}+ data to reduce memory")
+            else:
+                print("- Loading in 5 chunks to prevent memory spikes (27GB -> ~10GB)")
 
             # Use PyArrow for chunked reading by row groups
             try:
@@ -4102,7 +4108,7 @@ def main():
                 total_rows = parquet_file.metadata.num_rows
                 num_row_groups = parquet_file.metadata.num_row_groups
 
-                print(f"- Total rows: {total_rows:,}")
+                print(f"- Total rows in file: {total_rows:,}")
                 print(f"- Parquet file has {num_row_groups} row groups")
 
                 # Group row groups into 5 chunks
@@ -4114,6 +4120,7 @@ def main():
 
                     chunks = []
                     current_rg = 0
+                    total_rows_kept = 0
 
                     for chunk_idx in range(num_chunks):
                         # Distribute remainder row groups to first chunks
@@ -4126,6 +4133,23 @@ def main():
 
                         # Read only specific row groups (memory efficient!)
                         chunk = parquet_file.read_row_groups(rg_indices).to_pandas()
+                        rows_before_filter = len(chunk)
+
+                        # FILTER BY MIN_YEAR IMMEDIATELY (before dtype optimization)
+                        if min_year_filter:
+                            # Try different year column names
+                            year_col = None
+                            for col_name in ['season', 'game_year', 'season_end_year', 'year']:
+                                if col_name in chunk.columns:
+                                    year_col = col_name
+                                    break
+
+                            if year_col:
+                                chunk = chunk[chunk[year_col] >= min_year_filter].copy()
+                                rows_after_filter = len(chunk)
+                                print(f"    Filtered {rows_before_filter:,} -> {rows_after_filter:,} rows (kept {min_year_filter}+)")
+                            else:
+                                print(f"    Warning: No year column found, keeping all rows")
 
                         # OPTIMIZE DTYPES IMMEDIATELY (critical for memory)
                         for col in chunk.select_dtypes(include=['object']).columns:
@@ -4143,6 +4167,7 @@ def main():
                                 chunk[col] = chunk[col].astype('int32')
 
                         chunks.append(chunk)
+                        total_rows_kept += len(chunk)
                         chunk_mem = chunk.memory_usage(deep=True).sum() / 1024**2
                         print(f"    {len(chunk):,} rows, optimized to {chunk_mem:.1f} MB")
 
@@ -4193,6 +4218,8 @@ def main():
 
                 optimized_mb = agg_df.memory_usage(deep=True).sum() / 1024**2
                 print(f"- Loaded {len(agg_df):,} rows")
+                if min_year_filter:
+                    print(f"- Filtered to {min_year_filter}+ during loading (reduced from {total_rows:,} rows)")
                 print(f"- Memory after chunked optimization: {optimized_mb:.1f} MB ({optimized_mb/1024:.1f} GB)")
 
             except ImportError:
@@ -4280,7 +4307,8 @@ def main():
                 after_rows = len(agg_df)
                 print(f"- Filtered: {before_rows:,} → {after_rows:,} rows ({(1-after_rows/before_rows)*100:.1f}% reduction)")
                 print(f"- New memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
-        elif getattr(args, 'min_year', None):
+        elif getattr(args, 'min_year', None) and not is_parquet:
+            # Only filter here for CSV files (Parquet already filtered during chunked load)
             min_year = args.min_year
             print(f"\n⚠️  Filtering to {min_year}+ seasons (post-merger/modern era)...")
             before_rows = len(agg_df)
