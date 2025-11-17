@@ -5560,7 +5560,15 @@ def main():
             # --- MODIFIED LOGIC FOR AGGREGATED DATA ---
             if '__LOADED_PLAYER_DATA' in globals():
                 agg_df = globals()['__LOADED_PLAYER_DATA']
-                window_df = agg_df[agg_df['season_end_year'].isin(padded_seasons)].copy()
+                # Use flexible year column detection
+                player_year_col = None
+                for col in ['season_end_year', 'season', 'game_year', 'year']:
+                    if col in agg_df.columns:
+                        player_year_col = col
+                        break
+                if player_year_col is None:
+                    raise KeyError(f"No year column found in aggregated data. Available: {list(agg_df.columns)[:20]}")
+                window_df = agg_df[agg_df[player_year_col].isin(padded_seasons)].copy()
                 
                 temp_player_csv = Path(f".window_agg_{start_year}_{end_year}_players.csv")
                 window_df.to_csv(temp_player_csv, index=False)
