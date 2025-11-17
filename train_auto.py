@@ -5615,6 +5615,11 @@ def main():
                 cols_to_keep = [c for c in essential_cols if c in window_df.columns]
                 window_df = window_df[cols_to_keep].copy()
 
+                # Recompute reboundsTotal from split (training code expects this column)
+                if 'reboundsDefensive' in window_df.columns and 'reboundsOffensive' in window_df.columns:
+                    window_df['reboundsTotal'] = window_df['reboundsDefensive'].fillna(0) + window_df['reboundsOffensive'].fillna(0)
+                    print(f"  • Recomputed reboundsTotal from Defensive + Offensive split")
+
                 temp_player_csv = Path(f".window_agg_{start_year}_{end_year}_players.csv")
                 window_df.to_csv(temp_player_csv, index=False)
                 player_data_path = temp_player_csv
