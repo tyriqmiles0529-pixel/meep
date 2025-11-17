@@ -4923,20 +4923,33 @@ def main():
                     interaction_count = 0
 
                     # Find relevant columns for interactions
-                    pts_cols = [c for c in feature_cols if 'points' in c.lower() and 'L5' in c]
-                    ast_cols = [c for c in feature_cols if 'assists' in c.lower() and 'L5' in c]
-                    reb_cols = [c for c in feature_cols if 'rebounds' in c.lower() or 'reboundsTotal' in c.lower() and 'L5' in c]
-                    min_cols = [c for c in feature_cols if 'minutes' in c.lower() or 'numMinutes' in c.lower() and 'L5' in c]
+                    # Priority: Look for rolling averages first, then raw stats
+                    pts_cols = [c for c in feature_cols if 'points' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    ast_cols = [c for c in feature_cols if 'assists' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    reb_cols = [c for c in feature_cols if ('rebounds' in c.lower() or 'reboundsTotal' in c.lower()) and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    min_cols = [c for c in feature_cols if ('minutes' in c.lower() or 'numMinutes' in c.lower()) and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
                     usg_cols = [c for c in feature_cols if 'usg' in c.lower() or 'usage' in c.lower()]
-                    tpm_cols = [c for c in feature_cols if 'three' in c.lower() and 'L5' in c]
+                    tpm_cols = [c for c in feature_cols if 'three' in c.lower() and 'made' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    fga_cols = [c for c in feature_cols if 'fieldgoalsattempted' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    tov_cols = [c for c in feature_cols if 'turnover' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    stl_cols = [c for c in feature_cols if 'steals' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    blk_cols = [c for c in feature_cols if 'blocks' in c.lower() and ('avg' in c.lower() or 'L5' in c or 'L10' in c)]
+                    fgpct_cols = [c for c in feature_cols if 'fieldgoalspercentage' in c.lower()]
 
-                    # Use first matching column or raw stat if available
+                    # Use first matching column or raw stat if available (fallback to raw stats)
                     pts_col = pts_cols[0] if pts_cols else ('points' if 'points' in feature_cols else None)
                     ast_col = ast_cols[0] if ast_cols else ('assists' if 'assists' in feature_cols else None)
                     reb_col = reb_cols[0] if reb_cols else ('reboundsTotal' if 'reboundsTotal' in feature_cols else None)
                     min_col = min_cols[0] if min_cols else ('numMinutes' if 'numMinutes' in feature_cols else None)
                     usg_col = usg_cols[0] if usg_cols else None
                     tpm_col = tpm_cols[0] if tpm_cols else ('threePointersMade' if 'threePointersMade' in feature_cols else None)
+                    fga_col = fga_cols[0] if fga_cols else ('fieldGoalsAttempted' if 'fieldGoalsAttempted' in feature_cols else None)
+                    tov_col = tov_cols[0] if tov_cols else ('turnovers' if 'turnovers' in feature_cols else None)
+                    stl_col = stl_cols[0] if stl_cols else ('steals' if 'steals' in feature_cols else None)
+                    blk_col = blk_cols[0] if blk_cols else ('blocks' if 'blocks' in feature_cols else None)
+                    fgpct_col = fgpct_cols[0] if fgpct_cols else ('fieldGoalsPercentage' if 'fieldGoalsPercentage' in feature_cols else None)
+
+                    print(f"   Found base columns: pts={pts_col}, ast={ast_col}, reb={reb_col}, min={min_col}")
 
                     # Create interaction features
                     if pts_col and ast_col:
@@ -4993,6 +5006,59 @@ def main():
                     if pts_col and ast_col and reb_col:
                         X_train['pts_ast_reb'] = X_train[pts_col] * X_train[ast_col] * X_train[reb_col]
                         X_val['pts_ast_reb'] = X_val[pts_col] * X_val[ast_col] * X_val[reb_col]
+                        interaction_count += 1
+
+                    # Additional high-value interactions
+                    # Scoring efficiency: FG% * volume
+                    if fgpct_col and fga_col:
+                        X_train['fg_efficiency_volume'] = X_train[fgpct_col] * X_train[fga_col]
+                        X_val['fg_efficiency_volume'] = X_val[fgpct_col] * X_val[fga_col]
+                        interaction_count += 1
+
+                    # Assist-to-turnover ratio (playmaking quality)
+                    if ast_col and tov_col:
+                        X_train['ast_to_tov'] = X_train[ast_col] / (X_train[tov_col] + 0.5)
+                        X_val['ast_to_tov'] = X_val[ast_col] / (X_val[tov_col] + 0.5)
+                        interaction_count += 1
+
+                    # Stock (steals + blocks) - defensive impact
+                    if stl_col and blk_col:
+                        X_train['stocks'] = X_train[stl_col] + X_train[blk_col]
+                        X_val['stocks'] = X_val[stl_col] + X_val[blk_col]
+                        interaction_count += 1
+
+                    # Minutes-adjusted scoring (accounts for opportunity)
+                    if pts_col and min_col and usg_col:
+                        X_train['pts_min_usg'] = X_train[pts_col] / (X_train[min_col] + 1e-6) * X_train[usg_col]
+                        X_val['pts_min_usg'] = X_val[pts_col] / (X_val[min_col] + 1e-6) * X_val[usg_col]
+                        interaction_count += 1
+
+                    # 3-point volume (3PM * usage indicates shooting role)
+                    if tpm_col and usg_col:
+                        X_train['tpm_x_usg'] = X_train[tpm_col] * X_train[usg_col]
+                        X_val['tpm_x_usg'] = X_val[tpm_col] * X_val[usg_col]
+                        interaction_count += 1
+
+                    # Rebound + assist (versatility indicator)
+                    if reb_col and ast_col:
+                        X_train['reb_plus_ast'] = X_train[reb_col] + X_train[ast_col]
+                        X_val['reb_plus_ast'] = X_val[reb_col] + X_val[ast_col]
+                        interaction_count += 1
+
+                    # Fantasy score proxy (common weighting)
+                    if pts_col and reb_col and ast_col and stl_col and blk_col and tov_col:
+                        X_train['fantasy_score'] = (X_train[pts_col] +
+                                                    1.2 * X_train[reb_col] +
+                                                    1.5 * X_train[ast_col] +
+                                                    3.0 * X_train[stl_col] +
+                                                    3.0 * X_train[blk_col] -
+                                                    X_train[tov_col])
+                        X_val['fantasy_score'] = (X_val[pts_col] +
+                                                  1.2 * X_val[reb_col] +
+                                                  1.5 * X_val[ast_col] +
+                                                  3.0 * X_val[stl_col] +
+                                                  3.0 * X_val[blk_col] -
+                                                  X_val[tov_col])
                         interaction_count += 1
 
                     print(f"   ✓ Added {interaction_count} interaction features")
