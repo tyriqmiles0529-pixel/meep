@@ -5496,8 +5496,17 @@ def main():
         else:
             seasons_df = games_df
 
-        all_seasons = sorted([int(s) for s in seasons_df["season_end_year"].dropna().unique()])
-        max_year = int(seasons_df["season_end_year"].max())
+        # Find the year column (could be season_end_year, season, or game_year)
+        year_col = None
+        for col_name in ['season_end_year', 'season', 'game_year', 'year']:
+            if col_name in seasons_df.columns:
+                year_col = col_name
+                break
+        if year_col is None:
+            raise KeyError(f"No year column found. Available: {list(seasons_df.columns)}")
+
+        all_seasons = sorted([int(s) for s in seasons_df[year_col].dropna().unique()])
+        max_year = int(seasons_df[year_col].max())
         window_size = 5
         player_windows_to_process = []
         
