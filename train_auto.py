@@ -5579,16 +5579,35 @@ def main():
                     'fieldGoalsMade', 'fieldGoalsAttempted', 'freeThrowsMade',
                     'freeThrowsAttempted', player_year_col
                 ]
+
+                # Add high-value basic stats
+                high_value_basic = [
+                    'reboundsDefensive', 'reboundsOffensive',  # Rebound type breakdown
+                    'fieldGoalsPercentage', 'threePointersPercentage', 'freeThrowsPercentage',  # Efficiency
+                    'foulsPersonal',  # Foul trouble
+                    'win'  # Game outcome (player impact on wins)
+                ]
+                essential_cols.extend(high_value_basic)
+
                 # Add ALL advanced stats (important for player archetypes)
                 adv_cols = [c for c in window_df.columns if c.startswith('adv_')]
                 essential_cols.extend(adv_cols)
+
                 # Add ALL per-100 stats (pace-adjusted, very predictive)
                 per100_cols = [c for c in window_df.columns if c.startswith('per100_')]
                 essential_cols.extend(per100_cols)
+
                 # Add key shooting stats (critical for 3PT predictions)
                 shoot_cols = [c for c in window_df.columns if c.startswith('shoot_') and
-                             any(x in c for x in ['percent_fga_from', 'fg_percent_from', 'corner', 'x3p'])]
+                             any(x in c for x in ['percent_fga_from', 'fg_percent_from', 'corner', 'x3p',
+                                                  'avg_dist', 'assisted_x2p', 'dunks'])]
                 essential_cols.extend(shoot_cols)
+
+                # Add high-value PBP stats (plus/minus, playmaking, finishing)
+                pbp_cols = [c for c in window_df.columns if c.startswith('pbp_') and
+                           any(x in c for x in ['plus_minus', 'points_generated', 'and1', 'turnover',
+                                               'fga_blocked', 'foul'])]
+                essential_cols.extend(pbp_cols)
                 cols_to_keep = [c for c in essential_cols if c in window_df.columns]
                 window_df = window_df[cols_to_keep].copy()
 
