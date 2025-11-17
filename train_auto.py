@@ -3922,6 +3922,12 @@ def main():
                     help="Start training from this year (e.g., 1974 for earliest priors data). Auto-determined if not set.")
     ap.add_argument("--memory-limit", action="store_true",
                     help="OPTIONAL: Filter to 2002+ data after chunked loading if still running out of memory. NOTE: Chunked loading is now ALWAYS enabled (loads all years by default).")
+    ap.add_argument("--add-rolling-features", action="store_true",
+                    help="Add L5/L10 rolling averages and trends. Improves predictions but uses ~400MB extra RAM. Recommended for Colab Pro.")
+    ap.add_argument("--add-opponent-features", action="store_true",
+                    help="Add opponent defensive adjustment features (how many points/ast/reb opponent typically allows)")
+    ap.add_argument("--add-minutes-context", action="store_true",
+                    help="Add minutes projection context (expected minutes, volatility, trend)")
 
     args = ap.parse_args()
 
@@ -4292,6 +4298,69 @@ def main():
         gc.collect()
 
         print(f"- Memory optimized. Current usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+
+        # =====================================================
+        # ADD TEMPORAL FEATURES (OPTIONAL - memory intensive)
+        # =====================================================
+        if args.add_rolling_features or args.add_opponent_features or args.add_minutes_context:
+            print(_sec("Adding Temporal Features"))
+
+            try:
+                from rolling_features import add_rolling_features, add_opponent_features, add_minutes_context
+
+                initial_cols = len(agg_df.columns)
+
+                if args.add_rolling_features:
+                    print("📈 Adding rolling window features (L5, L10)...")
+                    agg_df = add_rolling_features(
+                        agg_df,
+                        player_col='personId' if 'personId' in agg_df.columns else 'player_id',
+                        date_col='gameDate' if 'gameDate' in agg_df.columns else 'game_date',
+                        low_memory=True,  # Conservative memory usage
+                        verbose=True
+                    )
+                    gc.collect()
+
+                if args.add_opponent_features:
+                    print("🛡️ Adding opponent defensive features...")
+                    # Check for opponent column
+                    opp_col = None
+                    for col in ['opponent_team_id', 'opp_team_id', 'opponent_tid']:
+                        if col in agg_df.columns:
+                            opp_col = col
+                            break
+
+                    if opp_col:
+                        agg_df = add_opponent_features(
+                            agg_df,
+                            opponent_col=opp_col,
+                            position_col='adv_pos' if 'adv_pos' in agg_df.columns else None,
+                            verbose=True
+                        )
+                    else:
+                        print("  ⚠️ No opponent team column found. Skipping opponent features.")
+                    gc.collect()
+
+                if args.add_minutes_context:
+                    print("⏱️ Adding minutes context features...")
+                    agg_df = add_minutes_context(
+                        agg_df,
+                        minutes_col='numMinutes' if 'numMinutes' in agg_df.columns else 'minutes',
+                        player_col='personId' if 'personId' in agg_df.columns else 'player_id',
+                        verbose=True
+                    )
+                    gc.collect()
+
+                final_cols = len(agg_df.columns)
+                print(f"✓ Added {final_cols - initial_cols} temporal features")
+                print(f"  New memory usage: {agg_df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+
+            except ImportError as e:
+                print(f"⚠️ Could not import rolling_features module: {e}")
+                print("   Skipping temporal features. Make sure rolling_features.py is in the same directory.")
+            except Exception as e:
+                print(f"⚠️ Error adding temporal features: {e}")
+                print("   Continuing without temporal features...")
 
         # The aggregated file already contains priors for players
         priors_players = pd.DataFrame()
