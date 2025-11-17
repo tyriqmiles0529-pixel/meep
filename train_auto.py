@@ -4865,6 +4865,27 @@ def main():
 
                     # Extract features ONCE (not 5 times)
                     X_all = agg_df[feature_cols].values.astype('float32')
+
+                    # Handle NaN values - fill with column medians
+                    print(f"   Checking for NaN values...")
+                    nan_count = np.isnan(X_all).sum()
+                    if nan_count > 0:
+                        print(f"   Found {nan_count:,} NaN values, filling with column medians...")
+                        # Compute column medians (ignoring NaN)
+                        col_medians = np.nanmedian(X_all, axis=0)
+                        # Replace NaN with medians
+                        nan_mask = np.isnan(X_all)
+                        for col_idx in range(X_all.shape[1]):
+                            col_nan_mask = nan_mask[:, col_idx]
+                            if col_nan_mask.any():
+                                X_all[col_nan_mask, col_idx] = col_medians[col_idx]
+                        # Check for any remaining NaN (if entire column was NaN)
+                        remaining_nan = np.isnan(X_all).sum()
+                        if remaining_nan > 0:
+                            print(f"   Warning: {remaining_nan:,} NaN values remaining (entire columns NaN), filling with 0")
+                            X_all = np.nan_to_num(X_all, nan=0.0)
+                        print(f"   NaN handling complete")
+
                     X_train = X_all[train_idx]
                     X_val = X_all[val_idx]
 
@@ -4881,6 +4902,12 @@ def main():
                     for prop in required_props:
                         col_name = prop_to_col[prop]
                         y_all = agg_df[col_name].values.astype('float32')
+                        # Fill NaN targets with median
+                        nan_targets = np.isnan(y_all).sum()
+                        if nan_targets > 0:
+                            target_median = np.nanmedian(y_all)
+                            y_all = np.where(np.isnan(y_all), target_median, y_all)
+                            print(f"   {prop}: filled {nan_targets:,} NaN targets with median {target_median:.2f}")
                         y_train_dict[prop] = y_all[train_idx]
                         y_val_dict[prop] = y_all[val_idx]
                         print(f"   {prop}: extracted targets")
