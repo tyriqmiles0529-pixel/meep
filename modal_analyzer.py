@@ -72,6 +72,10 @@ def run_analyzer(use_ensemble: bool = True, use_minutes_first: bool = False):
     import os
     from pathlib import Path
 
+    # CRITICAL: Force CPU mode BEFORE any imports that might load torch
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
     sys.path.insert(0, "/root")
     os.chdir("/root")
 

@@ -60,6 +60,10 @@ def train_meta_learner(training_season: str = "2024-2025"):
     import sys
     import os
     from pathlib import Path
+
+    # CRITICAL: Force CPU mode BEFORE any torch imports
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
     import numpy as np
     import pandas as pd
     import pickle

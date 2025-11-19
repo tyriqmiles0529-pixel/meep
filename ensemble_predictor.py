@@ -14,6 +14,12 @@ import torch
 
 def load_all_window_models(model_cache_dir: str = "model_cache") -> Dict:
     """Load all 25 window models from cache"""
+    import os
+
+    # Force CPU mode BEFORE loading any models
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
     cache_path = Path(model_cache_dir)
 
     if not cache_path.exists():
@@ -47,7 +53,7 @@ def load_all_window_models(model_cache_dir: str = "model_cache") -> Dict:
             with open(model_file, 'rb') as f:
                 models = CPU_Unpickler(f).load()
 
-            # Force all to CPU
+            # Force all to CPU (critical for Modal)
             device = torch.device('cpu')
             if isinstance(models, dict):
                 for key, model in models.items():
@@ -55,8 +61,22 @@ def load_all_window_models(model_cache_dir: str = "model_cache") -> Dict:
                         model.use_gpu = False
                     if hasattr(model, 'device_name'):
                         model.device_name = 'cpu'
+                    if hasattr(model, 'device'):
+                        model.device = 'cpu'
+
+                    # Force TabNet to CPU
                     if hasattr(model, 'network') and hasattr(model.network, 'to'):
                         model.network.to(device)
+
+                    # Force TabNet regressor device
+                    if hasattr(model, 'tabnet') and hasattr(model.tabnet, 'device'):
+                        model.tabnet.device = 'cpu'
+                        if hasattr(model.tabnet, 'network'):
+                            model.tabnet.network.to(device)
+
+                    # Disable GPU flag in TabNet
+                    if hasattr(model, 'tabnet') and hasattr(model.tabnet, 'device_name'):
+                        model.tabnet.device_name = 'cpu'
 
             # Extract feature names
             feature_names = None
