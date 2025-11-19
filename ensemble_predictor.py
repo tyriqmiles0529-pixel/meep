@@ -88,10 +88,11 @@ def predict_with_window(window_models: Dict, X: pd.DataFrame, prop: str) -> np.n
         available_features = [f for f in model_features if f in X.columns]
         X_aligned = X[available_features].copy()
 
-        # Add missing features as zeros
-        for feat in model_features:
-            if feat not in X_aligned.columns:
-                X_aligned[feat] = 0
+        # Add missing features as zeros (use concat to avoid fragmentation)
+        missing_features = [f for f in model_features if f not in X_aligned.columns]
+        if missing_features:
+            missing_df = pd.DataFrame(0, index=X_aligned.index, columns=missing_features)
+            X_aligned = pd.concat([X_aligned, missing_df], axis=1)
 
         # Ensure column order matches training
         X_aligned = X_aligned[model_features]
