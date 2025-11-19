@@ -210,7 +210,7 @@ def train_meta_learner(training_season: str = "2024-2025"):
 
             # Get predictions from each window
             preds = []
-            for window_name, models in window_models.items():
+            for window_idx, (window_name, models) in enumerate(window_models.items()):
                 try:
                     # Create simple feature row (Kaggle CSV column names)
                     game_dict = game.to_dict() if hasattr(game, 'to_dict') else game
@@ -229,7 +229,16 @@ def train_meta_learner(training_season: str = "2024-2025"):
                     if isinstance(pred, np.ndarray):
                         pred = pred[0] if len(pred) > 0 else 0.0
                     preds.append(pred if pred is not None else 0.0)
+
+                    # Debug first window
+                    if idx == 1 and window_idx == 0:
+                        print(f"    [DEBUG] First prediction sample:")
+                        print(f"      Window: {window_name}")
+                        print(f"      Input features: {X.columns.tolist()}")
+                        print(f"      Prediction: {pred}")
                 except Exception as e:
+                    if idx == 1:
+                        print(f"    [!] Window {window_name} failed: {e}")
                     preds.append(0.0)
 
             if len(preds) < 20:
@@ -252,7 +261,9 @@ def train_meta_learner(training_season: str = "2024-2025"):
             actuals.append(actual)
 
             if idx % 500 == 0:
-                print(f"  Processed {idx}/{len(sample_df)} games...")
+                # Check if we're getting real predictions
+                non_zero = sum(1 for p in preds if p != 0.0)
+                print(f"  Processed {idx}/{len(sample_df)} games... (non-zero preds: {non_zero}/27)")
 
         print(f"  ✓ Collected {len(actuals):,} samples")
 
