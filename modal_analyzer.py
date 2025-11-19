@@ -60,8 +60,14 @@ image = (
         modal.Secret.from_name("theodds-api-key"),  # TheOdds API key for player props
     ]
 )
-def run_analyzer(use_ensemble: bool = True):
-    """Run RIQ analyzer with ensemble mode"""
+def run_analyzer(use_ensemble: bool = True, use_minutes_first: bool = False):
+    """
+    Run RIQ analyzer with ensemble mode and optional minutes-first pipeline.
+
+    Args:
+        use_ensemble: Use 27-window ensemble + meta-learner (default: True)
+        use_minutes_first: Use minutes-first pipeline (default: False, +5-10% accuracy)
+    """
     import sys
     import os
     from pathlib import Path
@@ -166,10 +172,12 @@ def run_analyzer(use_ensemble: bool = True):
     print(f"RUNNING ANALYZER (Ensemble: {use_ensemble})")
     print("="*70)
 
-    # Modify sys.argv to pass ensemble flag
+    # Modify sys.argv to pass flags
     sys.argv = ["riq_analyzer.py"]
     if use_ensemble:
         sys.argv.append("--use-ensemble")
+    if use_minutes_first:
+        sys.argv.append("--minutes-first")
 
     # Import riq_analyzer module but DON'T run it via import
     # Instead, call the run_analysis function directly
@@ -181,8 +189,11 @@ def run_analyzer(use_ensemble: bool = True):
     # Disable SHAP temporarily (causes NBA API timeouts)
     riq_analyzer.SHAP_AVAILABLE = False
 
-    # Initialize the MODEL with ensemble flag
-    riq_analyzer.MODEL = riq_analyzer.ModelPredictor(use_ensemble=use_ensemble)
+    # Initialize the MODEL with ensemble and minutes-first flags
+    riq_analyzer.MODEL = riq_analyzer.ModelPredictor(
+        use_ensemble=use_ensemble,
+        use_minutes_first=use_minutes_first
+    )
 
     # Run analysis directly (ensures output is captured)
     riq_analyzer.run_analysis()
@@ -212,24 +223,27 @@ def run_analyzer(use_ensemble: bool = True):
 
 
 @app.local_entrypoint()
-def main(use_ensemble: bool = True):
+def main(use_ensemble: bool = True, minutes_first: bool = False):
     """
     Run analyzer on Modal
 
     Args:
-        use_ensemble: Use 25-window ensemble + meta-learner (default: True)
+        use_ensemble: Use 27-window ensemble + meta-learner (default: True)
+        minutes_first: Use minutes-first pipeline (default: False, +5-10% accuracy)
     """
     print("="*70)
     print("NBA ANALYZER ON MODAL")
     print("="*70)
     print(f"\nEnsemble mode: {use_ensemble}")
+    if minutes_first:
+        print(f"Minutes-first mode: {minutes_first} (+5-10% accuracy expected)")
     print("\nResources:")
     print("  - CPU: 8 cores")
     print("  - RAM: 16GB")
     print("  - Timeout: 1 hour")
     print("="*70)
 
-    result = run_analyzer.remote(use_ensemble=use_ensemble)
+    result = run_analyzer.remote(use_ensemble=use_ensemble, use_minutes_first=minutes_first)
 
     print("\n" + "="*70)
     print("RESULT")

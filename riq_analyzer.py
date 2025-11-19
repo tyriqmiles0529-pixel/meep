@@ -2517,12 +2517,14 @@ MODEL_RMSE = METADATA["rmse"]
 SPREAD_SIGMA = METADATA["spread_sigma"]
 
 class ModelPredictor:
-    def __init__(self, use_ensemble: bool = False):
+    def __init__(self, use_ensemble: bool = False, use_minutes_first: bool = False):
         """
         Args:
             use_ensemble: Use 27-window ensemble + meta-learner instead of single models
+            use_minutes_first: Use minutes-first prediction pipeline (predict minutes, then rates)
         """
         self.use_ensemble = use_ensemble
+        self.use_minutes_first = use_minutes_first
         self.ensemble_predictor = None
 
         self.player_models: Dict[str, object] = {}
@@ -2547,13 +2549,17 @@ class ModelPredictor:
                 print("[*] Loading ensemble predictor (27 windows + meta-learner)...")
                 self.ensemble_predictor = EnsemblePredictor(
                     model_cache_dir="model_cache",
-                    use_meta_learner=True
+                    use_meta_learner=True,
+                    use_minutes_first=use_minutes_first
                 )
                 print(f"[OK] Ensemble loaded: {len(self.ensemble_predictor.window_models)} windows")
                 if self.ensemble_predictor.meta_learner:
                     print("[OK] Meta-learner active (intelligent weighting)")
                 else:
                     print("[OK] Using simple averaging (meta-learner not available)")
+
+                if use_minutes_first:
+                    print("[OK] Minutes-first pipeline enabled (minutes → rates → totals)")
             except Exception as e:
                 print(f"[!] Failed to load ensemble: {e}")
                 print("    Falling back to single models")
@@ -4208,13 +4214,18 @@ if __name__ == "__main__":
     # Parse CLI arguments
     parser = argparse.ArgumentParser(description="RIQ NBA Props Analyzer")
     parser.add_argument('--use-ensemble', action='store_true',
-                       help='Use 25-window ensemble + meta-learner (higher accuracy, slower)')
+                       help='Use 27-window ensemble + meta-learner (higher accuracy, slower)')
+    parser.add_argument('--minutes-first', action='store_true',
+                       help='Use minutes-first pipeline (predict minutes → rates → totals, +5-10%% accuracy)')
     parser.add_argument('--settle-bets', action='store_true',
                        help='Settle pending bets and exit')
     args = parser.parse_args()
 
-    # Initialize MODEL with ensemble flag
-    MODEL = ModelPredictor(use_ensemble=args.use_ensemble)
+    # Initialize MODEL with ensemble and minutes-first flags
+    MODEL = ModelPredictor(
+        use_ensemble=args.use_ensemble,
+        use_minutes_first=args.minutes_first
+    )
 
     # Settle bets if requested
     if args.settle_bets:

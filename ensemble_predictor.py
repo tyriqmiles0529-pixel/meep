@@ -145,17 +145,24 @@ def predict_with_window(window_models: Dict, X: pd.DataFrame, prop: str) -> np.n
 
 class EnsemblePredictor:
     """
-    Ensemble predictor using all 25 windows + meta-learner
+    Ensemble predictor using all 27 windows + meta-learner
+
+    Supports two prediction modes:
+    1. Direct: Predict stats directly (points, rebounds, assists, threes)
+    2. Minutes-first: Predict minutes, then rates (PPM, APM, RPM), then multiply
     """
 
-    def __init__(self, model_cache_dir: str = "model_cache", use_meta_learner: bool = True):
+    def __init__(self, model_cache_dir: str = "model_cache", use_meta_learner: bool = True,
+                 use_minutes_first: bool = False):
         """
         Args:
             model_cache_dir: Directory with window models
             use_meta_learner: Use meta-learner for weighting (if available)
+            use_minutes_first: Use minutes-first prediction pipeline (default: False)
         """
         self.model_cache_dir = model_cache_dir
         self.use_meta_learner = use_meta_learner
+        self.use_minutes_first = use_minutes_first
 
         # Load all window models
         self.window_models = load_all_window_models(model_cache_dir)
@@ -253,7 +260,54 @@ class EnsemblePredictor:
         return context
 
     def predict_all_props(self, X: pd.DataFrame, player_context: Optional[pd.DataFrame] = None) -> Dict[str, np.ndarray]:
-        """Predict all props at once"""
+        """
+        Predict all props at once.
+
+        If use_minutes_first=True, uses minutes-first pipeline:
+        1. Predict minutes
+        2. Predict rate stats (PPM, APM, RPM, 3PM)
+        3. Multiply: stat = minutes * rate
+
+        Otherwise, predicts stats directly.
+        """
+        if self.use_minutes_first:
+            # Minutes-first pipeline
+            try:
+                # Step 1: Predict minutes
+                minutes = self.predict(X, 'minutes', player_context)
+
+                # Step 2: Derive rate stats from totals (fallback method)
+                # Get total predictions first
+                points_total = self.predict(X, 'points', player_context)
+                assists_total = self.predict(X, 'assists', player_context)
+                rebounds_total = self.predict(X, 'rebounds', player_context)
+                threes_total = self.predict(X, 'threes', player_context)
+
+                # Derive rates (avoid division by zero)
+                minutes_safe = np.maximum(minutes, 1.0)
+                ppm = points_total / minutes_safe
+                apm = assists_total / minutes_safe
+                rpm = rebounds_total / minutes_safe
+                threepm = threes_total / minutes_safe
+
+                # Step 3: Multiply minutes * rates
+                return {
+                    'minutes': minutes,
+                    'points': minutes * ppm,
+                    'rebounds': minutes * rpm,
+                    'assists': minutes * apm,
+                    'threes': minutes * threepm,
+                    # Include rates for inspection
+                    'ppm': ppm,
+                    'apm': apm,
+                    'rpm': rpm,
+                    'threepm': threepm
+                }
+            except Exception as e:
+                print(f"[!] Minutes-first failed: {e}, falling back to direct prediction")
+                # Fallback to direct if minutes-first fails
+
+        # Direct prediction (original behavior)
         props = ['points', 'rebounds', 'assists', 'threes', 'minutes']
 
         predictions = {}
