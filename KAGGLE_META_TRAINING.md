@@ -22,14 +22,21 @@
 First, download window models from Modal to your local machine:
 
 ```bash
-# Download all window models from Modal
-modal volume get nba-models model_cache/ ./kaggle_models/
+# Create local directory
+mkdir -p kaggle_models
 
-# You should see:
-# - player_models_1947_1949.pkl
-# - player_models_1950_1952.pkl
-# - ... (27 total)
+# Download all window models using Python script
+python download_models_from_modal.py
+
+# Note: You may see Unicode encoding errors in terminal output,
+# but files will download successfully. Ignore the error messages.
 ```
+
+The script will download all 27 window models (~400MB total) to `./kaggle_models/`:
+- player_models_1947_1949.pkl (7.5 MB)
+- player_models_1950_1952.pkl (11 MB)
+- ... (27 total)
+- meta_learner_2025_2026.pkl (406 bytes - current meta-learner)
 
 ### 2. Create Kaggle Dataset for Window Models
 
