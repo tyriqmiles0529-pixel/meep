@@ -18,39 +18,172 @@ from meta_learner_ensemble import ContextAwareMetaLearner, extract_player_contex
 
 # Configuration
 TRAINING_SEASON = '2024-2025'  # Last complete season
-DATA_FILE = 'aggregated_nba_data.parquet'
+DATA_FILE = 'PlayerStatistics.csv'  # Kaggle CSV
 OUTPUT_FILE = 'model_cache/meta_learner_2025_2026.pkl'
 MIN_SAMPLES_PER_PROP = 100  # Minimum games needed to train
 
 
-def load_training_data(season: str = TRAINING_SEASON) -> pd.DataFrame:
+def generate_features_for_prediction(df_games):
     """
-    Load historical games from aggregated dataset.
+    Generate features from PlayerStatistics.csv that match training features.
+    This produces up to 182 features; early windows will align to their subset.
+
+    Args:
+        df_games: DataFrame with player game stats from Kaggle CSV
 
     Returns:
-        DataFrame with columns: player, game_date, points, rebounds, assists, threes, etc.
+        DataFrame with ~80-180 features per game
+    """
+
+    # Sort by player and date
+    df = df_games.sort_values(['playerId', 'gameDate']).copy()
+
+    # Basic stats (already in CSV)
+    features = pd.DataFrame(index=df.index)
+
+    # Direct stats
+    for col in ['points', 'assists', 'reboundsTotal', 'threePointersMade',
+                'numMinutes', 'fieldGoalsAttempted', 'fieldGoalsMade',
+                'freeThrowsAttempted', 'freeThrowsMade', 'turnovers',
+                'steals', 'blocks', 'reboundsDefensive', 'reboundsOffensive']:
+        if col in df.columns:
+            features[col] = df[col].fillna(0)
+
+    # Rolling averages (L3, L5, L7, L10)
+    for window in [3, 5, 7, 10]:
+        for stat in ['points', 'assists', 'reboundsTotal', 'threePointersMade', 'numMinutes']:
+            if stat in df.columns:
+                features[f'{stat}_L{window}_avg'] = df.groupby('playerId')[stat].transform(
+                    lambda x: x.shift(1).rolling(window, min_periods=1).mean()
+                ).fillna(0)
+
+    # Shooting percentages
+    if 'fieldGoalsMade' in df.columns and 'fieldGoalsAttempted' in df.columns:
+        features['fg_pct'] = (df['fieldGoalsMade'] / df['fieldGoalsAttempted'].replace(0, 1)).fillna(0)
+        features['fg_pct_L5'] = df.groupby('playerId')['fg_pct'].transform(
+            lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+        ).fillna(0)
+
+    if 'freeThrowsMade' in df.columns and 'freeThrowsAttempted' in df.columns:
+        features['ft_pct'] = (df['freeThrowsMade'] / df['freeThrowsAttempted'].replace(0, 1)).fillna(0)
+
+    # Usage proxy
+    if 'fieldGoalsAttempted' in df.columns and 'freeThrowsAttempted' in df.columns:
+        features['usage'] = (df['fieldGoalsAttempted'].fillna(0) +
+                           df['freeThrowsAttempted'].fillna(0) * 0.44)
+        features['usage_L5'] = df.groupby('playerId')['usage'].transform(
+            lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+        ).fillna(0)
+
+    # Per-minute stats
+    if 'numMinutes' in df.columns:
+        minutes_safe = df['numMinutes'].replace(0, 1)
+        for stat in ['points', 'assists', 'reboundsTotal']:
+            if stat in df.columns:
+                features[f'{stat}_per_min'] = (df[stat] / minutes_safe).fillna(0)
+                features[f'{stat}_per_min_L5'] = df.groupby('playerId')[f'{stat}_per_min'].transform(
+                    lambda x: x.shift(1).rolling(5, min_periods=1).mean()
+                ).fillna(0)
+
+    # Home/away
+    if 'home' in df.columns:
+        features['home'] = df['home'].fillna(0).astype(int)
+
+    # Days rest (if we have gameDate)
+    if 'gameDate' in df.columns:
+        df['gameDate'] = pd.to_datetime(df['gameDate'])
+        features['days_rest'] = df.groupby('playerId')['gameDate'].diff().dt.days.fillna(2).clip(0, 7)
+
+    # Fill any remaining NaN
+    features = features.fillna(0)
+
+    return features
+
+
+def load_player_statistics_csv(csv_path: str = 'PlayerStatistics.csv') -> pd.DataFrame:
+    """
+    Load PlayerStatistics.csv with robust column handling.
+
+    Args:
+        csv_path: Path to the Kaggle CSV file
+
+    Returns:
+        DataFrame with player game stats
+    """
+    if not Path(csv_path).exists():
+        raise FileNotFoundError(f"PlayerStatistics.csv not found at {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    print(f"Loaded {len(df):,} rows from {csv_path}")
+    print(f"Columns: {list(df.columns)[:20]}...")
+    return df
+
+
+def filter_to_season(df: pd.DataFrame, season: str = '2024-2025') -> pd.DataFrame:
+    """
+    Filter DataFrame to a specific NBA season.
+
+    Args:
+        df: DataFrame with gameDate column
+        season: Season string like '2024-2025'
+
+    Returns:
+        Filtered DataFrame
+    """
+    if 'gameDate' not in df.columns:
+        raise ValueError("gameDate column required for season filtering")
+
+    df['gameDate'] = pd.to_datetime(df['gameDate'], errors='coerce')
+
+    # NBA season logic: Oct 2024 - Jun 2025 for '2024-2025'
+    if season == '2024-2025':
+        start_date = pd.to_datetime('2024-10-01')
+        end_date = pd.to_datetime('2025-06-30')
+    elif season == '2023-2024':
+        start_date = pd.to_datetime('2023-10-01')
+        end_date = pd.to_datetime('2024-06-30')
+    else:
+        # Generic logic for YYYY-YYYY format
+        start_year = int(season.split('-')[0])
+        start_date = pd.to_datetime(f'{start_year}-10-01')
+        end_date = pd.to_datetime(f'{start_year+1}-06-30')
+
+    season_df = df[
+        (df['gameDate'] >= start_date) & (df['gameDate'] <= end_date)
+    ].copy().reset_index(drop=True)
+
+    print(f"Filtered to {season}: {len(season_df):,} rows")
+    print(f"Date range: {season_df['gameDate'].min()} to {season_df['gameDate'].max()}")
+
+    return season_df
+
+
+def load_training_data(season: str = TRAINING_SEASON) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Load PlayerStatistics.csv, filter to the target season, and generate features.
+
+    Returns:
+        Tuple of (df_raw, df_features)
+            - df_raw: Original CSV with actuals for targets/context
+            - df_features: Engineered features for window models
     """
     print(f"\n{'='*70}")
     print(f"LOADING TRAINING DATA: {season}")
     print(f"{'='*70}")
 
-    data_path = Path(DATA_FILE)
-    if not data_path.exists():
-        raise FileNotFoundError(f"Data file not found: {DATA_FILE}")
+    # Load the Kaggle CSV
+    df_raw = load_player_statistics_csv(DATA_FILE)
 
-    print(f"  Reading: {data_path}")
-    df = pd.read_parquet(data_path)
+    # Filter to the target season
+    df_raw = filter_to_season(df_raw, season)
 
-    # Filter to training season
-    if 'SEASON' in df.columns:
-        df = df[df['SEASON'] == season]
-    elif 'season' in df.columns:
-        df = df[df['season'] == season]
+    # Generate features for window models
+    print("\n[*] Generating features for window models...")
+    df_features = generate_features_for_prediction(df_raw)
+    print(f"Generated {len(df_features.columns)} features")
+    print(f"Feature sample: {list(df_features.columns)[:20]}")
 
-    print(f"  Games loaded: {len(df):,}")
-    print(f"  Date range: {df['GAME_DATE'].min()} to {df['GAME_DATE'].max()}" if 'GAME_DATE' in df.columns else "")
-
-    return df
+    return df_raw, df_features
 
 
 def create_features_for_game(game_row: pd.Series, window_models: Dict) -> pd.DataFrame:
