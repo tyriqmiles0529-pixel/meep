@@ -1,0 +1,11 @@
+pandas
+numpy
+pyarrow
+lightgbm
+pytorch-tabnet
+torch
+scikit-learn
+scipy
+requests
+rapidfuzz
+tqdm

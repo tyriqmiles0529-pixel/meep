@@ -90,16 +90,14 @@ class HybridMultiTaskPlayer:
             'device_name': 'cuda' if self.use_gpu else 'cpu'
         }
 
-        # Add optimizer if available
+        # Add optimizer if available (NO scheduler - TabNet callback incompatible)
         if TABNET_AVAILABLE:
             opt_params = {'lr': 2e-2, 'weight_decay': 1e-5}
-            sched_params = {'mode': 'min', 'patience': 5, 'factor': 0.5}
 
             for params_dict in [self.correlated_tabnet_params, self.independent_tabnet_params]:
                 params_dict['optimizer_fn'] = torch.optim.AdamW
                 params_dict['optimizer_params'] = opt_params
-                params_dict['scheduler_fn'] = torch.optim.lr_scheduler.ReduceLROnPlateau
-                params_dict['scheduler_params'] = sched_params
+                # Don't use scheduler - TabNet's callback doesn't pass metrics to step()
 
         # LightGBM params (same for all)
         self.lgbm_params = {
@@ -205,9 +203,9 @@ class HybridMultiTaskPlayer:
             effective_batch = batch_size
             effective_virtual = 256
 
-        # Reduce epochs for large datasets (early stopping will kick in anyway)
-        effective_epochs = min(correlated_epochs, 25) if n_samples > 1_000_000 else correlated_epochs
-        effective_patience = 3  # Aggressive early stopping to save time
+        # Use user-specified epochs with reasonable patience
+        effective_epochs = correlated_epochs
+        effective_patience = 5  # Allow more epochs before early stopping
 
         self.correlated_tabnet.fit(
             X_np, y_composite_2d,
@@ -222,14 +220,16 @@ class HybridMultiTaskPlayer:
 
         print(f"✓ Shared TabNet trained - 32-dim embeddings")
 
-        # Extract shared embeddings
+        # Extract shared embeddings (use predictions as embeddings)
         print("\nExtracting shared embeddings...")
-        _, train_embeddings = self.correlated_tabnet.predict(X_np, return_embeddings=True)
+        train_preds = self.correlated_tabnet.predict(X_np)
+        train_embeddings = train_preds.reshape(-1, 1) if train_preds.ndim == 1 else train_preds
         X_train_combined = np.hstack([X_np, train_embeddings])
         print(f"✓ Train: {X_np.shape} → {X_train_combined.shape}")
 
         if X_val is not None:
-            _, val_embeddings = self.correlated_tabnet.predict(X_val_np, return_embeddings=True)
+            val_preds = self.correlated_tabnet.predict(X_val_np)
+            val_embeddings = val_preds.reshape(-1, 1) if val_preds.ndim == 1 else val_preds
             X_val_combined = np.hstack([X_val_np, val_embeddings])
             print(f"✓ Val: {X_val_np.shape} → {X_val_combined.shape}")
 
@@ -288,15 +288,15 @@ class HybridMultiTaskPlayer:
             # Scale batch sizes for large datasets
             n_samples = len(X_np)
             if n_samples > 1_000_000:
-                effective_batch = min(batch_size * 4, 16384)  # 16K batch (safer for T4 GPU)
+                effective_batch = min(batch_size * 4, 16384)  # 16K batch (safer for GPU)
                 effective_virtual = min(512, effective_batch // 4)
-                effective_epochs = min(independent_epochs, 20)  # Fewer epochs for large data
-                effective_patience = 3  # Aggressive early stopping to save time
             else:
                 effective_batch = batch_size
                 effective_virtual = 256
-                effective_epochs = independent_epochs
-                effective_patience = 3  # Aggressive early stopping to save time
+
+            # Use user-specified epochs with reasonable patience
+            effective_epochs = independent_epochs
+            effective_patience = 5  # Allow more epochs before early stopping
 
             tabnet.fit(
                 X_np, y_train_2d,
@@ -310,11 +310,13 @@ class HybridMultiTaskPlayer:
             print(f"    (max_epochs={effective_epochs}, patience={effective_patience})")
 
             # Get embeddings
-            _, train_emb = tabnet.predict(X_np, return_embeddings=True)
+            train_preds = tabnet.predict(X_np)
+            train_emb = train_preds.reshape(-1, 1) if train_preds.ndim == 1 else train_preds
             X_train_comb = np.hstack([X_np, train_emb])
 
             if X_val is not None:
-                _, val_emb = tabnet.predict(X_val_np, return_embeddings=True)
+                val_preds = tabnet.predict(X_val_np)
+                val_emb = val_preds.reshape(-1, 1) if val_preds.ndim == 1 else val_preds
                 X_val_comb = np.hstack([X_val_np, val_emb])
 
             # Train LightGBM
@@ -409,7 +411,8 @@ class HybridMultiTaskPlayer:
 
         # === Correlated props (shared embeddings) ===
         if self.correlated_tabnet is not None:
-            _, corr_embeddings = self.correlated_tabnet.predict(X_np, return_embeddings=True)
+            corr_preds = self.correlated_tabnet.predict(X_np)
+            corr_embeddings = corr_preds.reshape(-1, 1) if corr_preds.ndim == 1 else corr_preds
             X_corr_combined = np.hstack([X_np, corr_embeddings])
         else:
             X_corr_combined = X_np
@@ -428,7 +431,8 @@ class HybridMultiTaskPlayer:
                 model_dict = self.independent_models[prop]
 
                 if 'tabnet' in model_dict and model_dict['tabnet'] is not None:
-                    _, ind_embeddings = model_dict['tabnet'].predict(X_np, return_embeddings=True)
+                    ind_preds = model_dict['tabnet'].predict(X_np)
+                    ind_embeddings = ind_preds.reshape(-1, 1) if ind_preds.ndim == 1 else ind_preds
                     X_ind_combined = np.hstack([X_np, ind_embeddings])
                 else:
                     X_ind_combined = X_np

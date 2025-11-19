@@ -17,12 +17,10 @@ WORKDIR /app
 # Copy training script
 COPY train_auto.py /app/
 COPY neural_hybrid.py /app/
-COPY keys.py /app/
 
-# Set Kaggle credentials from environment
-# (Will be passed via Vertex AI secret manager)
-ENV KAGGLE_USERNAME=""
-ENV KAGGLE_KEY=""
+# Set Kaggle credentials
+ENV KAGGLE_USERNAME="tyriqmiles"
+ENV KAGGLE_KEY="d476adafcfdd74ecbf778e5cb02d31ef"
 
 # Entry point
 ENTRYPOINT ["python", "train_auto.py"]

@@ -1,0 +1,124 @@
+═══════════════════════════════════════════════════════════════════════
+  INSTALL DEPENDENCIES IN GOOGLE COLAB
+═══════════════════════════════════════════════════════════════════════
+
+
+════════════════════════════════════════════════════════════════════════
+OPTION 1: AGGREGATION SCRIPT ONLY (5-10 seconds)
+════════════════════════════════════════════════════════════════════════
+
+If you're just running create_aggregated_dataset.py:
+
+!pip install pandas numpy tqdm rapidfuzz
+
+
+════════════════════════════════════════════════════════════════════════
+OPTION 2: FULL TRAINING PIPELINE (30-60 seconds)
+════════════════════════════════════════════════════════════════════════
+
+If you're training TabNet + LightGBM models:
+
+!pip install pandas numpy scikit-learn lightgbm pytorch-tabnet tqdm rapidfuzz torch
+
+
+════════════════════════════════════════════════════════════════════════
+OPTION 3: EVERYTHING INCLUDING H2O AUTOML (60-90 seconds)
+════════════════════════════════════════════════════════════════════════
+
+Complete stack with H2O AutoML:
+
+!pip install pandas numpy scikit-learn lightgbm pytorch-tabnet tqdm rapidfuzz torch h2o
+
+
+════════════════════════════════════════════════════════════════════════
+STEP-BY-STEP COLAB SETUP
+════════════════════════════════════════════════════════════════════════
+
+# 1. Check GPU availability (optional but recommended)
+import torch
+print("GPU available:", torch.cuda.is_available())
+print("GPU name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None")
+
+# 2. Install dependencies (choose option above)
+!pip install pandas numpy scikit-learn lightgbm pytorch-tabnet tqdm rapidfuzz torch
+
+# 3. Verify installations
+import pandas as pd
+import numpy as np
+import lightgbm as lgb
+from pytorch_tabnet.tab_model import TabNetRegressor
+import torch
+from tqdm import tqdm
+from rapidfuzz import fuzz
+
+print("\n✅ All dependencies installed successfully!")
+print(f"Pandas: {pd.__version__}")
+print(f"NumPy: {np.__version__}")
+print(f"LightGBM: {lgb.__version__}")
+print(f"PyTorch: {torch.__version__}")
+
+
+════════════════════════════════════════════════════════════════════════
+INDIVIDUAL PACKAGE BREAKDOWN
+════════════════════════════════════════════════════════════════════════
+
+Core data processing:
+  !pip install pandas numpy
+
+Machine learning:
+  !pip install scikit-learn
+
+Tree models:
+  !pip install lightgbm
+
+Deep learning (TabNet):
+  !pip install torch pytorch-tabnet
+
+Fuzzy matching (for aggregation):
+  !pip install rapidfuzz
+
+Progress bars:
+  !pip install tqdm
+
+AutoML (optional):
+  !pip install h2o
+
+
+════════════════════════════════════════════════════════════════════════
+QUICK START: COPY-PASTE THIS INTO COLAB
+════════════════════════════════════════════════════════════════════════
+
+# Install all dependencies
+!pip install -q pandas numpy scikit-learn lightgbm pytorch-tabnet tqdm rapidfuzz torch
+
+# Verify GPU
+import torch
+print("🚀 GPU:", "Available ✅" if torch.cuda.is_available() else "Not available ⚠️")
+
+# Upload files
+from google.colab import files
+print("\n📤 Upload your files now...")
+uploaded = files.upload()
+
+# Unzip priors
+!unzip -q priors_data.zip
+
+# Run aggregation
+!python create_aggregated_dataset.py \
+  --player-csv PlayerStatistics.csv \
+  --priors-dir priors_data \
+  --output aggregated_nba_data.csv \
+  --compression gzip
+
+print("\n✅ Done! aggregated_nba_data.csv.gzip is ready for training!")
+
+
+════════════════════════════════════════════════════════════════════════
+NOTES
+════════════════════════════════════════════════════════════════════════
+
+• Use -q flag for quiet installation (less output)
+• Colab already has pandas, numpy, scikit-learn pre-installed
+• Only need to install: lightgbm, pytorch-tabnet, torch, rapidfuzz, tqdm
+• GPU is automatically detected if available (no config needed)
+• Installations persist within the same Colab session

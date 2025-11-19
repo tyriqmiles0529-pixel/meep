@@ -20,6 +20,9 @@ priors_data/
 # Data files
 data/
 *.csv
+*.parquet
+*.gzip
+*.zip
 
 # Keep only key result files
 *.json

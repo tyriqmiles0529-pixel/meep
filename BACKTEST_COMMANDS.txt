@@ -1,0 +1,179 @@
+=============================================================================
+NBA PREDICTOR - BACKTEST QUICK COMMANDS
+=============================================================================
+
+AUTOMATED WORKFLOW (RECOMMENDED)
+---------------------------------
+
+# 1. Download models and check for overlaps
+python prepare_backtest.py --test-start 2024 --test-end 2025 --download
+
+# 2. Delete overlapping windows
+python prepare_backtest.py --test-start 2024 --test-end 2025
+
+# 3. Retrain if needed (use suggested command from output)
+modal run modal_train.py --window-start 2019 --window-end 2023
+
+# 4. Download retrained model
+modal volume get nba-models /models/player_models_2019_2023.pkl model_cache/player_models_2019_2023.pkl
+
+# 5. Run backtest
+python backtest_2024_2025.py
+
+
+MANUAL WORKFLOW
+---------------------------------
+
+# Download all models from Modal
+modal volume get nba-models /models/ model_cache/ --recursive
+
+# List local models
+dir model_cache\player_models_*.pkl
+
+# Delete specific window (PowerShell)
+del model_cache\player_models_2022_2026.pkl
+del model_cache\player_models_2022_2026_meta.json
+
+# Or delete all windows after 2023 (PowerShell)
+Get-ChildItem model_cache\player_models_*.pkl | Where-Object { $_.Name -match '202[4-9]' } | Remove-Item
+Get-ChildItem model_cache\player_models_*_meta.json | Where-Object { $_.Name -match '202[4-9]' } | Remove-Item
+
+# Retrain window (2019-2023, no 2024 data)
+modal run modal_train.py --window-start 2019 --window-end 2023
+
+# Download retrained
+modal volume get nba-models /models/player_models_2019_2023.pkl model_cache/player_models_2019_2023.pkl
+modal volume get nba-models /models/player_models_2019_2023_meta.json model_cache/player_models_2019_2023_meta.json
+
+# Run backtest
+python backtest_2024_2025.py
+
+
+MODAL COMMANDS
+---------------------------------
+
+# List models on Modal
+modal volume ls nba-models /models/
+
+# Download single model
+modal volume get nba-models /models/player_models_2019_2023.pkl model_cache/player_models_2019_2023.pkl
+
+# Download all models
+modal volume get nba-models /models/ model_cache/ --recursive
+
+# Delete from Modal (if needed)
+modal volume rm nba-models /models/player_models_2022_2026.pkl
+
+# Check Modal volumes
+modal volume list
+
+
+VERIFICATION COMMANDS
+---------------------------------
+
+# Check local models
+dir model_cache
+
+# View metadata
+type model_cache\player_models_2019_2023_meta.json
+
+# Quick test load
+python -c "import pickle; m = pickle.load(open('model_cache/player_models_2019_2023.pkl', 'rb')); print(f'Loaded: {type(m)}')"
+
+# Check data availability for backtest period
+python -c "import pandas as pd; df = pd.read_parquet('aggregated_nba_data.parquet'); df['gameDate'] = pd.to_datetime(df['gameDate']); print(f'Games in Oct 2024 - Apr 2025: {len(df[(df[\"gameDate\"] >= \"2024-10-01\") & (df[\"gameDate\"] <= \"2025-04-15\")])}')"
+
+
+BACKTEST ANALYSIS
+---------------------------------
+
+# View backtest results
+type backtest_ledger.csv
+
+# Quick stats (Python)
+python -c "import pandas as pd; df = pd.read_csv('backtest_ledger.csv'); print(f'Bets: {len(df)}, Win rate: {(df[\"result\"] == \"win\").mean():.2%}, Profit: ${df[\"profit\"].sum():,.2f}')"
+
+# Detailed analysis
+python -c "
+import pandas as pd
+df = pd.read_csv('backtest_ledger.csv')
+print('\n=== BACKTEST SUMMARY ===')
+print(f'Total bets: {len(df)}')
+print(f'Wins: {(df[\"result\"] == \"win\").sum()}')
+print(f'Losses: {(df[\"result\"] == \"loss\").sum()}')
+print(f'Win rate: {(df[\"result\"] == \"win\").mean():.2%}')
+print(f'Total profit: ${df[\"profit\"].sum():,.2f}')
+print(f'ROI: {(df[\"profit\"].sum() / df[\"stake\"].sum()):.2%}')
+print('\n=== BY PROP ===')
+print(df.groupby('prop').agg({'result': lambda x: (x == 'win').mean(), 'profit': 'sum'}))
+"
+
+
+GAME MODELS
+---------------------------------
+
+# Train game models separately
+modal run modal_game_training.py --start-year 2002 --end-year 2023
+
+# Download game models
+modal volume get nba-models /models/game_models_2002_2023.pkl model_cache/game_models_2002_2023.pkl
+modal volume get nba-models /models/game_models_2002_2023_meta.json model_cache/game_models_2002_2023_meta.json
+
+
+COMMON SCENARIOS
+---------------------------------
+
+Scenario 1: Backtest 2024-2025 season
+  1. python prepare_backtest.py --test-start 2024 --test-end 2025 --download
+  2. modal run modal_train.py --window-start 2019 --window-end 2023
+  3. python prepare_backtest.py --test-start 2024 --test-end 2025
+  4. python backtest_2024_2025.py
+
+Scenario 2: Backtest 2023-2024 season
+  1. python prepare_backtest.py --test-start 2023 --test-end 2024 --download
+  2. modal run modal_train.py --window-start 2018 --window-end 2022
+  3. python prepare_backtest.py --test-start 2023 --test-end 2024
+  4. python backtest_engine.py --start-date 2023-10-01 --end-date 2024-04-15
+
+Scenario 3: Fresh start (no local models)
+  1. modal volume get nba-models /models/ model_cache/ --recursive
+  2. python prepare_backtest.py --test-start 2024 --test-end 2025
+  3. python backtest_2024_2025.py
+
+
+TROUBLESHOOTING
+---------------------------------
+
+Issue: Modal authentication failed
+  → modal token new
+
+Issue: No models found
+  → modal volume get nba-models /models/ model_cache/ --recursive
+
+Issue: Data leakage warning
+  → Delete recent windows with prepare_backtest.py
+  → Retrain with earlier end year
+
+Issue: No predictions made
+  → Check data: python -c "import pandas as pd; df = pd.read_parquet('aggregated_nba_data.parquet'); print(df['gameDate'].min(), df['gameDate'].max())"
+
+Issue: Model load error
+  → Check pickle file: python -c "import pickle; pickle.load(open('model_cache/player_models_2019_2023.pkl', 'rb'))"
+
+
+CLEANUP
+---------------------------------
+
+# Remove all local models
+rd /s /q model_cache
+
+# Remove specific window
+del model_cache\player_models_2022_2026*
+
+# Clear Modal volume (DANGEROUS - deletes all models)
+modal volume rm nba-models /models/player_models_*.pkl
+
+
+=============================================================================
+Generated: 2025-11-18
+=============================================================================

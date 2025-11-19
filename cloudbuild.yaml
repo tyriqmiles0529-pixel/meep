@@ -1,0 +1,6 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-f', 'Dockerfile.vertexai', '-t', 'gcr.io/e-copilot-476507-p1/nba-trainer:latest', '.']
+images:
+- 'gcr.io/e-copilot-476507-p1/nba-trainer:latest'
+timeout: '1200s'

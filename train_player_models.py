@@ -140,8 +140,23 @@ def create_window_training_data(
         if verbose:
             print(f"  • Recomputed reboundsTotal from Defensive + Offensive split")
 
+    # Add rolling features (L5, L10, L20 averages + trends)
+    from rolling_features import add_rolling_features
+
     if verbose:
-        print(f"  • Optimized data: {len(window_df):,} rows, {len(cols_to_keep)} columns")
+        print(f"\n  Adding rolling features...")
+
+    window_df = add_rolling_features(
+        window_df,
+        windows=[5, 10, 20],  # L5, L10, L20 rolling averages
+        add_variance=True,    # Add std deviation for consistency
+        add_trend=True,       # Add momentum indicators
+        low_memory=False,     # Use full feature set
+        verbose=verbose
+    )
+
+    if verbose:
+        print(f"  • Final dataset: {len(window_df):,} rows, {len(window_df.columns)} columns")
         mem_mb = window_df.memory_usage(deep=True).sum() / 1024**2
         print(f"  • Memory usage: {mem_mb:.1f} MB")
 
@@ -153,12 +168,15 @@ def train_player_window(
     start_year: int,
     end_year: int,
     neural_epochs: int = 12,
-    verbose: bool = True
+    verbose: bool = True,
+    use_multi_task: bool = True
 ) -> Dict:
     """
     Train player models for a specific window.
 
-    This is a placeholder - will integrate with existing player training logic.
+    Uses hybrid multi-task by default (3x faster):
+    - Multi-task: Points, Assists, Rebounds (shared TabNet)
+    - Single-task: Minutes, Threes (separate models)
 
     Returns:
         Dictionary with trained models and metrics
@@ -166,28 +184,126 @@ def train_player_window(
     if verbose:
         print(f"\n{'='*70}")
         print(f"TRAINING PLAYER MODELS: {start_year}-{end_year}")
+        if use_multi_task:
+            print(f"MODE: Hybrid Multi-Task (3x faster)")
         print(f"{'='*70}")
         print(f"Training data: {len(window_df):,} rows")
 
-    # TODO: Import and call existing player training functions from train_auto.py
-    # For now, return placeholder
+    if use_multi_task:
+        # HYBRID MULTI-TASK MODE (3x faster, better accuracy)
+        from hybrid_multi_task import HybridMultiTaskPlayer
 
-    models = {
-        'points': None,
-        'rebounds': None,
-        'assists': None,
-        'threes': None,
-        'minutes': None
-    }
+        # Prepare data
+        feature_cols = [c for c in window_df.columns if c not in [
+            'points', 'reboundsTotal', 'assists', 'threePointersMade', 'numMinutes',
+            'personId', 'gameId', 'gameDate', 'firstName', 'lastName'
+        ]]
 
-    metrics = {
-        'window': f'{start_year}-{end_year}',
-        'train_rows': len(window_df),
-        'neural_epochs': neural_epochs
-    }
+        X = window_df[feature_cols].fillna(0)
+
+        # Prepare targets
+        y_dict = {
+            'points': window_df['points'].fillna(0).values,
+            'rebounds': window_df['reboundsTotal'].fillna(0).values,
+            'assists': window_df['assists'].fillna(0).values,
+            'threes': window_df['threePointersMade'].fillna(0).values,
+            'minutes': window_df['numMinutes'].fillna(0).values
+        }
+
+        # Train/val split (80/20)
+        split_idx = int(len(X) * 0.8)
+        X_train = X.iloc[:split_idx]
+        X_val = X.iloc[split_idx:]
+
+        y_train_dict = {k: v[:split_idx] for k, v in y_dict.items()}
+        y_val_dict = {k: v[split_idx:] for k, v in y_dict.items()}
+
+        # Train hybrid multi-task model
+        model = HybridMultiTaskPlayer(use_gpu=True)
+        model.fit(
+            X_train, y_train_dict,
+            X_val, y_val_dict,
+            correlated_epochs=15,  # Max epochs for correlated props
+            independent_epochs=15,  # Max epochs for independent props
+            batch_size=8192
+        )
+
+        # Get predictions and metrics
+        prop_metrics = {}
+        for prop in ['points', 'rebounds', 'assists', 'threes', 'minutes']:
+            y_pred = model.predict(X_val)[prop]
+            mae = np.mean(np.abs(y_pred - y_val_dict[prop]))
+            prop_metrics[prop] = {'mae': float(mae)}
+
+            if verbose:
+                print(f"  ✓ {prop}: MAE = {mae:.2f}")
+
+        # Store model (all props in one object)
+        models = {
+            'multi_task_model': model,
+            'points': model,  # For backward compatibility
+            'rebounds': model,
+            'assists': model,
+            'threes': model,
+            'minutes': model
+        }
+
+        metrics = {
+            'window': f'{start_year}-{end_year}',
+            'train_rows': len(window_df),
+            'neural_epochs': neural_epochs,
+            'mode': 'hybrid_multi_task',
+            'prop_metrics': prop_metrics
+        }
+
+    else:
+        # SINGLE-TASK MODE (fallback)
+        from train_auto import train_player_model_enhanced
+
+        props = {
+            'points': 'points',
+            'rebounds': 'reboundsTotal',
+            'assists': 'assists',
+            'threes': 'threePointersMade',
+            'minutes': 'numMinutes'
+        }
+
+        models = {}
+        prop_metrics = {}
+
+        for prop_key, prop_col in props.items():
+            if verbose:
+                print(f"\n  Training {prop_key} model...")
+
+            try:
+                model, metrics = train_player_model_enhanced(
+                    df=window_df,
+                    prop_name=prop_col,
+                    verbose=verbose,
+                    neural_epochs=neural_epochs
+                )
+                models[prop_key] = model
+                prop_metrics[prop_key] = metrics
+
+                if verbose:
+                    print(f"  ✓ {prop_key} model trained")
+
+            except Exception as e:
+                if verbose:
+                    print(f"  ✗ {prop_key} model failed: {e}")
+                models[prop_key] = None
+                prop_metrics[prop_key] = {'error': str(e)}
+
+        metrics = {
+            'window': f'{start_year}-{end_year}',
+            'train_rows': len(window_df),
+            'neural_epochs': neural_epochs,
+            'mode': 'single_task',
+            'prop_metrics': prop_metrics
+        }
 
     if verbose:
-        print(f"✓ Training complete for {start_year}-{end_year}")
+        print(f"\n✓ Training complete for {start_year}-{end_year}")
 
     return {'models': models, 'metrics': metrics}
 

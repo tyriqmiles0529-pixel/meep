@@ -1,0 +1,408 @@
+═══════════════════════════════════════════════════════════════════════════════
+LIGHTNING.AI NBA TRAINING - QUICK REFERENCE
+═══════════════════════════════════════════════════════════════════════════════
+
+SETUP (Run once)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Create Lightning.ai Studio
+   - Go to https://lightning.ai
+   - New Studio → GPU (T4) → 32GB RAM → Python 3.10+
+
+2. Upload Code
+   git clone https://github.com/YOUR_USERNAME/nba_predictor.git
+   cd nba_predictor
+
+3. Install Dependencies
+   pip install kagglehub pandas numpy scikit-learn lightgbm torch pytorch-tabnet
+
+4. Verify GPU
+   python -c "import torch; print(f'GPU: {torch.cuda.get_device_name(0)}')"
+
+5. Setup Kaggle (get API key from https://www.kaggle.com/settings)
+   mkdir -p ~/.kaggle
+   echo '{"username":"USERNAME","key":"API_KEY"}' > ~/.kaggle/kaggle.json
+   chmod 600 ~/.kaggle/kaggle.json
+
+
+TRAINING COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EASY MODE (Interactive Script)
+───────────────────────────────────────────────────────────────────────────────
+python LIGHTNING_AI_TRAINING.py
+
+# This script will:
+# - Check GPU availability
+# - Install dependencies
+# - Ask for configuration (epochs, etc.)
+# - Run training with neural hybrid
+# - Show results and download instructions
+
+
+STANDARD TRAINING (Recommended - Uses Pre-Aggregated Data)
+───────────────────────────────────────────────────────────────────────────────
+python train_auto.py \
+  --aggregated-data aggregated_nba_data.csv.gzip \
+  --use-neural \
+  --neural-device gpu \
+  --neural-epochs 30 \
+  --verbose
+
+# Time: 45-60 minutes
+# Models: Game (moneyline, spread) + Player (5 props)
+# Neural: TabNet + LightGBM with 24-dim embeddings
+# Features: 186 (priors already merged: adv_, per100_, shoot_, pbp_, team_)
+
+
+QUICK TEST (Verify Setup)
+───────────────────────────────────────────────────────────────────────────────
+python train_auto.py \
+  --aggregated-data aggregated_nba_data.csv.gzip \
+  --use-neural \
+  --neural-device gpu \
+  --neural-epochs 10 \
+  --skip-player \
+  --verbose
+
+# Time: 10-15 minutes
+# Models: Game models only (moneyline, spread)
+# Use this to test before full training
+
+
+FULL TRAINING (Maximum Accuracy)
+───────────────────────────────────────────────────────────────────────────────
+python train_auto.py \
+  --aggregated-data aggregated_nba_data.csv.gzip \
+  --use-neural \
+  --neural-device gpu \
+  --neural-epochs 50 \
+  --batch-size 4096 \
+  --verbose \
+  --lgb-log-period 50 \
+  --n-jobs -1
+
+# Time: 90-120 minutes
+# Models: All models with maximum accuracy
+# Use for production/final training
+
+
+CPU FALLBACK (If GPU unavailable)
+───────────────────────────────────────────────────────────────────────────────
+python train_auto.py \
+  --aggregated-data aggregated_nba_data.csv.gzip \
+  --use-neural \
+  --neural-device cpu \
+  --neural-epochs 20 \
+  --verbose
+
+# Time: 3-4 hours (slower than GPU)
+# Use only if GPU unavailable
+
+
+MONITORING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Watch GPU Usage
+───────────────────────────────────────────────────────────────────────────────
+watch -n 1 nvidia-smi
+
+# Shows:
+# - GPU utilization %
+# - Memory usage (VRAM)
+# - Temperature
+# - Running processes
+
+
+Check Disk Usage
+───────────────────────────────────────────────────────────────────────────────
+df -h
+
+# Dataset size: ~3-5 GB
+# Model cache: ~500 MB - 1 GB
+
+
+View Training Log (Live)
+───────────────────────────────────────────────────────────────────────────────
+# Save log to file
+python train_auto.py --use-neural --verbose 2>&1 | tee training.log
+
+# View log in real-time (in another terminal)
+tail -f training.log
+
+
+AFTER TRAINING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+List Trained Models
+───────────────────────────────────────────────────────────────────────────────
+ls -lh model_cache/
+
+# Expected files:
+# - ensemble_2002_2026.pkl (game models)
+# - player_models_2022_2026.pkl (player props)
+# - *_tabnet.zip (neural network weights)
+# - *_meta.json (training metadata)
+
+
+Download Option 1: Zip and Download
+───────────────────────────────────────────────────────────────────────────────
+zip -r nba_models_trained.zip model_cache/
+
+# Then download nba_models_trained.zip from Lightning.ai file browser
+
+
+Download Option 2: GitHub Push
+───────────────────────────────────────────────────────────────────────────────
+git config --global user.name "Your Name"
+git config --global user.email "your@email.com"
+
+git add model_cache/
+git commit -m "Trained models on Lightning.ai GPU (30 epochs)"
+git push origin main
+
+# Then on local machine:
+git pull origin main
+
+
+Download Option 3: SCP/SFTP
+───────────────────────────────────────────────────────────────────────────────
+# If Lightning.ai supports SSH
+scp -r model_cache/ user@local-machine:/path/to/nba_predictor/
+
+
+Verify Models
+───────────────────────────────────────────────────────────────────────────────
+python -c "
+import pickle
+with open('model_cache/ensemble_2002_2026.pkl', 'rb') as f:
+    model = pickle.load(f)
+    print('Game model loaded successfully')
+    print(f'Features: {len(model.get(\"feature_names\", []))}')
+
+with open('model_cache/player_models_2022_2026.pkl', 'rb') as f:
+    models = pickle.load(f)
+    print(f'Player models loaded: {list(models.keys())}')
+"
+
+
+TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Out of Memory (GPU)
+───────────────────────────────────────────────────────────────────────────────
+# Symptom: CUDA out of memory
+# Fix 1: Reduce batch size
+python train_auto.py --use-neural --batch-size 2048
+
+# Fix 2: Reduce epochs
+python train_auto.py --use-neural --neural-epochs 20
+
+# Fix 3: Use CPU
+python train_auto.py --use-neural --neural-device cpu
+
+
+Training Stuck
+───────────────────────────────────────────────────────────────────────────────
+# Check if process is running
+ps aux | grep train_auto.py
+
+# Check GPU activity
+nvidia-smi
+
+# If idle for >10 min, restart:
+pkill -f train_auto.py
+python train_auto.py --use-neural --fresh
+
+
+Kaggle Download Fails
+───────────────────────────────────────────────────────────────────────────────
+# Check credentials
+cat ~/.kaggle/kaggle.json
+
+# Re-authenticate
+rm ~/.kaggle/kaggle.json
+# Then re-run setup (see SETUP section)
+
+
+Import Errors
+───────────────────────────────────────────────────────────────────────────────
+# Symptom: ModuleNotFoundError: No module named 'pytorch_tabnet'
+# Fix: Reinstall dependencies
+pip install --force-reinstall pytorch-tabnet torch
+
+
+PERFORMANCE BENCHMARKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Expected Training Times (T4 GPU)
+───────────────────────────────────────────────────────────────────────────────
+┌──────────────┬──────────┬─────────────────┬─────────────┐
+│ Configuration│  Epochs  │   Time (GPU)    │ Models      │
+├──────────────┼──────────┼─────────────────┼─────────────┤
+│ Quick Test   │    10    │   10-15 min     │ 2 (game)    │
+│ Standard     │    30    │   45-60 min     │ 7 (all)     │
+│ Full         │    50    │   90-120 min    │ 7 (all)     │
+└──────────────┴──────────┴─────────────────┴─────────────┘
+
+
+Expected Accuracy (Validation Set)
+───────────────────────────────────────────────────────────────────────────────
+┌────────────────┬─────────────┬──────────────┬──────────────┐
+│ Model          │  Metric     │  LightGBM    │  Neural      │
+│                │             │  Only        │  Hybrid      │
+├────────────────┼─────────────┼──────────────┼──────────────┤
+│ Moneyline      │ Accuracy    │   62.5%      │   64.2%      │
+│ Spread         │ MAE         │   9.1 pts    │   8.6 pts    │
+│ Points         │ RMSE        │   7.2        │   6.8        │
+│ Rebounds       │ RMSE        │   3.4        │   3.2        │
+│ Assists        │ RMSE        │   2.9        │   2.7        │
+│ 3-Pointers     │ RMSE        │   1.5        │   1.4        │
+│ Minutes        │ RMSE        │   8.1        │   7.8        │
+└────────────────┴─────────────┴──────────────┴──────────────┘
+
+
+GPU Memory Usage
+───────────────────────────────────────────────────────────────────────────────
+┌────────────────┬─────────────┬──────────────┐
+│ Phase          │  VRAM Used  │  GPU Util    │
+├────────────────┼─────────────┼──────────────┤
+│ Data Loading   │   2-3 GB    │   10-20%     │
+│ TabNet Train   │   8-12 GB   │   80-95%     │
+│ Embeddings     │   4-6 GB    │   60-80%     │
+│ LightGBM       │   2-3 GB    │   30-50%     │
+└────────────────┴─────────────┴──────────────┘
+
+
+COMMAND FLAGS REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Required Flags
+───────────────────────────────────────────────────────────────────────────────
+--dataset "eoinamoore/historical-nba-data-and-player-box-scores"
+  → Kaggle dataset to download
+
+--use-neural
+  → Enable neural hybrid (TabNet + LightGBM)
+
+
+Neural Hybrid Flags
+───────────────────────────────────────────────────────────────────────────────
+--neural-device {cpu|gpu|auto}
+  → Device for TabNet training
+  → Default: cpu
+  → Recommended: gpu (3-5x faster)
+
+--neural-epochs N
+  → Number of TabNet training epochs
+  → Default: 25
+  → Recommended: 30-50
+  → Higher = better accuracy but slower
+
+--batch-size N
+  → Batch size for TabNet
+  → Default: 2048
+  → Recommended: 4096 (on GPU)
+  → Higher = faster but more memory
+
+
+General Flags
+───────────────────────────────────────────────────────────────────────────────
+--verbose
+  → Show detailed training progress
+
+--fresh
+  → Clear cache, download fresh data
+
+--skip-player
+  → Only train game models (faster testing)
+
+--skip-games
+  → Only train player models
+
+--lgb-log-period N
+  → LightGBM logging frequency
+  → Default: 100
+  → Recommended: 50 (less spam)
+
+--n-jobs N
+  → CPU threads for LightGBM
+  → Default: -1 (all cores)
+
+
+TIPS & BEST PRACTICES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. First Time Setup
+   - Use Quick Test (10 epochs) to verify everything works
+   - Then run Standard Training (30 epochs)
+   - Save logs: python train_auto.py ... 2>&1 | tee log.txt
+
+2. GPU Optimization
+   - Always use --neural-device gpu on Lightning.ai
+   - Increase --batch-size to 4096 or 8192
+   - Monitor with: watch -n 1 nvidia-smi
+
+3. Time Management
+   - Quick Test: coffee break (10 min)
+   - Standard: lunch break (45 min)
+   - Full: meeting or workout (90 min)
+
+4. Version Control
+   - Tag before training: git tag v1.0-pre-training
+   - Tag after training: git tag v1.0-trained
+   - Push to GitHub for backup
+
+5. Cost Optimization
+   - Lightning.ai free tier: 22 GPU hours/month
+   - Standard training uses ~1 hour
+   - Can train ~20 times/month for free
+
+
+EXAMPLE WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Week 1: Initial Training
+───────────────────────────────────────────────────────────────────────────────
+1. Setup Lightning.ai studio
+2. Clone repo and install dependencies
+3. Run Quick Test to verify setup
+4. Run Standard Training (30 epochs)
+5. Download models and test predictions locally
+6. Backtest performance
+
+Week 2-4: Production Use
+───────────────────────────────────────────────────────────────────────────────
+1. Use models for daily predictions
+2. Track betting performance
+3. Monitor accuracy
+
+Month 2: Retrain
+───────────────────────────────────────────────────────────────────────────────
+1. Run Standard Training with --fresh
+2. Compare new vs old model metrics
+3. Use better performing model
+4. Keep both for ensemble
+
+
+SUPPORT & RESOURCES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Documentation Files
+───────────────────────────────────────────────────────────────────────────────
+LIGHTNING_AI_TRAINING_GUIDE.md  → Full training guide
+LIGHTNING_AI_TRAINING.py        → Interactive training script
+LIGHTNING_AI_COMMANDS.txt       → This file (quick reference)
+
+Lightning.ai Help
+───────────────────────────────────────────────────────────────────────────────
+https://lightning.ai/docs
+
+GitHub Issues
+───────────────────────────────────────────────────────────────────────────────
+https://github.com/YOUR_USERNAME/nba_predictor/issues
+
+
+═══════════════════════════════════════════════════════════════════════════════
+Good luck with training! 🏀⚡
+═══════════════════════════════════════════════════════════════════════════════

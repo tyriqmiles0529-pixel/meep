@@ -1,4 +1,5 @@
 # RIQ MEEPING MACHINE — Fully Integrated, Fast-Mode, All-in-One
+# VERSION: 2025-11-19-v2 (Fixed API filters)
 """
 NBA Props Analyzer with ML Model Integration
 
@@ -52,6 +53,14 @@ import requests
 from scipy import stats
 from nba_api.stats.endpoints import LeagueDashTeamStats
 from nba_api.stats.static import teams as nba_teams
+
+# Ensemble predictor (25 windows + meta-learner)
+try:
+    from ensemble_predictor import EnsemblePredictor
+    ENSEMBLE_AVAILABLE = True
+except ImportError:
+    ENSEMBLE_AVAILABLE = False
+    print("[!] Warning: ensemble_predictor not available")
 
 # Optional SHAP explainability
 try:
@@ -112,8 +121,9 @@ SGO_LIMIT = 50
 SGO_MAX_PAGES = 50
 SGO_SLEEP_BETWEEN_PAGES_SEC = 0.15
 
-# API-Sports DISABLED - Not needed with TheRundown + The Odds API
-APISPORTS_ODDS_ENABLED = False
+# API-Sports odds - Enable for player props
+APISPORTS_ODDS_ENABLED = True
+APISPORTS_BOOKMAKERS = [3]  # 3 = FanDuel
 
 # The Odds API (third prop source)
 THEODDS_API_KEY = os.getenv("THEODDS_API_KEY") or ""  # Set in keys.py or environment
@@ -173,8 +183,6 @@ CATEGORIES = [
     ("assists", "Assists"),
     ("rebounds", "Rebounds"),
     ("threes", "3PM"),
-    ("moneyline", "Moneyline"),
-    ("spread", "Spread"),
 ]
 
 # Data files
@@ -821,13 +829,19 @@ def get_upcoming_games() -> List[dict]:
     print(f"📅 Fetching games for {DAYS_TO_FETCH} days:\n" + "\n".join([f"   - {d:%Y-%m-%d}" for d in dates]) + "\n")
     games = []
     for d in dates:
-        data = fetch_json("/games", params={"league": LEAGUE_ID, "season": SEASON, "date": d.strftime("%Y-%m-%d"), "timezone": "America/Chicago"})
+        # FIXED: Don't use league/season filters - they return 0 results
+        # Just use date parameter to get all NBA games for that day
+        data = fetch_json("/games", params={"date": d.strftime("%Y-%m-%d")})
         if data and "response" in data:
-            games.extend(data["response"])
+            # Filter to only NBA games (league_id=12 for NBA)
+            nba_games = [g for g in data["response"] if g.get("league", {}).get("id") == 12]
+            if DEBUG_MODE:
+                print(f"   [API-Sports] {d:%Y-%m-%d}: {len(data['response'])} total games, {len(nba_games)} NBA games")
+            games.extend(nba_games)
         time.sleep(SLEEP_SHORT)
         if len(games) >= MAX_GAMES:
             break
-    print(f"   Found {len(games)} total games\n"); return games[:MAX_GAMES]
+    print(f"   Found {len(games)} NBA games\n"); return games[:MAX_GAMES]
 
 def get_matchup_context(game_info: dict) -> dict:
     # Placeholder for pace/defense factors (keep neutral for now)
@@ -1252,6 +1266,7 @@ def _parse_nested_markets(ev: dict, matched_game: dict) -> List[dict]:
                 if internal_type_guess:
                     internal_type = internal_type_guess
 
+            # ONLY PLAYER PROPS - skip game-level markets
             if internal_type in {"points","assists","rebounds","threes"}:
                 bucket: Dict[str, Dict[str, Any]] = {}
                 for oc in outcomes:
@@ -1287,42 +1302,8 @@ def _parse_nested_markets(ev: dict, matched_game: dict) -> List[dict]:
                         "odds": int(rec.get("odds_over", rec.get("odds_under", -110))),
                         **({"odds_over": rec["odds_over"]} if "odds_over" in rec else {}),
                         **({"odds_under": rec["odds_under"]} if "odds_under" in rec else {}),
-                        "bookmaker": bm.get("name", "RapidAPI"),
-                        "source": "RAPIDAPI",
-                    })
-
-            elif internal_type == "moneyline":
-                for oc in outcomes:
-                    side = str(oc.get("sideID") or oc.get("side") or oc.get("name") or "").lower()
-                    team = oc.get("team") or oc.get("runnerName") or oc.get("selectionName") or (home if side == "home" else away if side == "away" else None)
-                    american = _to_int_american(oc.get("americanOdds") or oc.get("oddsAmerican") or oc.get("price") or oc.get("odds"))
-                    if not team or american is None:
-                        continue
-                    prop_id = f"{game_id}_moneyline_{team}".replace(" ", "_")
-                    props.append({
-                        "prop_id": prop_id, "game_id": game_id, "game": game_label, "game_date": game_date,
-                        "player": str(team), "prop_type": "moneyline", "line": 0.0, "odds": int(american),
-                        "bookmaker": bm.get("name", "RapidAPI"), "source": "RAPIDAPI",
-                    })
-
-            elif internal_type == "spread":
-                for oc in outcomes:
-                    side = str(oc.get("sideID") or oc.get("side") or oc.get("name") or "").lower()
-                    team = oc.get("team") or oc.get("runnerName") or oc.get("selectionName") or (home if side == "home" else away if side == "away" else None)
-                    line = oc.get("line") or oc.get("handicap") or m.get("line") or m.get("handicap")
-                    american = _to_int_american(oc.get("americanOdds") or oc.get("oddsAmerican") or oc.get("price") or oc.get("odds"))
-                    try:
-                        line = float(line)
-                    except Exception:
-                        line = None
-                    if not team or american is None or line is None:
-                        continue
-                    side_label = f"{team} {line:+.1f}"
-                    prop_id = f"{game_id}_spread_{side_label}".replace(" ", "_")
-                    props.append({
-                        "prop_id": prop_id, "game_id": game_id, "game": game_label, "game_date": game_date,
-                        "player": side_label, "prop_type": "spread", "line": float(line), "odds": int(american),
-                        "bookmaker": bm.get("name", "RapidAPI"), "source": "RAPIDAPI",
+                        "bookmaker": bm.get("name", "API-Sports"),
+                        "source": "API-Sports",
                     })
     return props
 
@@ -1487,6 +1468,19 @@ def apisports_fetch_odds(games: List[dict]) -> List[dict]:
 
 
 # ========= THE ODDS API FETCHER =========
+def _normalize_team_name(name: str) -> str:
+    """Normalize team names for matching between different APIs"""
+    name = name.lower().strip()
+    # Common variations
+    replacements = {
+        '76ers': 'sixers',
+        'trail blazers': 'blazers',
+    }
+    for old, new in replacements.items():
+        name = name.replace(old, new)
+    return name
+
+
 def theodds_fetch_odds(games: List[dict]) -> List[dict]:
     """
     Fetch odds from The Odds API for given games.
@@ -1502,14 +1496,24 @@ def theodds_fetch_odds(games: List[dict]) -> List[dict]:
     props: List[dict] = []
 
     try:
-        # Build game ID mapping (match by team names)
+        # Build game ID mapping (match by team names with normalization)
         game_map = {}
+        game_map_debug = {}  # For debugging
         for game in games:
-            home = game['teams']['home']['name'].lower()
-            away = game['teams']['away']['name'].lower()
+            home = _normalize_team_name(game['teams']['home']['name'])
+            away = _normalize_team_name(game['teams']['away']['name'])
             # Create multiple key variations for matching
             game_map[f"{away}_{home}"] = game
             game_map[f"{home}_{away}"] = game
+            # Also try with just city/team name parts
+            home_parts = home.split()
+            away_parts = away.split()
+            for hp in home_parts:
+                for ap in away_parts:
+                    if len(hp) > 3 and len(ap) > 3:  # Avoid short words
+                        game_map[f"{ap}_{hp}"] = game
+                        game_map[f"{hp}_{ap}"] = game
+            game_map_debug[game.get('id')] = f"{away} @ {home}"
 
         # STEP 1: Fetch list of events to get event IDs
         events_url = f"{THEODDS_BASE_URL}/sports/{THEODDS_SPORT}/events"
@@ -1536,8 +1540,8 @@ def theodds_fetch_odds(games: List[dict]) -> List[dict]:
         # STEP 2: For each event, fetch odds with player props
         for event in events:
             event_id = event.get("id")
-            home_team = event.get("home_team", "").lower()
-            away_team = event.get("away_team", "").lower()
+            home_team = _normalize_team_name(event.get("home_team", ""))
+            away_team = _normalize_team_name(event.get("away_team", ""))
             # Use The Odds API's commence_time as authoritative game date
             event_commence_time = event.get("commence_time", "")
 
@@ -1546,15 +1550,23 @@ def theodds_fetch_odds(games: List[dict]) -> List[dict]:
             game = game_map.get(game_key) or game_map.get(f"{home_team}_{away_team}")
 
             if not game:
-                # Try partial matching
-                for key, g in game_map.items():
-                    if home_team in key or away_team in key:
-                        game = g
+                # Try partial matching with each word in team names
+                away_parts = away_team.split()
+                home_parts = home_team.split()
+                for ap in away_parts:
+                    for hp in home_parts:
+                        if len(ap) > 3 and len(hp) > 3:
+                            test_key = f"{ap}_{hp}"
+                            if test_key in game_map:
+                                game = game_map[test_key]
+                                break
+                    if game:
                         break
 
             if not game:
                 if DEBUG_MODE:
                     print(f"   [TheOdds] No match for {away_team} @ {home_team}")
+                    print(f"   [TheOdds] Available games: {list(game_map_debug.values())[:5]}")
                 continue
 
             game_id = game.get("id")
@@ -1586,87 +1598,27 @@ def theodds_fetch_odds(games: List[dict]) -> List[dict]:
 
             event_data = event_odds_resp.json()
             bookmakers = event_data.get("bookmakers", [])
-            
+
+            if DEBUG_MODE:
+                print(f"   [TheOdds] Event {event_id[:8]}... has {len(bookmakers)} bookmakers")
+                if len(bookmakers) == 0:
+                    print(f"   [TheOdds] WARNING: No bookmakers in response for {away_team} @ {home_team}")
+                    print(f"   [TheOdds] Response keys: {list(event_data.keys())}")
+
             for bookmaker in bookmakers:
                 bookmaker_name = bookmaker.get("title", "Unknown")
                 markets = bookmaker.get("markets", [])
+
+                if DEBUG_MODE:
+                    market_keys = [m.get('key') for m in markets]
+                    print(f"   [TheOdds] {bookmaker_name} markets: {market_keys}")
                 
                 for market in markets:
                     market_key = market.get("key", "")
                     outcomes = market.get("outcomes", [])
-                    
-                    # H2H (Moneyline)
-                    if market_key == "h2h":
-                        for outcome in outcomes:
-                            team = outcome.get("name")
-                            odds = outcome.get("price")
-                            if team and odds:
-                                prop_id = f"{game_id}_moneyline_{team}_{bookmaker_name}".replace(" ", "_")
-                                props.append({
-                                    "prop_id": prop_id,
-                                    "game_id": game_id,
-                                    "game": game_label,
-                                    "game_date": game_date,
-                                    "player": team,
-                                    "home_team": game['teams']['home']['name'],
-                                    "away_team": game['teams']['away']['name'],
-                                    "prop_type": "moneyline",
-                                    "line": 0.0,
-                                    "odds": int(odds),
-                                    "bookmaker": bookmaker_name,
-                                    "source": "TheOddsAPI",
-                                })
-                    
-                    # Spreads
-                    elif market_key == "spreads":
-                        for outcome in outcomes:
-                            team = outcome.get("name")
-                            point = outcome.get("point")
-                            odds = outcome.get("price")
-                            if team and point is not None and odds:
-                                side_label = f"{team} {float(point):+.1f}"
-                                prop_id = f"{game_id}_spread_{side_label}_{bookmaker_name}".replace(" ", "_")
-                                props.append({
-                                    "prop_id": prop_id,
-                                    "game_id": game_id,
-                                    "game": game_label,
-                                    "game_date": game_date,
-                                    "player": side_label,
-                                    "home_team": game['teams']['home']['name'],
-                                    "away_team": game['teams']['away']['name'],
-                                    "prop_type": "spread",
-                                    "line": float(point),
-                                    "odds": int(odds),
-                                    "bookmaker": bookmaker_name,
-                                    "source": "TheOddsAPI",
-                                })
 
-                    # Totals
-                    elif market_key == "totals":
-                        for outcome in outcomes:
-                            over_under = outcome.get("name", "").lower()  # "Over" or "Under"
-                            point = outcome.get("point")
-                            odds = outcome.get("price")
-                            if point is not None and odds:
-                                side_label = f"Total {over_under.capitalize()} {float(point)}"
-                                prop_id = f"{game_id}_total_{over_under}_{point}_{bookmaker_name}".replace(" ", "_")
-                                props.append({
-                                    "prop_id": prop_id,
-                                    "game_id": game_id,
-                                    "game": game_label,
-                                    "game_date": game_date,
-                                    "player": side_label,
-                                    "home_team": game['teams']['home']['name'],
-                                    "away_team": game['teams']['away']['name'],
-                                    "prop_type": "total",
-                                    "line": float(point),
-                                    "odds": int(odds),
-                                    "bookmaker": bookmaker_name,
-                                    "source": "TheOddsAPI",
-                                })
-                    
-                    # Player Props
-                    elif market_key.startswith("player_"):
+                    # ONLY Player Props - skip game-level markets
+                    if market_key.startswith("player_"):
                         # Map market key to our prop type
                         prop_type_map = {
                             "player_points": "points",
@@ -2565,7 +2517,14 @@ MODEL_RMSE = METADATA["rmse"]
 SPREAD_SIGMA = METADATA["spread_sigma"]
 
 class ModelPredictor:
-    def __init__(self):
+    def __init__(self, use_ensemble: bool = False):
+        """
+        Args:
+            use_ensemble: Use 27-window ensemble + meta-learner instead of single models
+        """
+        self.use_ensemble = use_ensemble
+        self.ensemble_predictor = None
+
         self.player_models: Dict[str, object] = {}
         self.player_sigma_models: Dict[str, object] = {}
         self.game_models: Dict[str, object] = {}
@@ -2576,6 +2535,29 @@ class ModelPredictor:
         self.ensemble_meta_learner = None
         # UNIFIED HIERARCHICAL ENSEMBLE (NEW!)
         self.unified_ensemble = None
+
+        # Meta-learner training data collection
+        self.meta_training_data = {
+            'points': [], 'rebounds': [], 'assists': [], 'threes': []
+        }
+
+        # Load ensemble if requested
+        if use_ensemble and ENSEMBLE_AVAILABLE:
+            try:
+                print("[*] Loading ensemble predictor (27 windows + meta-learner)...")
+                self.ensemble_predictor = EnsemblePredictor(
+                    model_cache_dir="model_cache",
+                    use_meta_learner=True
+                )
+                print(f"[OK] Ensemble loaded: {len(self.ensemble_predictor.window_models)} windows")
+                if self.ensemble_predictor.meta_learner:
+                    print("[OK] Meta-learner active (intelligent weighting)")
+                else:
+                    print("[OK] Using simple averaging (meta-learner not available)")
+            except Exception as e:
+                print(f"[!] Failed to load ensemble: {e}")
+                print("    Falling back to single models")
+                self.use_ensemble = False
 
         # Load player models
         for key, fname in PLAYER_MODEL_FILES.items():
@@ -2758,10 +2740,31 @@ class ModelPredictor:
         """
         Predict player stat using trained model.
 
-        Note: Player ensemble models are loaded but not yet fully integrated.
-        Full integration requires player history tracking.
-        Current: Using LightGBM (which is a component of the ensemble anyway).
+        Uses ensemble predictor (25 windows + meta-learner) if enabled,
+        otherwise falls back to single model.
         """
+        # ENSEMBLE MODE (25 windows + meta-learner)
+        if self.use_ensemble and self.ensemble_predictor:
+            try:
+                # Extract player context for meta-learner
+                player_context = self.ensemble_predictor._extract_context_from_features(feats)
+
+                # Get ensemble prediction for this prop
+                prediction = self.ensemble_predictor.predict(
+                    feats,
+                    prop=prop_type,
+                    player_context=player_context
+                )
+
+                return float(prediction[0]) if isinstance(prediction, np.ndarray) else float(prediction)
+
+            except Exception as e:
+                if DEBUG_MODE:
+                    print(f"[!] Ensemble prediction failed for {prop_type}: {e}")
+                    print("    Falling back to single model")
+                # Fall through to single model
+
+        # SINGLE MODEL MODE (original)
         m = self.player_models.get(prop_type)
         if m is None or feats is None or feats.empty:
             return None
@@ -3007,7 +3010,8 @@ class ModelPredictor:
             if DEBUG_MODE: print(f"   Warning: Spread predict failed: {e}")
             return None
 
-MODEL = ModelPredictor()
+# Will be initialized with --use-ensemble flag from main()
+MODEL = None
 
 # Load Basketball Reference priors once (cached globally)
 _PRIORS_CACHE = load_priors_data()
@@ -3989,18 +3993,23 @@ def run_analysis():
     if not games:
         print("❌ No upcoming games found"); return
 
-    print("🎲 Fetching odds from multiple sources...")
+    print("🎲 Fetching player props from multiple sources...")
     contexts = {g["id"]: get_matchup_context(g) for g in games}
-    
-    # Fetch from The Odds API ONLY (comprehensive coverage - game markets + player props)
-    print("   • The Odds API (all markets + player props)...")
+
+    # Fetch from The Odds API (player props)
+    print("   • The Odds API (player props)...")
     theodds_props = theodds_fetch_odds(games)
 
-    # Use only The Odds API props
-    all_props = theodds_props
+    # Fetch from API-Sports (player props)
+    print("   • API-Sports (player props)...")
+    apisports_props = apisports_fetch_odds(games)
+
+    # Combine all sources
+    all_props = theodds_props + apisports_props
 
     if DEBUG_MODE:
         print(f"   [The Odds API] Fetched {len(theodds_props)} props")
+        print(f"   [API-Sports] Fetched {len(apisports_props)} props")
     
     # Deduplicate: keep best odds for each unique prop
     props_by_key = {}
@@ -4018,8 +4027,8 @@ def run_analysis():
                 props_by_key[key] = prop
     
     fd_props = list(props_by_key.values())
-    
-    print(f"   ✓ Fetched {len(fd_props)} unique props from The Odds API")
+
+    print(f"   ✓ Fetched {len(fd_props)} unique player props (combined from all sources)")
 
     # Optional: per-game counts
     by_game = defaultdict(int)
@@ -4030,10 +4039,10 @@ def run_analysis():
         game_date_str = str(g.get("date",""))[:16]
         print(f"   ✓ {game_date_str} — {g['teams']['home']['name']} vs {g['teams']['away']['name']}: {cnt} props")
 
+    # ONLY PLAYER PROPS - no game-level betting
     player_props = [p for p in fd_props if p["prop_type"] in ["points","assists","rebounds","threes"]]
-    game_bets   = [p for p in fd_props if p["prop_type"] in ["moneyline","spread"]]
 
-    print(f"\n   Total props: {len(fd_props)} | Player: {len(player_props)} | Game: {len(game_bets)}\n")
+    print(f"\n   Total player props: {len(player_props)} (points, assists, rebounds, threes)\n")
     if DEBUG_MODE and len(fd_props) == 0:
         print("   [DEBUG] No props found. Check expand/nested markets and bookmaker naming; printing diagnostics above.")
     
@@ -4047,22 +4056,18 @@ def run_analysis():
     print(f"\n🔍 {random.choice(MEEP_MESSAGES)}...")
 
     analyzed = []
-    for idx, prop in enumerate(player_props + game_bets, 1):
+    for idx, prop in enumerate(player_props, 1):
         if RUN_TIME_BUDGET_SEC is not None and time.monotonic() - start > RUN_TIME_BUDGET_SEC:
             print("⏳ Time budget reached during analysis.")
             break
         try:
-            if prop["prop_type"] in ["points","assists","rebounds","threes"]:
-                res = analyze_player_prop(prop, contexts.get(prop["game_id"], {}))
-            else:
-                res = analyze_game_bet(prop)
+            res = analyze_player_prop(prop, contexts.get(prop["game_id"], {}))
             if res: analyzed.append(res)
         except Exception as e:
             if DEBUG_MODE: print(f"   ⚠️ Analysis failed for {prop.get('player')} {prop.get('prop_type')}: {e}")
         if idx % 25 == 0:
-            print(f"   {random.choice(MEEP_MESSAGES)}... {idx}/{len(player_props)+len(game_bets)} analyzed")
-        if prop["prop_type"] in ["points","assists","rebounds","threes"]:
-            time.sleep(SLEEP_SHORT)
+            print(f"   {random.choice(MEEP_MESSAGES)}... {idx}/{len(player_props)} analyzed")
+        time.sleep(SLEEP_SHORT)
 
     print(f"\n   ✅ {len(analyzed)} props meet ELG gates\n")
     
@@ -4198,7 +4203,32 @@ def run_analysis():
     print("🎉 Meep complete!")
 
 if __name__ == "__main__":
-    try: run_analysis()
-    except KeyboardInterrupt: print("\n\n⚠️ Interrupted by user")
+    import argparse
+
+    # Parse CLI arguments
+    parser = argparse.ArgumentParser(description="RIQ NBA Props Analyzer")
+    parser.add_argument('--use-ensemble', action='store_true',
+                       help='Use 25-window ensemble + meta-learner (higher accuracy, slower)')
+    parser.add_argument('--settle-bets', action='store_true',
+                       help='Settle pending bets and exit')
+    args = parser.parse_args()
+
+    # Initialize MODEL with ensemble flag
+    MODEL = ModelPredictor(use_ensemble=args.use_ensemble)
+
+    # Settle bets if requested
+    if args.settle_bets:
+        try:
+            settle_ledger(verbose=True)
+        finally:
+            sys.exit(0)
+
+    # Run analysis
+    try:
+        run_analysis()
+    except KeyboardInterrupt:
+        print("\n\n[!] Interrupted by user")
     except Exception as e:
-        print(f"\n\n❌ Error: {e}"); import traceback; traceback.print_exc()
+        print(f"\n\n[!] Error: {e}")
+        import traceback
+        traceback.print_exc()

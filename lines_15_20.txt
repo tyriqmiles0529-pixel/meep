@@ -1,0 +1,18 @@
+=== LINE 15 ===
+    "- ✅ **Phase 1-7 features**: Built automatically during training\\n",
+
+=== LINE 16 ===
+    "\\n",
+
+=== LINE 17 ===
+    "## Quick Start:\\n",
+
+=== LINE 18 ===
+    "1. **Add \\"meeper\\" dataset** in Kaggle (Add Data → search \\"meeper\\")\\n",
+
+=== LINE 19 ===
+    "2. **Enable GPU** (P100 or T4 x2)\\n",
+
+=== LINE 20 ===
+    "3. **Run Cell 1** (setup - 2 min)\\n",
+
