@@ -133,7 +133,12 @@ def train_meta_learner(training_season: str = "2024-2025"):
 
     # Extract season from gameDate (mixed formats: ISO8601 or "YYYY-MM-DD HH:MM:SS")
     if 'gameDate' in df.columns:
-        df['gameDate'] = pd.to_datetime(df['gameDate'], format='mixed')
+        # Parse with utc=True to handle mixed timezones
+        df['gameDate'] = pd.to_datetime(df['gameDate'], format='mixed', utc=True)
+
+        # Convert to timezone-naive for easier processing
+        df['gameDate'] = df['gameDate'].dt.tz_localize(None)
+
         df['year'] = df['gameDate'].dt.year
         df['month'] = df['gameDate'].dt.month
 
