@@ -1,0 +1,48 @@
+# V4 Residual Correction + Temporal Memory Combo Test
+# Tests synergy between residual correction and temporal memory components
+
+experiment:
+  name: "v4_residual_temporal_combo"
+  description: "Test residual correction + temporal memory synergy"
+  version: "4.0"
+
+feature_flags:
+  # Enable both components to test synergy
+  residual_correction: true
+  temporal_memory: true
+  
+  # Disable player embeddings to isolate the combo effect
+  player_embeddings: false
+
+component_params:
+  residual_correction:
+    enabled: true
+    method: "linear"
+    cross_validation: true
+    cv_folds: 5
+    
+  temporal_memory:
+    enabled: true
+    memory_weight: 0.3
+    decay_factor: 0.9
+    window_importance: true
+    
+  player_embeddings:
+    enabled: false
+    embedding_dim: 16
+    min_games: 10
+
+training:
+  validation_split: 0.2
+  early_stopping: true
+  patience: 10
+  
+evaluation:
+  metrics: ["rmse", "mae", "r2"]
+  cross_validation: true
+  cv_folds: 5
+  
+output:
+  save_model: true
+  save_predictions: true
+  save_components: true

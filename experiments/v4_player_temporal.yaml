@@ -1,0 +1,34 @@
+experiment:
+  name: "v4_player_temporal"
+  description: "Test Player Embeddings + Temporal Memory interaction"
+  run_id: "auto"
+
+feature_flags:
+  residual_correction: false
+  player_embeddings: true
+  temporal_memory: true
+
+acceptance_criteria:
+  min_mae_improvement_pct: 2.0
+  statistical_significance: 0.05
+  max_regression_pct: 1.0
+
+components:
+  residual_correction:
+    enabled: false
+  player_embeddings:
+    enabled: true
+    embedding_dim: 16
+    min_games_for_embedding: 50
+  temporal_memory:
+    enabled: true
+    method: "transformer"
+    sequence_length: 27
+    hidden_dim: 32
+
+tracking:
+  save_predictions: true
+  save_features: true
+  cohort_analysis: true
+  calibration_analysis: true
+  statistical_tests: true

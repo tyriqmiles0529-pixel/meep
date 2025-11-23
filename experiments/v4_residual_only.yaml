@@ -1,0 +1,32 @@
+experiment:
+  name: "v4_residual_only"
+  description: "Test Cross-Window Residual Correction in isolation"
+  run_id: "auto"  # Will be auto-generated
+
+feature_flags:
+  residual_correction: true
+  player_embeddings: false
+  temporal_memory: false
+
+acceptance_criteria:
+  min_mae_improvement_pct: 2.0
+  statistical_significance: 0.05
+  max_regression_pct: 1.0
+
+components:
+  residual_correction:
+    enabled: true
+    method: "gradient_boosting"
+    n_estimators: 50
+    max_depth: 3
+  player_embeddings:
+    enabled: false
+  temporal_memory:
+    enabled: false
+
+tracking:
+  save_predictions: true
+  save_features: true
+  cohort_analysis: true
+  calibration_analysis: true
+  statistical_tests: true

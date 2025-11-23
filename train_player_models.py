@@ -169,7 +169,8 @@ def train_player_window(
     end_year: int,
     neural_epochs: int = 12,
     verbose: bool = True,
-    use_multi_task: bool = True
+    use_multi_task: bool = True,
+    use_gpu: bool = False  # Add this parameter
 ) -> Dict:
     """
     Train player models for a specific window.
@@ -219,12 +220,12 @@ def train_player_window(
         y_val_dict = {k: v[split_idx:] for k, v in y_dict.items()}
 
         # Train hybrid multi-task model
-        model = HybridMultiTaskPlayer(use_gpu=True)
+        model = HybridMultiTaskPlayer(use_gpu=use_gpu)
         model.fit(
             X_train, y_train_dict,
             X_val, y_val_dict,
-            correlated_epochs=15,  # Max epochs for correlated props
-            independent_epochs=15,  # Max epochs for independent props
+            correlated_epochs=neural_epochs,  # Use neural_epochs parameter
+            independent_epochs=neural_epochs,  # Use neural_epochs parameter
             batch_size=8192
         )
 
