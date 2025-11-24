@@ -369,6 +369,40 @@ class GCESystemMigrator:
             else:
                 self.log("⚠️  Failed to upload data directory")
         
+        # Upload raw data files (CSV, ZIP) if they exist
+        data_files = []
+        for pattern in ["*.csv", "*.zip", "*.parquet"]:
+            data_files.extend(Path(".").glob(pattern))
+        
+        if data_files:
+            self.log(f"Uploading {len(data_files)} raw data files...")
+            uploaded_data = 0
+            for data_file in data_files:
+                success = self.run_command(
+                    f"gcloud compute scp {data_file} {instance_name}:~/ --project {project} --zone {zone}",
+                    f"Upload {data_file.name} to GCE"
+                )
+                if success:
+                    uploaded_data += 1
+                else:
+                    self.log(f"❌ Failed to upload {data_file.name}")
+            
+            self.log(f"✅ Raw data upload complete: {uploaded_data}/{len(data_files)} files uploaded")
+            
+            # Unzip any ZIP files on GCE
+            zip_files = [f.name for f in data_files if f.suffix == '.zip']
+            if zip_files:
+                self.log("Unzipping data files on GCE...")
+                unzip_command = " && ".join([f"unzip -o {zip_file}" for zip_file in zip_files])
+                success = self.run_command(
+                    f"gcloud compute ssh {instance_name} --command '{unzip_command}' --project {project} --zone {zone}",
+                    "Unzip data files on GCE"
+                )
+                if success:
+                    self.log("✅ Data files unzipped on GCE")
+                else:
+                    self.log("⚠️  Failed to unzip data files")
+        
         self.log(f"✅ Upload complete: {uploaded_count}/{len(scripts_to_upload)} scripts uploaded")
         return uploaded_count > 0
     
