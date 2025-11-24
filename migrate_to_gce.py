@@ -389,14 +389,21 @@ class GCESystemMigrator:
             
             self.log(f"✅ Raw data upload complete: {uploaded_data}/{len(data_files)} files uploaded")
             
-            # Unzip any ZIP files on GCE
+            # Unzip any ZIP files on GCE using Python (no unzip command needed)
             zip_files = [f.name for f in data_files if f.suffix == '.zip']
             if zip_files:
-                self.log("Unzipping data files on GCE...")
-                unzip_command = " && ".join([f"unzip -o {zip_file}" for zip_file in zip_files])
+                self.log("Unzipping data files on GCE using Python...")
+                # Use Python's zipfile module instead of system unzip
+                unzip_commands = []
+                for zip_file in zip_files:
+                    unzip_commands.append(
+                        f"python3 -c \"import zipfile; zipfile.ZipFile('{zip_file}').extractall(); print('Extracted {zip_file}')\""
+                    )
+                
+                unzip_command = " && ".join(unzip_commands)
                 success = self.run_command(
                     f"gcloud compute ssh {instance_name} --command '{unzip_command}' --project {project} --zone {zone}",
-                    "Unzip data files on GCE"
+                    "Unzip data files on GCE using Python"
                 )
                 if success:
                     self.log("✅ Data files unzipped on GCE")
