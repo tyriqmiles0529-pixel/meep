@@ -234,6 +234,77 @@ class GCESystemMigrator:
         self.log("✅ Rollback completed - models restored from backup")
         return True
     
+    def _download_models_to_gce(self):
+        """Download models directly to GCE (Cloud Shell optimized)"""
+        self.log("=" * 60)
+        self.log("DOWNLOADING MODELS DIRECTLY TO GCE")
+        self.log("=" * 60)
+        
+        # Upload Modal download scripts to GCE
+        download_scripts = [
+            "download_models_from_modal.py",
+            "download_models_simple.py"
+        ]
+        
+        self.log("Uploading Modal download scripts to GCE...")
+        for script in download_scripts:
+            if Path(script).exists():
+                success = self.run_command(
+                    f"gcloud compute scp {script} nba-predictor:~/",
+                    f"Upload {script} to GCE"
+                )
+                if not success:
+                    raise Exception(f"Failed to upload {script} to GCE")
+            else:
+                self.log(f"⚠️  {script} not found - skipping")
+        
+        # Execute download scripts on GCE
+        self.log("Executing model downloads on GCE...")
+        
+        # Create directories on GCE first
+        mkdir_command = "mkdir -p player_models meta_models artifacts"
+        self.run_command(
+            f"gcloud compute ssh nba-predictor --command '{mkdir_command}'",
+            "Create model directories on GCE"
+        )
+        
+        # Download window models on GCE
+        if Path("download_models_from_modal.py").exists():
+            download_command = "python download_models_from_modal.py"
+            success = self.run_command(
+                f"gcloud compute ssh nba-predictor --command '{download_command}'",
+                "Download window models on GCE",
+                timeout_hours=2
+            )
+            if not success:
+                raise Exception("Failed to download window models on GCE")
+        
+        # Download meta-learner on GCE
+        if Path("download_models_simple.py").exists():
+            download_command = "python download_models_simple.py"
+            success = self.run_command(
+                f"gcloud compute ssh nba-predictor --command '{download_command}'",
+                "Download meta-learner on GCE",
+                timeout_hours=1
+            )
+            if not success:
+                self.log("⚠️  Failed to download meta-learner - will train new one on GCE")
+        
+        # Verify models were downloaded to GCE
+        self.log("Verifying models on GCE...")
+        verify_command = """
+        echo "Checking downloaded models..."
+        echo "Window models: $(find player_models -name "*.pkl" | wc -l)"
+        echo "Meta models: $(find meta_models -name "*.pkl" | wc -l)"
+        """
+        self.run_command(
+            f"gcloud compute ssh nba-predictor --command '{verify_command}'",
+            "Verify model downloads on GCE"
+        )
+        
+        self.log("✅ Models downloaded directly to GCE")
+        return True
+    
     def emergency_rollback_to_modal(self):
         """Emergency rollback - re-download from Modal"""
         self.log("=" * 60)
@@ -515,14 +586,25 @@ class GCESystemMigrator:
         
         try:
             # Run migration steps
-            steps = [
-                ("Step 1: Download from Modal", self.step1_download_from_modal),
-                ("Step 2: Create GCE Instance", self.step2_create_gce_instance),
-                ("Step 3: Upload to GCE", self.step3_upload_to_gce),
-                ("Step 4: Setup GCE Environment", self.step4_setup_gce_environment),
-                ("Step 5: Validate Migration", self.step5_validate_migration),
-                ("Step 6: Test Production", self.step6_test_production)
-            ]
+            if self._is_cloud_shell():
+                # Cloud Shell optimized workflow: create GCE first, then download directly to GCE
+                steps = [
+                    ("Step 1: Create GCE Instance", self.step2_create_gce_instance),
+                    ("Step 2: Download Models Directly to GCE", self._download_models_to_gce),
+                    ("Step 3: Setup GCE Environment", self.step4_setup_gce_environment),
+                    ("Step 4: Validate Migration", self.step5_validate_migration),
+                    ("Step 5: Test Production", self.step6_test_production)
+                ]
+            else:
+                # Local environment workflow: download locally first, then upload to GCE
+                steps = [
+                    ("Step 1: Download from Modal", self.step1_download_from_modal),
+                    ("Step 2: Create GCE Instance", self.step2_create_gce_instance),
+                    ("Step 3: Upload to GCE", self.step3_upload_to_gce),
+                    ("Step 4: Setup GCE Environment", self.step4_setup_gce_environment),
+                    ("Step 5: Validate Migration", self.step5_validate_migration),
+                    ("Step 6: Test Production", self.step6_test_production)
+                ]
             
             for step_name, step_func in steps:
                 print(f"\n{'='*60}")
@@ -573,11 +655,16 @@ class GCESystemMigrator:
         except (subprocess.CalledProcessError, FileNotFoundError):
             raise Exception("gcloud CLI not found. Please install Google Cloud SDK first.")
         
-        # Check disk space
-        import shutil
-        free_gb = shutil.disk_usage(".").free / (1024**3)
-        if free_gb < 50:  # Need space for downloads + backup
-            raise Exception(f"Insufficient disk space: {free_gb:.1f}GB free, 50GB required")
+        # Check if we're in Cloud Shell - if so, skip disk space check for local download
+        # We'll download models directly to GCE instead
+        if self._is_cloud_shell():
+            self.log("✅ Running in Cloud Shell - will download models directly to GCE")
+        else:
+            # Check disk space for local download (non-Cloud Shell environments)
+            import shutil
+            free_gb = shutil.disk_usage(".").free / (1024**3)
+            if free_gb < 50:  # Need space for downloads + backup
+                raise Exception(f"Insufficient disk space: {free_gb:.1f}GB free, 50GB required")
         
         # Verify checksum file will be writable
         try:
@@ -588,6 +675,16 @@ class GCESystemMigrator:
             raise Exception(f"Cannot write checksum file: {e}")
         
         self.log("✅ All pre-flight checks passed")
+    
+    def _is_cloud_shell(self):
+        """Check if we're running in Google Cloud Shell"""
+        # Cloud Shell has specific environment variables and paths
+        cloud_shell_indicators = [
+            os.environ.get("CLOUD_SHELL") == "true",
+            "/google/cloudshell" in os.environ.get("PATH", ""),
+            os.path.exists("/google/cloudshell")
+        ]
+        return any(cloud_shell_indicators)
     
     def _request_user_confirmation(self):
         """Request user confirmation before proceeding with migration"""
