@@ -319,8 +319,13 @@ class GCESystemMigrator:
                 result = subprocess.run(["gcloud", "config", "get-value", "project"], 
                                       capture_output=True, text=True)
                 project = result.stdout.strip()
+                if not project:
+                    # Fallback to known project if empty
+                    project = "e-copilot-476507-p1"
+                    self.log(f"Using fallback project: {project}")
             except Exception:
                 project = "e-copilot-476507-p1"  # Fallback project
+                self.log(f"Using fallback project: {project}")
         
         self.log(f"Connecting to GCE instance: {instance_name}")
         self.log(f"Zone: {zone}")

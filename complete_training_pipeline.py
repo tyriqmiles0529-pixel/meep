@@ -35,10 +35,17 @@ import json
 import time
 import argparse
 import subprocess
-import psutil
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+
+# Try to import psutil, make it optional for resource monitoring
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    print("Warning: psutil not available - resource monitoring disabled")
 
 # Force CPU mode
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -224,6 +231,10 @@ class TrainingPipeline:
     
     def _log_resources(self):
         """Log current resource usage"""
+        if not PSUTIL_AVAILABLE:
+            self.log("Resource monitoring: psutil not available")
+            return
+            
         try:
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
@@ -231,6 +242,7 @@ class TrainingPipeline:
             
             self.log(f"Resources: CPU {cpu_percent}%, RAM {memory.percent}%, Disk {disk_free:.1f}GB free")
         except Exception:
+            self.log("Resource monitoring: failed to get metrics")
             pass  # Don't fail on resource logging
     
     def _verify_step_output(self, step_name: str, expected_files: List[str]) -> bool:
@@ -502,13 +514,21 @@ class TrainingPipeline:
     
     def _monitor_disk_space(self, step_name: str):
         """Monitor disk space and warn if running low"""
-        free_gb = shutil.disk_usage(".").free / (1024**3)
-        self.log(f"Disk space check: {free_gb:.1f}GB free")
-        
-        if free_gb < 10:
-            self.log(f"⚠️  WARNING: Low disk space ({free_gb:.1f}GB) during {step_name}")
-        elif free_gb < 5:
-            raise Exception(f"CRITICAL: Insufficient disk space ({free_gb:.1f}GB) - aborting {step_name}")
+        if not PSUTIL_AVAILABLE:
+            self.log("Disk space monitoring: psutil not available - skipping")
+            return
+            
+        try:
+            import shutil
+            free_gb = shutil.disk_usage(".").free / (1024**3)
+            self.log(f"Disk space check: {free_gb:.1f}GB free")
+            
+            if free_gb < 10:
+                self.log(f"⚠️  WARNING: Low disk space ({free_gb:.1f}GB) during {step_name}")
+            elif free_gb < 5:
+                raise Exception(f"CRITICAL: Insufficient disk space ({free_gb:.1f}GB) - aborting {step_name}")
+        except Exception as e:
+            self.log(f"Disk space monitoring failed: {e}")
     
     def _cleanup_intermediate_files(self, step_name: str):
         """Clean up intermediate files to prevent disk exhaustion"""
