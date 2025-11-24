@@ -389,26 +389,70 @@ class GCESystemMigrator:
             
             self.log(f"✅ Raw data upload complete: {uploaded_data}/{len(data_files)} files uploaded")
             
-            # Unzip any ZIP files on GCE using Python (no unzip command needed)
+            # Unzip any ZIP files on GCE using a Python script (avoids shell escaping issues)
             zip_files = [f.name for f in data_files if f.suffix == '.zip']
             if zip_files:
-                self.log("Unzipping data files on GCE using Python...")
-                # Use Python's zipfile module instead of system unzip
-                unzip_commands = []
-                for zip_file in zip_files:
-                    unzip_commands.append(
-                        f"python3 -c \"import zipfile; zipfile.ZipFile('{zip_file}').extractall(); print('Extracted {zip_file}')\""
-                    )
+                self.log("Creating unzip script for GCE...")
+                # Create a simple Python script to handle unzipping
+                unzip_script_content = f'''#!/usr/bin/env python3
+import zipfile
+import os
+
+print("Starting unzip process...")
+zip_files = {zip_files}
+
+for zip_file in zip_files:
+    if os.path.exists(zip_file):
+        try:
+            print(f"Extracting {{zip_file}}...")
+            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                zip_ref.extractall()
+            print(f"✅ Successfully extracted {{zip_file}}")
+        except Exception as e:
+            print(f"❌ Failed to extract {{zip_file}}: {{e}}")
+    else:
+        print(f"⚠️  File {{zip_file}} not found")
+
+print("Unzip process completed.")
+'''
                 
-                unzip_command = " && ".join(unzip_commands)
+                # Write the unzip script locally
+                with open("unzip_data.py", "w") as f:
+                    f.write(unzip_script_content)
+                
+                # Upload the unzip script to GCE
                 success = self.run_command(
-                    f"gcloud compute ssh {instance_name} --command '{unzip_command}' --project {project} --zone {zone}",
-                    "Unzip data files on GCE using Python"
+                    f"gcloud compute scp unzip_data.py {instance_name}:~/ --project {project} --zone {zone}",
+                    "Upload unzip script to GCE"
                 )
+                
                 if success:
-                    self.log("✅ Data files unzipped on GCE")
+                    # Execute the unzip script on GCE
+                    success = self.run_command(
+                        f"gcloud compute ssh {instance_name} --command 'python3 unzip_data.py' --project {project} --zone {zone}",
+                        "Execute unzip script on GCE",
+                        critical=False  # Don't fail the whole upload if unzip fails
+                    )
+                    
+                    if success:
+                        self.log("✅ Data files unzipped on GCE")
+                    else:
+                        self.log("⚠️  Unzip script failed - files uploaded but not extracted")
+                    
+                    # Clean up the unzip script from GCE
+                    self.run_command(
+                        f"gcloud compute ssh {instance_name} --command 'rm unzip_data.py' --project {project} --zone {zone}",
+                        "Clean up unzip script from GCE",
+                        critical=False
+                    )
                 else:
-                    self.log("⚠️  Failed to unzip data files")
+                    self.log("⚠️  Failed to upload unzip script")
+                
+                # Clean up local unzip script
+                try:
+                    Path("unzip_data.py").unlink()
+                except:
+                    pass
         
         self.log(f"✅ Upload complete: {uploaded_count}/{len(scripts_to_upload)} scripts uploaded")
         return uploaded_count > 0
