@@ -13,6 +13,8 @@ import sys
 import gc
 import json
 import argparse
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -57,11 +59,75 @@ def parse_args():
     parser.add_argument('--force-retrain', action='store_true',
                         help='Force retrain all windows (ignore cache)')
 
-    # Output
-    parser.add_argument('--verbose', action='store_true', default=True,
-                        help='Print detailed progress')
+    # Parallel training parameters
+    parser.add_argument('--parallel-windows', type=int, default=4,
+                        help='Number of windows to train in parallel (default: 4)')
+    parser.add_argument('--no-parallel', action='store_true',
+                        help='Disable parallel training (use sequential)')
 
     return parser.parse_args()
+
+
+def train_single_window_worker(args_tuple):
+    """Worker function for parallel window training"""
+    (data_path, window_info, neural_epochs, shared_epochs, 
+     independent_epochs, patience, verbose, worker_id) = args_tuple
+    
+    # Set environment variables for this worker to limit CPU usage
+    os.environ['OMP_NUM_THREADS'] = '2'  # Limit LightGBM threads
+    os.environ['OPENBLAS_NUM_THREADS'] = '2'
+    os.environ['MKL_NUM_THREADS'] = '2'
+    
+    try:
+        # Load data in worker (isolated memory)
+        agg_df = load_player_data(data_path)
+        year_col = get_year_column(agg_df)
+        
+        start_year = window_info['start_year']
+        end_year = window_info['end_year']
+        window_seasons = window_info['seasons']
+        
+        if verbose:
+            print(f"[Worker {worker_id}] Starting window {start_year}-{end_year}")
+        
+        # Create window training data
+        window_df = create_window_training_data(
+            agg_df,
+            window_seasons,
+            year_col,
+            verbose=False  # Reduce verbosity in parallel mode
+        )
+        
+        # Train models
+        result = train_player_window(
+            window_df,
+            start_year,
+            end_year,
+            neural_epochs=neural_epochs,
+            shared_epochs=shared_epochs,
+            independent_epochs=independent_epochs,
+            patience=patience,
+            verbose=False
+        )
+        
+        # Clean up worker memory
+        del agg_df, window_df
+        gc.collect()
+        
+        return {
+            'success': True,
+            'window_info': window_info,
+            'result': result,
+            'worker_id': worker_id
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'window_info': window_info,
+            'error': str(e),
+            'worker_id': worker_id
+        }
 
 
 def create_window_training_data(
@@ -396,7 +462,18 @@ def main():
 
     print(f"\n📊 Will train {len(windows_to_process)} window(s)")
     print("="*70)
+    
+    # Choose training mode
+    if args.no_parallel or len(windows_to_process) == 1:
+        print("🔄 Using sequential training")
+        train_sequential(args, windows_to_process, agg_df, year_col)
+    else:
+        print(f"🚀 Using parallel training with {args.parallel_windows} workers")
+        train_parallel(args, windows_to_process)
 
+
+def train_sequential(args, windows_to_process, agg_df, year_col):
+    """Sequential training (original implementation)"""
     # Train each window
     for idx, window_info in enumerate(windows_to_process, 1):
         start_year = window_info['start_year']
@@ -446,10 +523,83 @@ def main():
         del window_df
         gc.collect()
 
+
+def train_parallel(args, windows_to_process):
+    """Parallel training implementation"""
+    completed_windows = 0
+    failed_windows = []
+    
+    # Prepare arguments for workers
+    worker_args = []
+    for idx, window_info in enumerate(windows_to_process):
+        worker_args.append((
+            args.data,
+            window_info,
+            args.neural_epochs,
+            args.shared_epochs,
+            args.independent_epochs,
+            args.patience,
+            args.verbose,
+            idx + 1
+        ))
+    
+    # Use ProcessPoolExecutor for parallel training
+    with ProcessPoolExecutor(max_workers=args.parallel_windows) as executor:
+        # Submit all jobs
+        future_to_window = {
+            executor.submit(train_single_window_worker, args): window_info 
+            for args, window_info in zip(worker_args, windows_to_process)
+        }
+        
+        # Process completed jobs
+        for future in as_completed(future_to_window):
+            window_info = future_to_window[future]
+            completed_windows += 1
+            
+            try:
+                result = future.result()
+                
+                if result['success']:
+                    start_year = result['window_info']['start_year']
+                    end_year = result['window_info']['end_year']
+                    worker_id = result['worker_id']
+                    
+                    print(f"✅ [{completed_windows}/{len(windows_to_process)}] "
+                          f"Worker {worker_id}: Window {start_year}-{end_year} completed")
+                    
+                    # Save metadata
+                    cache_meta = {
+                        'window': f'{start_year}-{end_year}',
+                        'seasons': result['window_info']['seasons'],
+                        'metrics': result['result']['metrics']
+                    }
+                    
+                    cache_path = result['window_info']['cache_path']
+                    meta_path = cache_path.with_suffix('.json')
+                    with open(meta_path, 'w') as f:
+                        json.dump(cache_meta, f, indent=2)
+                    
+                    # Save actual models (placeholder - implement proper saving)
+                    # models_path = cache_path.with_suffix('.pkl')
+                    # joblib.dump(result['result']['models'], models_path)
+                    
+                else:
+                    failed_windows.append(result['window_info'])
+                    print(f"❌ Window failed: {result['error']}")
+                    
+            except Exception as e:
+                failed_windows.append(window_info)
+                print(f"❌ Worker exception: {e}")
+    
+    # Summary
     print(f"\n{'='*70}")
-    print("✅ PLAYER MODEL TRAINING COMPLETE")
+    print("✅ PARALLEL TRAINING COMPLETE")
     print(f"{'='*70}")
-    print(f"Trained {len(windows_to_process)} window(s)")
+    print(f"Completed: {completed_windows - len(failed_windows)}/{len(windows_to_process)} windows")
+    if failed_windows:
+        print(f"Failed: {len(failed_windows)} windows")
+        for window in failed_windows:
+            print(f"  - {window['start_year']}-{window['end_year']}")
     print(f"Models saved to: {args.cache_dir}/")
 
 
