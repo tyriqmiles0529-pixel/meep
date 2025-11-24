@@ -305,6 +305,51 @@ class GCESystemMigrator:
         self.log("✅ Models downloaded directly to GCE")
         return True
     
+    def ssh_to_gce(self, instance_name=None, zone=None, project=None):
+        """SSH directly to GCE instance from the script"""
+        if not instance_name:
+            instance_name = "nba-predictor"  # Default instance name
+        
+        if not zone:
+            zone = "us-central1-f"  # Default zone
+        
+        if not project:
+            # Try to get current project
+            try:
+                result = subprocess.run(["gcloud", "config", "get-value", "project"], 
+                                      capture_output=True, text=True)
+                project = result.stdout.strip()
+            except Exception:
+                project = "e-copilot-476507-p1"  # Fallback project
+        
+        self.log(f"Connecting to GCE instance: {instance_name}")
+        self.log(f"Zone: {zone}")
+        self.log(f"Project: {project}")
+        self.log("=" * 60)
+        self.log("SSH CONNECTION TO GCE")
+        self.log("=" * 60)
+        
+        ssh_command = f"gcloud compute ssh --zone \"{zone}\" \"{instance_name}\" --project \"{project}\""
+        
+        self.log(f"Running: {ssh_command}")
+        self.log("Note: This will open an interactive SSH session")
+        self.log("Type 'exit' to return to the script")
+        
+        try:
+            # Use os.system for interactive SSH (subprocess.run doesn't handle interactive sessions well)
+            exit_code = os.system(ssh_command)
+            
+            if exit_code == 0:
+                self.log("✅ SSH session ended successfully")
+            else:
+                self.log(f"⚠️  SSH session ended with code: {exit_code}")
+                
+        except Exception as e:
+            self.log(f"❌ SSH connection failed: {e}")
+            return False
+        
+        return True
+    
     def emergency_rollback_to_modal(self):
         """Emergency rollback - re-download from Modal"""
         self.log("=" * 60)
@@ -782,11 +827,25 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Run migration in dry-run mode (no actual GCE operations)")
     parser.add_argument("--rollback-backup", action="store_true", help="Rollback using local backup")
     parser.add_argument("--rollback-modal", action="store_true", help="Emergency rollback - re-download from Modal")
+    parser.add_argument("--ssh", action="store_true", help="SSH to GCE instance")
+    parser.add_argument("--instance", type=str, help="Specific GCE instance name to SSH into")
+    parser.add_argument("--zone", type=str, help="GCE instance zone")
+    parser.add_argument("--project", type=str, help="GCP project ID")
     
     args = parser.parse_args()
     
     print("NBA Prediction System - Modal to GCE Migration")
     print("=" * 60)
+    
+    # Handle SSH option
+    if args.ssh:
+        migrator = GCESystemMigrator()
+        migrator.ssh_to_gce(
+            instance_name=args.instance,
+            zone=args.zone,
+            project=args.project
+        )
+        return True
     
     # Handle rollback options
     if args.rollback_backup:
