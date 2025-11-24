@@ -85,13 +85,13 @@ class TrainingPipeline:
             "step3_backtest": False
         }
         
-        # Detect Python command
-        self.python_cmd = self._detect_python_command()
-        
         # Initialize
         self._create_directories()
-        self._load_checkpoints()
         self._init_logging()
+        self._load_checkpoints()
+        
+        # Detect Python command (after logging is initialized)
+        self.python_cmd = self._detect_python_command()
     
     def _detect_python_command(self):
         """Detect which Python command to use"""
