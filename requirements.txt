@@ -1,0 +1,13 @@
+pandas
+numpy
+scikit-learn
+lightgbm
+pytorch-tabnet
+torch
+pyarrow
+pyyaml
+scipy
+kaggle
+requests
+google-cloud-storage
+google-cloud-secretmanager

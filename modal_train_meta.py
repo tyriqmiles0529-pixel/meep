@@ -798,120 +798,70 @@ def train_meta_learner_v4(config_path: str = "experiments/v4_full.yaml"):
     def collect_v4_predictions(df: pd.DataFrame, max_samples: int = 1500) -> dict:
         sample_df = df.sample(min(max_samples, len(df)), random_state=42)
         
-except Exception as e:
-    return {"status": "error", "message": f"Failed to download data: {e}"}
-    
-# Process dates
-if 'gameDate' in games_df.columns:
-    games_df['gameDate'] = pd.to_datetime(games_df['gameDate'], format='mixed', utc=True)
-    games_df['gameDate'] = games_df['gameDate'].dt.tz_localize(None)
-    games_df['year'] = games_df['gameDate'].dt.year
-    games_df['month'] = games_df['gameDate'].dt.month
-    games_df['season_year'] = games_df.apply(
-        lambda row: row['year'] if row['month'] >= 10 else row['year'] - 1,
-        axis=1
-    )
-
-# Filter to training seasons
-training_years = [2019, 2020]  # 2019-2020 + 2020-2021
-training_df = games_df[games_df['season_year'].isin(training_years)].copy()
-    
-# Prepare player stats for V4
-# Check what player column exists in the dataset
-player_col = None
-for col in ['playerName', 'player', 'Player', 'player_name']:
-    if col in games_df.columns:
-        player_col = col
-        break
-    
-# If no single player column, create one from firstName + lastName
-if not player_col and 'firstName' in games_df.columns and 'lastName' in games_df.columns:
-    games_df['playerName'] = games_df['firstName'] + ' ' + games_df['lastName']
-    player_col = 'playerName'
-    print(f"  Created playerName column from firstName + lastName")
-    
-if not player_col:
-    print(f"  Available columns: {list(games_df.columns)[:20]}")
-    return {"status": "error", "message": "No player name column found in dataset"}
-    
-print(f"  Using player column: {player_col}")
-    
-player_stats = games_df.groupby(player_col).agg({
-    'points': ['mean', 'std'],
-    'reboundsDefensive': ['mean', 'std'],
-    'reboundsOffensive': ['mean', 'std'],
-    'assists': ['mean', 'std'],
-    'threePointersMade': ['mean', 'std'],
-    'numMinutes': ['mean', 'count']
-}).round(3)
-    
-player_stats.columns = ['_'.join(col).strip() for col in player_stats.columns]
-player_stats = player_stats[player_stats[('numMinutes', 'count')] >= 50]
-    
-print(f"  Training data: {len(training_df):,} records")
-print(f"  Player stats: {len(player_stats)} players")
-
-# Collect V4 predictions
-def collect_v4_predictions(df: pd.DataFrame, max_samples: int = 1500) -> dict:
-    sample_df = df.sample(min(max_samples, len(df)), random_state=42)
+        window_predictions = {}
+        actuals = {}
         
-    window_predictions = {}
-    actuals = {}
+        props = ['points', 'rebounds', 'assists', 'threes']
+        prop_cols = {
+            'points': 'points',
+            'rebounds': 'reboundsTotal', 
+            'assists': 'assists',
+            'threes': 'threePointersMade'
+        }
         
-    props = ['points', 'rebounds', 'assists', 'threes']
-    prop_cols = {
-        'points': 'points',
-        'rebounds': 'reboundsTotal', 
-        'assists': 'assists',
-        'threes': 'threePointersMade'
-    }
-        
-    for prop in props:
-        if prop_cols[prop] not in sample_df.columns:
-            continue
-                
-        preds_list = []
-        actuals_list = []
-            
-        for _, game in sample_df.iterrows():
-            actual = game.get(prop_cols[prop])
-            if pd.isna(actual) or actual < 0:
+        for prop in props:
+            if prop_cols[prop] not in sample_df.columns:
                 continue
                 
-            window_preds = []
-            for window_name, models in window_models.items():
-                try:
-                    game_dict = game.to_dict()
-                    X = pd.DataFrame([{
-                        'fieldGoalsAttempted': game_dict.get('fieldGoalsAttempted', 0),
-                        'freeThrowsAttempted': game_dict.get('freeThrowsAttempted', 0),
-                        'assists': game_dict.get('assists', 0),
-                        'reboundsTotal': game_dict.get('reboundsDefensive', 0) + game_dict.get('reboundsOffensive', 0),
-                        'threePointersMade': game_dict.get('threePointersMade', 0),
-                        'points': game_dict.get('points', 0),
-                        'numMinutes': game_dict.get('numMinutes', 0),
-                        'fieldGoalsMade': game_dict.get('fieldGoalsMade', 0),
-                        'freeThrowsMade': game_dict.get('freeThrowsMade', 0),
-                        'turnovers': game_dict.get('turnovers', 0),
-                    
-                    pred = predict_with_window(models, X, prop)
-                    if isinstance(pred, np.ndarray):
-                        pred = pred[0] if len(pred) > 0 else 0.0
-                    window_preds.append(pred if pred is not None else 0.0)
-                except Exception:
-                    window_preds.append(0.0)
+            preds_list = []
+            actuals_list = []
             
-            if len(window_preds) >= 20:
-                while len(window_preds) < 27:
-                    window_preds.append(np.mean(window_preds))
+            for _, game in sample_df.iterrows():
+                actual = game.get(prop_cols[prop])
+                if pd.isna(actual) or actual < 0:
+                    continue
+                    
+                window_preds = []
+                for window_name, models in window_models.items():
+                    try:
+                        game_dict = game.to_dict()
+                        X = pd.DataFrame([{
+                            'fieldGoalsAttempted': game_dict.get('fieldGoalsAttempted', 0),
+                            'freeThrowsAttempted': game_dict.get('freeThrowsAttempted', 0),
+                            'assists': game_dict.get('assists', 0),
+                            'reboundsTotal': game_dict.get('reboundsDefensive', 0) + game_dict.get('reboundsOffensive', 0),
+                            'threePointersMade': game_dict.get('threePointersMade', 0),
+                            'points': game_dict.get('points', 0),
+                            'numMinutes': game_dict.get('numMinutes', 0),
+                            'fieldGoalsMade': game_dict.get('fieldGoalsMade', 0),
+                            'freeThrowsMade': game_dict.get('freeThrowsMade', 0),
+                            'turnovers': game_dict.get('turnovers', 0),
+                        }])
+                        
+                        pred = predict_with_window(models, X, prop)
+                        if isinstance(pred, np.ndarray):
+                            pred = pred[0] if len(pred) > 0 else 0.0
+                        window_preds.append(pred if pred is not None else 0.0)
+                    except Exception:
+                        window_preds.append(0.0)
                 
-                preds_list.append(window_preds[:27])
-                actuals_list.append(actual)
+                if len(window_preds) >= 20:
+                    while len(window_preds) < 27:
+                        window_preds.append(np.mean(window_preds))
+                    
+                    preds_list.append(window_preds[:27])
+                    actuals_list.append(actual)
+            
+            if len(actuals_list) >= 100:
+                window_predictions[prop] = np.array(preds_list)
+                actuals[prop] = np.array(actuals_list)
+                print(f"  {prop}: {len(actuals_list)} samples")
         
-        if len(actuals_list) >= 100:
-            window_predictions[prop] = np.array(preds_list)
-            actuals[prop] = np.array(actuals_list)
-            print(f"  {prop}: {len(actuals_list)} samples")
+        return {
+            'window_predictions': window_predictions,
+            'actuals': actuals,
+            'games_df': sample_df
+        }
     
     training_data = collect_v4_predictions(training_df)
     

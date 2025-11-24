@@ -14,7 +14,7 @@ def download_models():
     """Download all player model files from Modal volume"""
 
     # Create output directory
-    output_dir = Path("kaggle_models")
+    output_dir = Path("player_models")
     output_dir.mkdir(exist_ok=True)
 
     print("="*70)
@@ -65,7 +65,7 @@ def download_models():
             capture_output=True,
             text=True,
             encoding='utf-8',
-            errors='ignore'  # Ignore unicode errors from Modal CLI
+            errors='replace'  # Replace problematic unicode chars
         )
 
         if result.returncode == 0:

@@ -123,7 +123,7 @@ class HybridMultiTaskPlayer:
         self.feature_names = None
 
     def fit(self, X, y_dict, X_val=None, y_val_dict=None,
-            correlated_epochs=50, independent_epochs=30, batch_size=4096):
+            correlated_epochs=50, independent_epochs=30, batch_size=4096, patience=5):
         """
         Train hybrid multi-task model.
 
@@ -205,7 +205,7 @@ class HybridMultiTaskPlayer:
 
         # Use user-specified epochs with reasonable patience
         effective_epochs = correlated_epochs
-        effective_patience = 5  # Allow more epochs before early stopping
+        effective_patience = patience  # Use configurable patience
 
         self.correlated_tabnet.fit(
             X_np, y_composite_2d,
@@ -296,7 +296,7 @@ class HybridMultiTaskPlayer:
 
             # Use user-specified epochs with reasonable patience
             effective_epochs = independent_epochs
-            effective_patience = 5  # Allow more epochs before early stopping
+            effective_patience = patience  # Use configurable patience
 
             tabnet.fit(
                 X_np, y_train_2d,

@@ -36,6 +36,12 @@ def parse_args():
                         help='Size of training windows in years (default: 3)')
     parser.add_argument('--neural-epochs', type=int, default=12,
                         help='TabNet training epochs (default: 12)')
+    parser.add_argument('--shared-epochs', type=int, default=6,
+                        help='Epochs for shared stats (points, assists, rebounds) (default: 6)')
+    parser.add_argument('--independent-epochs', type=int, default=8,
+                        help='Epochs for independent props (minutes, threes) (default: 8)')
+    parser.add_argument('--patience', type=int, default=3,
+                        help='Early stopping patience (default: 3)')
     parser.add_argument('--cache-dir', type=str, default='model_cache',
                         help='Directory to cache trained models')
 
@@ -168,6 +174,9 @@ def train_player_window(
     start_year: int,
     end_year: int,
     neural_epochs: int = 12,
+    shared_epochs: int = 6,
+    independent_epochs: int = 8,
+    patience: int = 3,
     verbose: bool = True,
     use_multi_task: bool = True,
     use_gpu: bool = False  # Add this parameter
@@ -224,8 +233,9 @@ def train_player_window(
         model.fit(
             X_train, y_train_dict,
             X_val, y_val_dict,
-            correlated_epochs=neural_epochs,  # Use neural_epochs parameter
-            independent_epochs=neural_epochs,  # Use neural_epochs parameter
+            correlated_epochs=shared_epochs,  # Use shared epochs for points/assists/rebounds
+            independent_epochs=independent_epochs,  # Use independent epochs for minutes/threes
+            patience=patience,  # Use configurable patience
             batch_size=8192
         )
 
@@ -412,6 +422,9 @@ def main():
             start_year,
             end_year,
             neural_epochs=args.neural_epochs,
+            shared_epochs=args.shared_epochs,
+            independent_epochs=args.independent_epochs,
+            patience=args.patience,
             verbose=args.verbose
         )
 
