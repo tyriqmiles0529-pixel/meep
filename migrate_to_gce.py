@@ -305,6 +305,73 @@ class GCESystemMigrator:
         self.log("✅ Models downloaded directly to GCE")
         return True
     
+    def upload_scripts_to_gce(self, instance_name=None, zone=None, project=None):
+        """Upload training scripts to GCE instance"""
+        if not instance_name:
+            instance_name = "nba-predictor"
+        
+        if not zone:
+            zone = "us-central1-f"
+        
+        if not project:
+            try:
+                result = subprocess.run(["gcloud", "config", "get-value", "project"], 
+                                      capture_output=True, text=True)
+                project = result.stdout.strip()
+                if not project:
+                    project = "e-copilot-476507-p1"
+                    self.log(f"Using fallback project: {project}")
+            except Exception:
+                project = "e-copilot-476507-p1"
+                self.log(f"Using fallback project: {project}")
+        
+        self.log("=" * 60)
+        self.log("UPLOADING TRAINING SCRIPTS TO GCE")
+        self.log("=" * 60)
+        self.log(f"Target instance: {instance_name}")
+        self.log(f"Project: {project}")
+        
+        # Scripts to upload
+        scripts_to_upload = [
+            "complete_training_pipeline.py",
+            "train_player_models.py", 
+            "train_meta_learner_v4.py",
+            "backtest_engine.py",
+            "download_models_from_modal.py",
+            "download_models_simple.py",
+            "create_aggregated_dataset.py"
+        ]
+        
+        # Upload each script
+        uploaded_count = 0
+        for script in scripts_to_upload:
+            if Path(script).exists():
+                success = self.run_command(
+                    f"gcloud compute scp {script} {instance_name}:~/ --project {project} --zone {zone}",
+                    f"Upload {script} to GCE"
+                )
+                if success:
+                    uploaded_count += 1
+                else:
+                    self.log(f"❌ Failed to upload {script}")
+            else:
+                self.log(f"⚠️  {script} not found - skipping")
+        
+        # Upload data directory if it exists
+        if Path("data").exists():
+            self.log("Uploading data directory...")
+            success = self.run_command(
+                f"gcloud compute scp --recurse data/ {instance_name}:~/ --project {project} --zone {zone}",
+                "Upload data directory to GCE"
+            )
+            if success:
+                self.log("✅ Data directory uploaded")
+            else:
+                self.log("⚠️  Failed to upload data directory")
+        
+        self.log(f"✅ Upload complete: {uploaded_count}/{len(scripts_to_upload)} scripts uploaded")
+        return uploaded_count > 0
+    
     def ssh_to_gce(self, instance_name=None, zone=None, project=None):
         """SSH directly to GCE instance from the script"""
         if not instance_name:
@@ -833,6 +900,7 @@ def main():
     parser.add_argument("--rollback-backup", action="store_true", help="Rollback using local backup")
     parser.add_argument("--rollback-modal", action="store_true", help="Emergency rollback - re-download from Modal")
     parser.add_argument("--ssh", action="store_true", help="SSH to GCE instance")
+    parser.add_argument("--upload", action="store_true", help="Upload training scripts to GCE instance")
     parser.add_argument("--instance", type=str, help="Specific GCE instance name to SSH into")
     parser.add_argument("--zone", type=str, help="GCE instance zone")
     parser.add_argument("--project", type=str, help="GCP project ID")
@@ -846,6 +914,16 @@ def main():
     if args.ssh:
         migrator = GCESystemMigrator()
         migrator.ssh_to_gce(
+            instance_name=args.instance,
+            zone=args.zone,
+            project=args.project
+        )
+        return True
+    
+    # Handle upload option
+    if args.upload:
+        migrator = GCESystemMigrator()
+        migrator.upload_scripts_to_gce(
             instance_name=args.instance,
             zone=args.zone,
             project=args.project
