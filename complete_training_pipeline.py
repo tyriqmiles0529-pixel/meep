@@ -58,7 +58,8 @@ sys.path.insert(0, ".")
 class TrainingPipeline:
     """Orchestrates the complete NBA prediction training pipeline"""
     
-    def __init__(self, resume_from: Optional[str] = None, skip_data_prep: bool = False, custom_data: Optional[str] = None, dry_run: bool = False):
+    def __init__(self, resume_from: Optional[str] = None, skip_data_prep: bool = False, 
+                 custom_data: Optional[str] = None, dry_run: bool = False):
         self.start_time = datetime.now()
         self.resume_from = resume_from
         self.skip_data_prep = skip_data_prep
@@ -70,24 +71,51 @@ class TrainingPipeline:
         self.model_cache = "model_cache"
         self.backtest_results = "backtest_results"
         
-        # Checkpoints
+        # Checkpoint and logging files
+        self.checkpoint_file = "pipeline_checkpoints.json"
+        self.pipeline_log = "pipeline_log.txt"
+        self.progress_log = "progress_log.json"
+        self.notification_log = "notification_log.json"
+        
+        # Initialize checkpoints
         self.checkpoints = {
             "step0_data_prep": False,
             "step1_window_training": False,
             "step2_meta_learner": False,
             "step3_backtest": False
         }
-        self.checkpoint_file = "pipeline_checkpoints.json"
         
-        # Logging
-        self.pipeline_log = "pipeline_log.txt"
-        self.progress_log = "progress_log.json"
+        # Detect Python command
+        self.python_cmd = self._detect_python_command()
         
-        self._setup_directories()
+        # Initialize
+        self._create_directories()
         self._load_checkpoints()
         self._init_logging()
     
-    def _setup_directories(self):
+    def _detect_python_command(self):
+        """Detect which Python command to use"""
+        # Try python3 first (most common on Linux/GCE)
+        try:
+            result = subprocess.run(["python3", "--version"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                self.log(f"Using python3: {result.stdout.strip()}")
+                return "python3"
+        except Exception:
+            pass
+        
+        # Fallback to python
+        try:
+            result = subprocess.run(["python", "--version"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                self.log(f"Using python: {result.stdout.strip()}")
+                return "python"
+        except Exception:
+            pass
+        
+        raise Exception("Neither python3 nor python found in PATH")
+    
+    def _create_directories(self):
         """Create required directories"""
         directories = [
             self.model_cache,
@@ -298,29 +326,27 @@ class TrainingPipeline:
         # Check if data already exists
         if Path(self.data_file).exists():
             file_size = Path(self.data_file).stat().st_size / (1024**2)  # MB
-            self.log(f"✅ Data file already exists: {self.data_file} ({file_size:.1f} MB)")
-            self.checkpoints[step_name] = True
-            self._save_checkpoints()
-            return True
         
-        # Run data preparation
-        data_script = "create_aggregated_dataset.py"
-        if not Path(data_script).exists():
-            raise Exception(f"Data preparation script not found: {data_script}")
+        # Run aggregated dataset creation
+        cmd = f"{self.python_cmd} create_aggregated_dataset.py --output data/aggregated_player_data.parquet"
+        success = self._run_command(
+            cmd, 
+            "Create aggregated dataset",
+            critical=True,
+            timeout_hours=4
+        )
         
-        command = f"python {data_script} --output {self.data_file}"
-        success = self._run_command(command, "Create aggregated dataset", timeout_hours=4)
+        if not success:
+            return False
         
-        if success:
-            # Verify output
-            expected_files = [self.data_file]
-            if self._verify_step_output(step_name, expected_files):
-                self.checkpoints[step_name] = True
-                self._save_checkpoints()
-                self.log("✅ Step 0 completed - Data preparation finished")
-                return True
+        # Verify output
+        if not self._verify_step_output("data_preparation", [
+            "data/aggregated_player_data.parquet"
+        ]):
+            return False
         
-        return False
+        self.log("✅ Step 0 completed successfully")
+        return True
     
     def step1_window_training(self):
         """Step 1: Train all season window models"""
@@ -347,7 +373,7 @@ class TrainingPipeline:
         if not Path(training_script).exists():
             raise Exception(f"Training script not found: {training_script}")
         
-        command = f"python {training_script} --data {self.data_file} --cache-dir {self.model_cache} --neural-epochs 12"
+        command = f"{self.python_cmd} {training_script} --data {self.data_file} --cache-dir {self.model_cache} --neural-epochs 12"
         success = self._run_command(command, "Train season window models", timeout_hours=24)
         
         if success:
@@ -389,7 +415,7 @@ class TrainingPipeline:
         if not Path(training_script).exists():
             raise Exception(f"Meta-learner script not found: {training_script}")
         
-        command = f"python {training_script}"
+        command = f"{self.python_cmd} {training_script}"
         success = self._run_command(command, "Train meta-learner V4", timeout_hours=12)
         
         if success:
@@ -438,7 +464,7 @@ class TrainingPipeline:
         end_date = datetime.now().strftime("%Y-%m-%d")
         start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         
-        command = f"python {backtest_script} --models-dir {self.model_cache} --results-dir {self.backtest_results} --start-date {start_date} --end-date {end_date}"
+        command = f"{self.python_cmd} {backtest_script} --models-dir {self.model_cache} --results-dir {self.backtest_results} --start-date {start_date} --end-date {end_date}"
         success = self._run_command(command, "Run backtesting and validation", timeout_hours=6)
         
         if success:
