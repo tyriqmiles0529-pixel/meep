@@ -65,6 +65,10 @@ def parse_args():
     parser.add_argument('--no-parallel', action='store_true',
                         help='Disable parallel training (use sequential)')
 
+    # Output
+    parser.add_argument('--verbose', action='store_true', default=True,
+                        help='Print detailed progress')
+
     return parser.parse_args()
 
 
