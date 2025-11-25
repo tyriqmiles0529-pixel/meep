@@ -523,7 +523,11 @@ def train_sequential(args, windows_to_process, agg_df, year_col):
             verbose=args.verbose
         )
 
-        # Save to cache (placeholder - will implement proper saving)
+        # Save actual models (not just metadata)
+        import joblib
+        joblib.dump(result['models'], cache_path)
+        
+        # Save metadata too
         cache_meta = {
             'window': f'{start_year}-{end_year}',
             'seasons': window_seasons,
@@ -535,6 +539,7 @@ def train_sequential(args, windows_to_process, agg_df, year_col):
         with open(meta_path, 'w') as f:
             json.dump(cache_meta, f, indent=2)
 
+        print(f"✓ Saved models to {cache_path}")
         print(f"✓ Saved metadata to {meta_path}")
 
         # Clean up
