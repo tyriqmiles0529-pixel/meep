@@ -13,12 +13,16 @@ import sys
 import gc
 import json
 import argparse
+import warnings
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore')
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -81,6 +85,10 @@ def train_single_window_worker(args_tuple):
     os.environ['OMP_NUM_THREADS'] = '2'  # Limit LightGBM threads
     os.environ['OPENBLAS_NUM_THREADS'] = '2'
     os.environ['MKL_NUM_THREADS'] = '2'
+    
+    # Suppress warnings in worker processes too
+    import warnings
+    warnings.filterwarnings('ignore')
     
     try:
         # Load data in worker (isolated memory)
