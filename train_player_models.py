@@ -114,22 +114,28 @@ def train_single_window_worker(args_tuple):
             verbose=False
         )
         
+        # Save models (not just metadata)
+        cache_path = window_info['cache_path']
+        import joblib
+        joblib.dump(result['models'], cache_path)
+        
         # Clean up worker memory
-        del agg_df, window_df
+        del agg_df, window_df, result
         gc.collect()
         
         return {
             'success': True,
             'window_info': window_info,
-            'result': result,
             'worker_id': worker_id
         }
         
     except Exception as e:
+        import traceback
         return {
             'success': False,
             'window_info': window_info,
             'error': str(e),
+            'traceback': traceback.format_exc(),
             'worker_id': worker_id
         }
 
@@ -428,10 +434,10 @@ def main():
     print(f"Total seasons: {len(all_seasons)}")
     print(f"Window size: {args.window_size} years")
 
-    # Create windows
+    # Create rolling windows (overlapping 3-year periods)
     windows_to_process = []
 
-    for i in range(0, len(all_seasons), args.window_size):
+    for i in range(0, len(all_seasons) - args.window_size + 1, 1):
         window_seasons = all_seasons[i:i+args.window_size]
         if not window_seasons:
             continue
