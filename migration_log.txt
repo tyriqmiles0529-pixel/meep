@@ -1,0 +1,439 @@
+[2025-11-24 17:53:35] Running pre-flight validation...
+[2025-11-24 18:00:16] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:00:16] Zone: us-central1-f
+[2025-11-24 18:00:16] Project: 
+[2025-11-24 18:00:16] ============================================================
+[2025-11-24 18:00:16] SSH CONNECTION TO GCE
+[2025-11-24 18:00:16] ============================================================
+[2025-11-24 18:00:16] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project ""
+[2025-11-24 18:00:16] Note: This will open an interactive SSH session
+[2025-11-24 18:00:16] Type 'exit' to return to the script
+[2025-11-24 18:00:18] ⚠️  SSH session ended with code: 256
+[2025-11-24 18:02:13] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:02:13] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:02:13] Zone: us-central1-f
+[2025-11-24 18:02:13] Project: e-copilot-476507-p1
+[2025-11-24 18:02:13] ============================================================
+[2025-11-24 18:02:13] SSH CONNECTION TO GCE
+[2025-11-24 18:02:13] ============================================================
+[2025-11-24 18:02:13] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:02:13] Note: This will open an interactive SSH session
+[2025-11-24 18:02:13] Type 'exit' to return to the script
+[2025-11-24 18:03:31] ⚠️  SSH session ended with code: 512
+[2025-11-24 18:03:44] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:03:44] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:03:44] Zone: us-central1-f
+[2025-11-24 18:03:44] Project: e-copilot-476507-p1
+[2025-11-24 18:03:44] ============================================================
+[2025-11-24 18:03:44] SSH CONNECTION TO GCE
+[2025-11-24 18:03:44] ============================================================
+[2025-11-24 18:03:44] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:03:44] Note: This will open an interactive SSH session
+[2025-11-24 18:03:44] Type 'exit' to return to the script
+[2025-11-24 18:04:41] ✅ SSH session ended successfully
+[2025-11-24 18:05:00] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:05:00] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:05:00] Zone: us-central1-f
+[2025-11-24 18:05:00] Project: e-copilot-476507-p1
+[2025-11-24 18:05:00] ============================================================
+[2025-11-24 18:05:00] SSH CONNECTION TO GCE
+[2025-11-24 18:05:00] ============================================================
+[2025-11-24 18:05:00] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:05:00] Note: This will open an interactive SSH session
+[2025-11-24 18:05:00] Type 'exit' to return to the script
+[2025-11-24 18:23:57] ⚠️  SSH session ended with code: 32512
+[2025-11-24 18:24:10] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:24:10] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:24:10] Zone: us-central1-f
+[2025-11-24 18:24:10] Project: e-copilot-476507-p1
+[2025-11-24 18:24:10] ============================================================
+[2025-11-24 18:24:10] SSH CONNECTION TO GCE
+[2025-11-24 18:24:10] ============================================================
+[2025-11-24 18:24:10] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:24:10] Note: This will open an interactive SSH session
+[2025-11-24 18:24:10] Type 'exit' to return to the script
+[2025-11-24 18:25:00] ✅ SSH session ended successfully
+[2025-11-24 18:25:01] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:25:01] ============================================================
+[2025-11-24 18:25:01] UPLOADING TRAINING SCRIPTS TO GCE
+[2025-11-24 18:25:01] ============================================================
+[2025-11-24 18:25:01] Target instance: instance-20251123-232410
+[2025-11-24 18:25:01] Project: e-copilot-476507-p1
+[2025-11-24 18:25:01] Running: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:25:01] Command: gcloud compute scp complete_training_pipeline.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:25:03] ✅ Completed: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:25:03] Running: Upload train_player_models.py to GCE
+[2025-11-24 18:25:03] Command: gcloud compute scp train_player_models.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:25:05] ✅ Completed: Upload train_player_models.py to GCE
+[2025-11-24 18:25:05] Running: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:25:05] Command: gcloud compute scp train_meta_learner_v4.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:25:07] ✅ Completed: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:25:07] Running: Upload backtest_engine.py to GCE
+[2025-11-24 18:25:07] Command: gcloud compute scp backtest_engine.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:25:09] ✅ Completed: Upload backtest_engine.py to GCE
+[2025-11-24 18:25:09] Running: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:25:09] Command: gcloud compute scp download_models_from_modal.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:25:11] ✅ Completed: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:25:11] Running: Upload download_models_simple.py to GCE
+[2025-11-24 18:25:11] Command: gcloud compute scp download_models_simple.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:25:14] ✅ Completed: Upload download_models_simple.py to GCE
+[2025-11-24 18:25:14] Running: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:25:14] Command: gcloud compute scp create_aggregated_dataset.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:25:16] ✅ Completed: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:25:16] ✅ Upload complete: 7/7 scripts uploaded
+[2025-11-24 18:25:17] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:25:17] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:25:17] Zone: us-central1-f
+[2025-11-24 18:25:17] Project: e-copilot-476507-p1
+[2025-11-24 18:25:17] ============================================================
+[2025-11-24 18:25:17] SSH CONNECTION TO GCE
+[2025-11-24 18:25:17] ============================================================
+[2025-11-24 18:25:17] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:25:17] Note: This will open an interactive SSH session
+[2025-11-24 18:25:17] Type 'exit' to return to the script
+[2025-11-24 18:36:06] ✅ SSH session ended successfully
+[2025-11-24 18:36:11] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:36:11] ============================================================
+[2025-11-24 18:36:11] UPLOADING TRAINING SCRIPTS TO GCE
+[2025-11-24 18:36:11] ============================================================
+[2025-11-24 18:36:11] Target instance: instance-20251123-232410
+[2025-11-24 18:36:11] Project: e-copilot-476507-p1
+[2025-11-24 18:36:11] Running: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:36:11] Command: gcloud compute scp complete_training_pipeline.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:36:14] ✅ Completed: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:36:14] Running: Upload train_player_models.py to GCE
+[2025-11-24 18:36:14] Command: gcloud compute scp train_player_models.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:36:16] ✅ Completed: Upload train_player_models.py to GCE
+[2025-11-24 18:36:16] Running: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:36:16] Command: gcloud compute scp train_meta_learner_v4.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:36:19] ✅ Completed: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:36:19] Running: Upload backtest_engine.py to GCE
+[2025-11-24 18:36:19] Command: gcloud compute scp backtest_engine.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:36:21] ✅ Completed: Upload backtest_engine.py to GCE
+[2025-11-24 18:36:21] Running: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:36:21] Command: gcloud compute scp download_models_from_modal.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:36:23] ✅ Completed: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:36:23] Running: Upload download_models_simple.py to GCE
+[2025-11-24 18:36:23] Command: gcloud compute scp download_models_simple.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:36:26] ✅ Completed: Upload download_models_simple.py to GCE
+[2025-11-24 18:36:26] Running: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:36:26] Command: gcloud compute scp create_aggregated_dataset.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:36:28] ✅ Completed: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:36:28] ✅ Upload complete: 7/7 scripts uploaded
+[2025-11-24 18:36:29] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:36:29] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:36:29] Zone: us-central1-f
+[2025-11-24 18:36:29] Project: e-copilot-476507-p1
+[2025-11-24 18:36:29] ============================================================
+[2025-11-24 18:36:29] SSH CONNECTION TO GCE
+[2025-11-24 18:36:29] ============================================================
+[2025-11-24 18:36:29] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:36:29] Note: This will open an interactive SSH session
+[2025-11-24 18:36:29] Type 'exit' to return to the script
+[2025-11-24 18:39:07] ⚠️  SSH session ended with code: 33280
+[2025-11-24 18:39:13] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:39:13] ============================================================
+[2025-11-24 18:39:13] UPLOADING TRAINING SCRIPTS TO GCE
+[2025-11-24 18:39:13] ============================================================
+[2025-11-24 18:39:13] Target instance: instance-20251123-232410
+[2025-11-24 18:39:13] Project: e-copilot-476507-p1
+[2025-11-24 18:39:13] Running: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:39:13] Command: gcloud compute scp complete_training_pipeline.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:16] ✅ Completed: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:39:16] Running: Upload train_player_models.py to GCE
+[2025-11-24 18:39:16] Command: gcloud compute scp train_player_models.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:18] ✅ Completed: Upload train_player_models.py to GCE
+[2025-11-24 18:39:18] Running: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:39:18] Command: gcloud compute scp train_meta_learner_v4.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:21] ✅ Completed: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:39:21] Running: Upload backtest_engine.py to GCE
+[2025-11-24 18:39:21] Command: gcloud compute scp backtest_engine.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:23] ✅ Completed: Upload backtest_engine.py to GCE
+[2025-11-24 18:39:23] Running: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:39:23] Command: gcloud compute scp download_models_from_modal.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:25] ✅ Completed: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:39:25] Running: Upload download_models_simple.py to GCE
+[2025-11-24 18:39:25] Command: gcloud compute scp download_models_simple.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:28] ✅ Completed: Upload download_models_simple.py to GCE
+[2025-11-24 18:39:28] Running: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:39:28] Command: gcloud compute scp create_aggregated_dataset.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:30] ✅ Completed: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:39:30] Uploading 3 raw data files...
+[2025-11-24 18:39:30] Running: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:39:30] Command: gcloud compute scp PlayerStatistics.csv.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:33] ✅ Completed: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:39:33] Running: Upload priors_data.zip to GCE
+[2025-11-24 18:39:33] Command: gcloud compute scp priors_data.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:35] ✅ Completed: Upload priors_data.zip to GCE
+[2025-11-24 18:39:35] Running: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:39:35] Command: gcloud compute scp nba_models_trained.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:38] ✅ Completed: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:39:38] ✅ Raw data upload complete: 3/3 files uploaded
+[2025-11-24 18:39:38] Unzipping data files on GCE...
+[2025-11-24 18:39:38] Running: Unzip data files on GCE
+[2025-11-24 18:39:38] Command: gcloud compute ssh instance-20251123-232410 --command 'unzip -o PlayerStatistics.csv.zip && unzip -o priors_data.zip && unzip -o nba_models_trained.zip' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:39:40] ❌ Attempt 1 failed: Unzip data files on GCE
+[2025-11-24 18:39:40] Return code: 127
+[2025-11-24 18:39:40] Error: bash: line 1: unzip: command not found
+
+[2025-11-24 18:39:40] Retrying in 30 seconds...
+[2025-11-24 18:40:13] ❌ Attempt 2 failed: Unzip data files on GCE
+[2025-11-24 18:40:13] Return code: 127
+[2025-11-24 18:40:13] Error: bash: line 1: unzip: command not found
+
+[2025-11-24 18:40:13] Retrying in 30 seconds...
+[2025-11-24 18:40:46] ❌ Attempt 3 failed: Unzip data files on GCE
+[2025-11-24 18:40:46] Return code: 127
+[2025-11-24 18:40:46] Error: bash: line 1: unzip: command not found
+
+[2025-11-24 18:40:46] ❌ Command execution failed on attempt 3: Critical command failed after 3 attempts: gcloud compute ssh instance-20251123-232410 --command 'unzip -o PlayerStatistics.csv.zip && unzip -o priors_data.zip && unzip -o nba_models_trained.zip' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:40:47] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:40:47] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:40:47] Zone: us-central1-f
+[2025-11-24 18:40:47] Project: e-copilot-476507-p1
+[2025-11-24 18:40:47] ============================================================
+[2025-11-24 18:40:47] SSH CONNECTION TO GCE
+[2025-11-24 18:40:47] ============================================================
+[2025-11-24 18:40:47] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:40:47] Note: This will open an interactive SSH session
+[2025-11-24 18:40:47] Type 'exit' to return to the script
+[2025-11-24 18:47:44] ✅ SSH session ended successfully
+[2025-11-24 18:47:47] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:47:47] ============================================================
+[2025-11-24 18:47:47] UPLOADING TRAINING SCRIPTS TO GCE
+[2025-11-24 18:47:47] ============================================================
+[2025-11-24 18:47:47] Target instance: instance-20251123-232410
+[2025-11-24 18:47:47] Project: e-copilot-476507-p1
+[2025-11-24 18:47:47] Running: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:47:47] Command: gcloud compute scp complete_training_pipeline.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:47:48] ❌ Attempt 1 failed: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:47:48] Return code: 1
+[2025-11-24 18:47:48] Error: ERROR: (gcloud.compute.scp) You do not currently have an active account selected.
+Please run:
+
+  $ gcloud auth login
+
+to obtain new credentials.
+
+If you have already logged in with a different account, run:
+
+  $ gcloud config set account ACCOUNT
+
+to select an already authenticated account to use.
+
+[2025-11-24 18:47:48] Retrying in 30 seconds...
+[2025-11-24 18:48:21] ✅ Completed: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:48:21] Running: Upload train_player_models.py to GCE
+[2025-11-24 18:48:21] Command: gcloud compute scp train_player_models.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:24] ✅ Completed: Upload train_player_models.py to GCE
+[2025-11-24 18:48:24] Running: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:48:24] Command: gcloud compute scp train_meta_learner_v4.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:26] ✅ Completed: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:48:26] Running: Upload backtest_engine.py to GCE
+[2025-11-24 18:48:26] Command: gcloud compute scp backtest_engine.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:28] ✅ Completed: Upload backtest_engine.py to GCE
+[2025-11-24 18:48:28] Running: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:48:28] Command: gcloud compute scp download_models_from_modal.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:31] ✅ Completed: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:48:31] Running: Upload download_models_simple.py to GCE
+[2025-11-24 18:48:31] Command: gcloud compute scp download_models_simple.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:33] ✅ Completed: Upload download_models_simple.py to GCE
+[2025-11-24 18:48:33] Running: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:48:33] Command: gcloud compute scp create_aggregated_dataset.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:35] ✅ Completed: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:48:35] Uploading 3 raw data files...
+[2025-11-24 18:48:35] Running: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:48:35] Command: gcloud compute scp PlayerStatistics.csv.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:38] ✅ Completed: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:48:38] Running: Upload priors_data.zip to GCE
+[2025-11-24 18:48:38] Command: gcloud compute scp priors_data.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:41] ✅ Completed: Upload priors_data.zip to GCE
+[2025-11-24 18:48:41] Running: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:48:41] Command: gcloud compute scp nba_models_trained.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:43] ✅ Completed: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:48:43] ✅ Raw data upload complete: 3/3 files uploaded
+[2025-11-24 18:48:43] Unzipping data files on GCE...
+[2025-11-24 18:48:43] Running: Unzip data files on GCE
+[2025-11-24 18:48:43] Command: gcloud compute ssh instance-20251123-232410 --command 'unzip -o PlayerStatistics.csv.zip && unzip -o priors_data.zip && unzip -o nba_models_trained.zip' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:48:46] ❌ Attempt 1 failed: Unzip data files on GCE
+[2025-11-24 18:48:46] Return code: 127
+[2025-11-24 18:48:46] Error: bash: line 1: unzip: command not found
+
+[2025-11-24 18:48:46] Retrying in 30 seconds...
+[2025-11-24 18:49:18] ❌ Attempt 2 failed: Unzip data files on GCE
+[2025-11-24 18:49:18] Return code: 127
+[2025-11-24 18:49:18] Error: bash: line 1: unzip: command not found
+
+[2025-11-24 18:49:18] Retrying in 30 seconds...
+[2025-11-24 18:49:51] ❌ Attempt 3 failed: Unzip data files on GCE
+[2025-11-24 18:49:51] Return code: 127
+[2025-11-24 18:49:51] Error: bash: line 1: unzip: command not found
+
+[2025-11-24 18:49:51] ❌ Command execution failed on attempt 3: Critical command failed after 3 attempts: gcloud compute ssh instance-20251123-232410 --command 'unzip -o PlayerStatistics.csv.zip && unzip -o priors_data.zip && unzip -o nba_models_trained.zip' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:49:52] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:49:52] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:49:52] Zone: us-central1-f
+[2025-11-24 18:49:52] Project: e-copilot-476507-p1
+[2025-11-24 18:49:52] ============================================================
+[2025-11-24 18:49:52] SSH CONNECTION TO GCE
+[2025-11-24 18:49:52] ============================================================
+[2025-11-24 18:49:52] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:49:52] Note: This will open an interactive SSH session
+[2025-11-24 18:49:52] Type 'exit' to return to the script
+[2025-11-24 18:50:35] ✅ SSH session ended successfully
+[2025-11-24 18:50:39] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:50:39] ============================================================
+[2025-11-24 18:50:39] UPLOADING TRAINING SCRIPTS TO GCE
+[2025-11-24 18:50:39] ============================================================
+[2025-11-24 18:50:39] Target instance: instance-20251123-232410
+[2025-11-24 18:50:39] Project: e-copilot-476507-p1
+[2025-11-24 18:50:39] Running: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:50:39] Command: gcloud compute scp complete_training_pipeline.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:41] ✅ Completed: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:50:41] Running: Upload train_player_models.py to GCE
+[2025-11-24 18:50:41] Command: gcloud compute scp train_player_models.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:44] ✅ Completed: Upload train_player_models.py to GCE
+[2025-11-24 18:50:44] Running: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:50:44] Command: gcloud compute scp train_meta_learner_v4.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:46] ✅ Completed: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:50:46] Running: Upload backtest_engine.py to GCE
+[2025-11-24 18:50:46] Command: gcloud compute scp backtest_engine.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:49] ✅ Completed: Upload backtest_engine.py to GCE
+[2025-11-24 18:50:49] Running: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:50:49] Command: gcloud compute scp download_models_from_modal.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:51] ✅ Completed: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:50:51] Running: Upload download_models_simple.py to GCE
+[2025-11-24 18:50:51] Command: gcloud compute scp download_models_simple.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:54] ✅ Completed: Upload download_models_simple.py to GCE
+[2025-11-24 18:50:54] Running: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:50:54] Command: gcloud compute scp create_aggregated_dataset.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:56] ✅ Completed: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:50:56] Uploading 3 raw data files...
+[2025-11-24 18:50:56] Running: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:50:56] Command: gcloud compute scp PlayerStatistics.csv.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:50:59] ✅ Completed: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:50:59] Running: Upload priors_data.zip to GCE
+[2025-11-24 18:50:59] Command: gcloud compute scp priors_data.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:51:02] ✅ Completed: Upload priors_data.zip to GCE
+[2025-11-24 18:51:02] Running: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:51:02] Command: gcloud compute scp nba_models_trained.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:51:04] ✅ Completed: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:51:04] ✅ Raw data upload complete: 3/3 files uploaded
+[2025-11-24 18:51:04] Unzipping data files on GCE using Python...
+[2025-11-24 18:51:04] Running: Unzip data files on GCE using Python
+[2025-11-24 18:51:04] Command: gcloud compute ssh instance-20251123-232410 --command 'python3 -c "import zipfile; zipfile.ZipFile('PlayerStatistics.csv.zip').extractall(); print('Extracted PlayerStatistics.csv.zip')" && python3 -c "import zipfile; zipfile.ZipFile('priors_data.zip').extractall(); print('Extracted priors_data.zip')" && python3 -c "import zipfile; zipfile.ZipFile('nba_models_trained.zip').extractall(); print('Extracted nba_models_trained.zip')"' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:51:05] ❌ Attempt 1 failed: Unzip data files on GCE using Python
+[2025-11-24 18:51:05] Return code: 2
+[2025-11-24 18:51:05] Error: ERROR: (gcloud.compute.ssh) unrecognized arguments:
+  PlayerStatistics.csv.zip)" && python3 -c "import zipfile; zipfile.ZipFile(priors_data.zip).extractall(); print(Extracted
+  priors_data.zip)" && python3 -c "import zipfile; zipfile.ZipFile(nba_models_trained.zip).extractall(); print(Extracted
+  nba_models_trained.zip)"
+  To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+
+[2025-11-24 18:51:05] Retrying in 30 seconds...
+[2025-11-24 18:51:36] ❌ Attempt 2 failed: Unzip data files on GCE using Python
+[2025-11-24 18:51:36] Return code: 2
+[2025-11-24 18:51:36] Error: ERROR: (gcloud.compute.ssh) unrecognized arguments:
+  PlayerStatistics.csv.zip)" && python3 -c "import zipfile; zipfile.ZipFile(priors_data.zip).extractall(); print(Extracted
+  priors_data.zip)" && python3 -c "import zipfile; zipfile.ZipFile(nba_models_trained.zip).extractall(); print(Extracted
+  nba_models_trained.zip)"
+  To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+
+[2025-11-24 18:51:36] Retrying in 30 seconds...
+[2025-11-24 18:52:07] ❌ Attempt 3 failed: Unzip data files on GCE using Python
+[2025-11-24 18:52:07] Return code: 2
+[2025-11-24 18:52:07] Error: ERROR: (gcloud.compute.ssh) unrecognized arguments:
+  PlayerStatistics.csv.zip)" && python3 -c "import zipfile; zipfile.ZipFile(priors_data.zip).extractall(); print(Extracted
+  priors_data.zip)" && python3 -c "import zipfile; zipfile.ZipFile(nba_models_trained.zip).extractall(); print(Extracted
+  nba_models_trained.zip)"
+  To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+
+[2025-11-24 18:52:07] ❌ Command execution failed on attempt 3: Critical command failed after 3 attempts: gcloud compute ssh instance-20251123-232410 --command 'python3 -c "import zipfile; zipfile.ZipFile('PlayerStatistics.csv.zip').extractall(); print('Extracted PlayerStatistics.csv.zip')" && python3 -c "import zipfile; zipfile.ZipFile('priors_data.zip').extractall(); print('Extracted priors_data.zip')" && python3 -c "import zipfile; zipfile.ZipFile('nba_models_trained.zip').extractall(); print('Extracted nba_models_trained.zip')"' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:52:08] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:52:08] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:52:08] Zone: us-central1-f
+[2025-11-24 18:52:08] Project: e-copilot-476507-p1
+[2025-11-24 18:52:08] ============================================================
+[2025-11-24 18:52:08] SSH CONNECTION TO GCE
+[2025-11-24 18:52:08] ============================================================
+[2025-11-24 18:52:08] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:52:08] Note: This will open an interactive SSH session
+[2025-11-24 18:52:08] Type 'exit' to return to the script
+[2025-11-24 18:56:58] ✅ SSH session ended successfully
+[2025-11-24 18:57:00] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:57:00] ============================================================
+[2025-11-24 18:57:00] UPLOADING TRAINING SCRIPTS TO GCE
+[2025-11-24 18:57:00] ============================================================
+[2025-11-24 18:57:00] Target instance: instance-20251123-232410
+[2025-11-24 18:57:00] Project: e-copilot-476507-p1
+[2025-11-24 18:57:00] Running: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:57:00] Command: gcloud compute scp complete_training_pipeline.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:03] ✅ Completed: Upload complete_training_pipeline.py to GCE
+[2025-11-24 18:57:03] Running: Upload train_player_models.py to GCE
+[2025-11-24 18:57:03] Command: gcloud compute scp train_player_models.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:06] ✅ Completed: Upload train_player_models.py to GCE
+[2025-11-24 18:57:06] Running: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:57:06] Command: gcloud compute scp train_meta_learner_v4.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:08] ✅ Completed: Upload train_meta_learner_v4.py to GCE
+[2025-11-24 18:57:08] Running: Upload backtest_engine.py to GCE
+[2025-11-24 18:57:08] Command: gcloud compute scp backtest_engine.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:10] ✅ Completed: Upload backtest_engine.py to GCE
+[2025-11-24 18:57:10] Running: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:57:10] Command: gcloud compute scp download_models_from_modal.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:13] ✅ Completed: Upload download_models_from_modal.py to GCE
+[2025-11-24 18:57:13] Running: Upload download_models_simple.py to GCE
+[2025-11-24 18:57:13] Command: gcloud compute scp download_models_simple.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:15] ✅ Completed: Upload download_models_simple.py to GCE
+[2025-11-24 18:57:15] Running: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:57:15] Command: gcloud compute scp create_aggregated_dataset.py instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:17] ✅ Completed: Upload create_aggregated_dataset.py to GCE
+[2025-11-24 18:57:17] Uploading 3 raw data files...
+[2025-11-24 18:57:17] Running: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:57:17] Command: gcloud compute scp PlayerStatistics.csv.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:20] ✅ Completed: Upload PlayerStatistics.csv.zip to GCE
+[2025-11-24 18:57:20] Running: Upload priors_data.zip to GCE
+[2025-11-24 18:57:20] Command: gcloud compute scp priors_data.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:23] ✅ Completed: Upload priors_data.zip to GCE
+[2025-11-24 18:57:23] Running: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:57:23] Command: gcloud compute scp nba_models_trained.zip instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:25] ✅ Completed: Upload nba_models_trained.zip to GCE
+[2025-11-24 18:57:25] ✅ Raw data upload complete: 3/3 files uploaded
+[2025-11-24 18:57:25] Creating shell script for unzipping on GCE...
+[2025-11-24 18:57:25] Running: Upload shell script to GCE
+[2025-11-24 18:57:25] Command: gcloud compute scp unzip_files.sh instance-20251123-232410:~/ --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:27] ✅ Completed: Upload shell script to GCE
+[2025-11-24 18:57:27] Running: Make shell script executable
+[2025-11-24 18:57:27] Command: gcloud compute ssh instance-20251123-232410 --command 'chmod +x unzip_files.sh' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:30] ✅ Completed: Make shell script executable
+[2025-11-24 18:57:30] Running: Execute shell script on GCE
+[2025-11-24 18:57:30] Command: gcloud compute ssh instance-20251123-232410 --command 'bash unzip_files.sh' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:34] ✅ Completed: Execute shell script on GCE
+[2025-11-24 18:57:34] ✅ Data files unzipped on GCE
+[2025-11-24 18:57:34] Running: Clean up shell script from GCE
+[2025-11-24 18:57:34] Command: gcloud compute ssh instance-20251123-232410 --command 'rm unzip_files.sh' --project e-copilot-476507-p1 --zone us-central1-f
+[2025-11-24 18:57:36] ✅ Completed: Clean up shell script from GCE
+[2025-11-24 18:57:36] ✅ Upload complete: 7/7 scripts uploaded
+[2025-11-24 18:57:38] Using fallback project: e-copilot-476507-p1
+[2025-11-24 18:57:38] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 18:57:38] Zone: us-central1-f
+[2025-11-24 18:57:38] Project: e-copilot-476507-p1
+[2025-11-24 18:57:38] ============================================================
+[2025-11-24 18:57:38] SSH CONNECTION TO GCE
+[2025-11-24 18:57:38] ============================================================
+[2025-11-24 18:57:38] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 18:57:38] Note: This will open an interactive SSH session
+[2025-11-24 18:57:38] Type 'exit' to return to the script
+[2025-11-24 19:13:42] ✅ SSH session ended successfully
+[2025-11-24 19:34:04] Using fallback project: e-copilot-476507-p1
+[2025-11-24 19:34:04] Connecting to GCE instance: instance-20251123-232410
+[2025-11-24 19:34:04] Zone: us-central1-f
+[2025-11-24 19:34:04] Project: e-copilot-476507-p1
+[2025-11-24 19:34:04] ============================================================
+[2025-11-24 19:34:04] SSH CONNECTION TO GCE
+[2025-11-24 19:34:04] ============================================================
+[2025-11-24 19:34:04] Running: gcloud compute ssh --zone "us-central1-f" "instance-20251123-232410" --project "e-copilot-476507-p1"
+[2025-11-24 19:34:04] Note: This will open an interactive SSH session
+[2025-11-24 19:34:04] Type 'exit' to return to the script

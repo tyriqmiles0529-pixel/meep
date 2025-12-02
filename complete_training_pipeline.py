@@ -373,7 +373,7 @@ class TrainingPipeline:
         if not Path(training_script).exists():
             raise Exception(f"Training script not found: {training_script}")
         
-        command = f"{self.python_cmd} {training_script} --data {self.data_file} --cache-dir {self.model_cache} --shared-epochs 6 --independent-epochs 8 --neural-epochs 12 --verbose"
+        command = f"{self.python_cmd} {training_script} --data {self.data_file} --cache-dir {self.model_cache} --neural-epochs 12"
         success = self._run_command(command, "Train season window models", timeout_hours=24)
         
         if success:
