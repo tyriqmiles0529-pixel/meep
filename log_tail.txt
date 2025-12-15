@@ -1,0 +1,72 @@
+Starting Optimization Loop...
+Loading Data Processor...
+Loading data from final_feature_matrix_with_per_min_1997_onward.csv...
+Data loaded: (976369, 70)
+Dropped 1219 rows with missing target 'points'
+Categorical columns to encode: ['first_name', 'last_name', 'playerteamCity', 'playerteamName', 'opponentteamCity', 'opponentteamName', 'gameType', 'gameLabel', 'gameSubLabel', 'clean_name', 'player_name']
+Warning: 'pace' column not found. Skipping pace adjustments.
+Adding Interaction Terms...
+Preprocessing complete. 48 features identified.
+Excluded 24 potential leakage columns.
+Loading Models...
+Loading points model...
+Models loaded with suffix '_points'.
+Warning: FT-Transformer not found at models/global_ft_2025/ft_transformer.pt
+Loading rebounds model...
+Error loading models with suffix '_rebounds': [Errno 2] No such file or directory: 'models/xgb_model_rebounds.pkl'
+Failed to load default rebounds model: [Errno 2] No such file or directory: 'models/xgb_model_rebounds.pkl'
+Warning: FT-Transformer not found at models/global_ft_2025/ft_transformer.pt
+Loading assists model...
+Error loading models with suffix '_assists': [Errno 2] No such file or directory: 'models/xgb_model_assists.pkl'
+Failed to load default assists model: [Errno 2] No such file or directory: 'models/xgb_model_assists.pkl'
+Warning: FT-Transformer not found at models/global_ft_2025/ft_transformer.pt
+Loading three_pointers model...
+Error loading models with suffix '_three_pointers': [Errno 2] No such file or directory: 'models/xgb_model_three_pointers.pkl'
+Failed to load default three_pointers model: [Errno 2] No such file or directory: 'models/xgb_model_three_pointers.pkl'
+Warning: FT-Transformer not found at models/global_ft_2025/ft_transformer.pt
+
+Testing: Conf=0, Kelly=0.125, MinEV=0.0
+Starting Backtest (2020-2026) | Conf: 0 | Kelly: 0.125 | MinEV: 0.0
+Loading models for Season 2020...
+Error loading models with suffix '_2019': [Errno 2] No such file or directory: 'models/points/xgb_model_2019.pkl'
+Error loading points model for 2019: [Errno 2] No such file or directory: 'models/points/xgb_model_2019.pkl'
+Error loading models with suffix '_2019': [Errno 2] No such file or directory: 'models/rebounds/xgb_model_2019.pkl'
+Error loading rebounds model for 2019: [Errno 2] No such file or directory: 'models/rebounds/xgb_model_2019.pkl'
+Error loading models with suffix '_2019': [Errno 2] No such file or directory: 'models/assists/xgb_model_2019.pkl'
+Error loading assists model for 2019: [Errno 2] No such file or directory: 'models/assists/xgb_model_2019.pkl'
+Error loading models with suffix '_2019': [Errno 2] No such file or directory: 'models/three_pointers/xgb_model_2019.pkl'
+Error loading three_pointers model for 2019: [Errno 2] No such file or directory: 'models/three_pointers/xgb_model_2019.pkl'
+Warning: FT-Transformer not found for 2019
+Traceback (most recent call last):
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/data.py", line 407, in pandas_feature_info
+    new_feature_types.append(_pandas_dtype_mapper[dtype.name])
+KeyError: 'datetime64[ns]'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/tmiles11/meep/nba_predictor/optimize_strategy.py", line 65, in <module>
+    run_optimization()
+  File "/home/tmiles11/meep/nba_predictor/optimize_strategy.py", line 33, in run_optimization
+    metrics = bs.backtest(start_season=2020, end_season=2026, 
+  File "/home/tmiles11/meep/nba_predictor/betting_strategy.py", line 445, in backtest
+    preds = self.generate_predictions(date)
+  File "/home/tmiles11/meep/nba_predictor/betting_strategy.py", line 141, in generate_predictions
+    preds = self.predictors[target].predict(df_day, use_stacking=True)
+  File "/home/tmiles11/meep/nba_predictor/ensemble_model.py", line 137, in predict
+    p_xgb = self.xgb_model.predict(X)
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/core.py", line 774, in inner_f
+    return func(**kwargs)
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/sklearn.py", line 1446, in predict
+    predts = self.get_booster().inplace_predict(
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/core.py", line 774, in inner_f
+    return func(**kwargs)
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/core.py", line 2852, in inplace_predict
+    data, fns, _ = _transform_pandas_df(data, enable_categorical)
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/data.py", line 662, in _transform_pandas_df
+    feature_names, feature_types = pandas_feature_info(
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/data.py", line 409, in pandas_feature_info
+    _invalid_dataframe_dtype(data)
+  File "/home/tmiles11/.local/lib/python3.10/site-packages/xgboost/data.py", line 372, in _invalid_dataframe_dtype
+    raise ValueError(msg)
+ValueError: DataFrame.dtypes for data must be int, float, bool or category. When categorical type is supplied, the experimental DMatrix parameter`enable_categorical` must be set to `True`.  Invalid columns:date: datetime64[ns]

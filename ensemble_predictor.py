@@ -12,8 +12,8 @@ from typing import Dict, List, Optional
 import torch
 
 
-def load_all_window_models(model_cache_dir: str = "model_cache") -> Dict:
-    """Load all 25 window models from cache"""
+def load_all_window_models(model_cache_dir: str = "model_cache", max_year: Optional[int] = None) -> Dict:
+    """Load all 25 window models from cache, optionally filtering by max training year"""
     import os
 
     # Force CPU mode BEFORE loading any models
@@ -31,7 +31,7 @@ def load_all_window_models(model_cache_dir: str = "model_cache") -> Dict:
     if not model_files:
         raise FileNotFoundError(f"No player models found in {model_cache_dir}")
 
-    print(f"Loading {len(model_files)} window models...")
+    print(f"Loading models (Max Year: {max_year})...")
 
     all_models = {}
     for model_file in model_files:
@@ -41,6 +41,10 @@ def load_all_window_models(model_cache_dir: str = "model_cache") -> Dict:
         if len(parts) >= 4:
             start_year = int(parts[2])
             end_year = int(parts[3])
+            
+            # Filter by max_year (prevent lookahead)
+            if max_year is not None and end_year > max_year:
+                continue
 
             # Load models with CPU mapping
             class CPU_Unpickler(pickle.Unpickler):
@@ -173,19 +177,21 @@ class EnsemblePredictor:
     """
 
     def __init__(self, model_cache_dir: str = "model_cache", use_meta_learner: bool = True,
-                 use_minutes_first: bool = False):
+                 use_minutes_first: bool = False, max_year: Optional[int] = None):
         """
         Args:
             model_cache_dir: Directory with window models
             use_meta_learner: Use meta-learner for weighting (if available)
             use_minutes_first: Use minutes-first prediction pipeline (default: False)
+            max_year: Maximum training year to include (for backtesting)
         """
         self.model_cache_dir = model_cache_dir
         self.use_meta_learner = use_meta_learner
         self.use_minutes_first = use_minutes_first
+        self.max_year = max_year
 
         # Load all window models
-        self.window_models = load_all_window_models(model_cache_dir)
+        self.window_models = load_all_window_models(model_cache_dir, max_year=max_year)
 
         # Load meta-learner if available (try current season first, then previous)
         self.meta_learner = None
