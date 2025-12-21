@@ -4,10 +4,11 @@ import joblib
 import os
 
 # Configuration
+# Configuration
 INPUT_PATH = "data/today_inference.csv"
-OUTPUT_PATH = "predictions/bets_today_2025-12-15.csv"
-BASE_DIR = "models/base_v1" # Actually V2/V3 saved in v1 folder in previous steps
-META_DIR = "models/meta_v1"
+OUTPUT_PATH = "predictions/live_ensemble_2025.csv" # Updated to match Betting Strategy requirement
+BASE_DIR = "models/base_v4"
+META_DIR = "models/meta_v4"
 
 TARGETS = ['PTS', 'AST', 'REB']
 
@@ -27,7 +28,7 @@ def predict_today():
         'FGM', 'FGA', 'FG_PCT', 'FG3M', 'FG3A', 'FG3_PCT', 'FTM', 'FTA', 'FT_PCT', 
         'OREB', 'DREB', 'REB', 'AST', 'STL', 'BLK', 'TOV', 'PF', 'PTS', 'PLUS_MINUS', 
         'FANTASY_PTS', 'VIDEO_AVAILABLE', 'season_type', 'season_start_year',
-        'prev_date', 'TEAM_ID_OPP'
+        'prev_date', 'TEAM_ID_OPP', 'role_trend_min'
     ]
     
     feature_cols = [c for c in df.columns if c not in drop_cols]
@@ -40,16 +41,25 @@ def predict_today():
     
     results = df[['GAME_DATE', 'PLAYER_NAME', 'TEAM_ABBREVIATION', 'MATCHUP']].copy()
     
+    # Need catboost generic info
+    from catboost import CatBoostRegressor
+    
     for target in TARGETS:
         print(f"Predicting {target}...")
         
         # Base Models
         base_preds = pd.DataFrame(index=X.index)
         for name in ['xgb', 'lgb', 'cat']:
-            path = os.path.join(BASE_DIR, f"{name}_{target}.joblib")
             try:
-                model = joblib.load(path)
-                base_preds[f'pred_{target}_{name}'] = model.predict(X)
+                if name == 'cat':
+                    path = os.path.join(BASE_DIR, f"{name}_{target}.cbm")
+                    model = CatBoostRegressor()
+                    model.load_model(path)
+                    base_preds[f'pred_{target}_{name}'] = model.predict(X)
+                else:
+                    path = os.path.join(BASE_DIR, f"{name}_{target}.joblib")
+                    model = joblib.load(path)
+                    base_preds[f'pred_{target}_{name}'] = model.predict(X)
             except Exception as e:
                 print(f"  Error loading {name}: {e}")
                 base_preds[f'pred_{target}_{name}'] = 0

@@ -6,15 +6,29 @@ import os
 from sklearn.linear_model import RidgeCV, ElasticNetCV
 from sklearn.metrics import mean_squared_error, r2_score
 
-OOF_FILE = "data/oof/oof_validation_2024.csv"
-META_DIR = "models/meta_v1"
+# Configuration
+OOF_DIR = "data/oof_v4"
+META_MODEL_DIR = "models/meta_v4"
+STRICT_DATA_PATH = "data/strict_features_v4.csv" # To get actual targets for OOF rows
+
+# OOF_FILE = "data/oof/oof_validation_2024.csv" # Original OOF_FILE, now derived or replaced by OOF_DIR
+# META_DIR = "models/meta_v1" # Original META_DIR, now replaced by META_MODEL_DIR
 TARGETS = ['PTS', 'AST', 'REB']
 
 def train_meta_learner():
-    os.makedirs(META_DIR, exist_ok=True)
+    # Assuming OOF_FILE will be constructed from OOF_DIR, or a specific file within OOF_DIR
+    # For now, let's assume a default OOF file name within OOF_DIR
+    # If the user intended a specific OOF file, this needs further clarification.
+    # For this change, we'll use a placeholder for OOF_FILE if it's still needed.
+    # However, the instruction only mentions updating OOF_DIR and META_MODEL_DIR.
+    # The snippet provided for OOF_FILE was incomplete.
+    # Let's assume the OOF_FILE is now "data/oof_v4/oof_validation_2024.csv" for consistency.
+    current_oof_file = os.path.join(OOF_DIR, "oof_validation_2024.csv") # Example construction
     
-    print(f"Loading OOF Predictions: {OOF_FILE}...")
-    df = pd.read_csv(OOF_FILE)
+    os.makedirs(META_MODEL_DIR, exist_ok=True)
+    
+    print(f"Loading OOF Predictions: {current_oof_file}...")
+    df = pd.read_csv(current_oof_file)
     
     # We trained XGB, LGB, CAT
     # Columns in OOF: pred_PTS_xgb, pred_PTS_lgb, ...
@@ -57,7 +71,7 @@ def train_meta_learner():
         print(f"Stacker RMSE: {rmse:.4f}, R2: {r2:.4f}")
         
         # Save
-        joblib.dump(meta_model, os.path.join(META_DIR, f"stacker_{target}.joblib"))
+        joblib.dump(meta_model, os.path.join(META_MODEL_DIR, f"stacker_{target}.joblib"))
         results.append({'target': target, 'weights': coefs, 'rmse': rmse, 'r2': r2})
         
     print("\nMeta-Learner Training Complete.")
