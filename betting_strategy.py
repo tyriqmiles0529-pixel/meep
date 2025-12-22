@@ -4,8 +4,8 @@ import os
 import json
 import joblib
 import torch
-from ensemble_model import EnsemblePredictor
-from ft_transformer import FTTransformerFeatureExtractor
+from ensemble_predictor import EnsemblePredictor
+from ft_transformer import FTTransformer
 from data_processor import BasketballDataProcessor
 # Add Odds Ingestion
 try:
@@ -18,7 +18,7 @@ except ImportError:
     RapidAPIProvider = None
 
 class BettingStrategy:
-    def __init__(self, models_dir='models', data_path='final_feature_matrix_with_per_min_1997_onward.csv', provider='mock'):
+    def __init__(self, models_dir='models', data_path='final_feature_matrix_with_per_min_1997_onward.csv', provider='mock', load_models=True):
         self.models_dir = models_dir
         self.data_path = data_path
         self.targets = ['points', 'rebounds', 'assists', 'three_pointers']
@@ -35,6 +35,9 @@ class BettingStrategy:
             self.odds_provider = MockOddsProvider()
             if provider != 'mock':
                 print(f"Warning: Provider '{provider}' not found or unavailable. Using Mock.")
+
+        if load_models:
+            self.load_resources()
         
     def load_resources(self):
         print("Loading Data Processor...")
@@ -300,14 +303,36 @@ class BettingStrategy:
                         # or if prior_col is null
                         continue 
                         
-                pred = row[f'pred_{target}']
+                pred_col = f'pred_{target}'
+                if pred_col not in row:
+                    # Try V4 specific naming if the standard mapping fails
+                    v4_map = {
+                        'points': 'pred_points',
+                        'rebounds': 'pred_rebounds',
+                        'assists': 'pred_assists',
+                        'three_pointers': 'pred_three_pointers'
+                    }
+                    pred_col = v4_map.get(target)
+                    if not pred_col or pred_col not in row:
+                        continue
+                    
+                pred = row[pred_col]
                 rmse = rmses.get(target, 4.5)
                 
+                # Calculate Delta for Edge Filter (±1.5 constraint)
+                delta = pred - line
+                
+                # Check Edge Filter Constraint: delta >= +1.5 for Over, delta <= -1.5 for Under
+                # This ensures we take high-signal/non-sweaty bets.
+                if abs(delta) < 1.5:
+                    continue
+
                 ev, win_prob = self.calculate_ev(row, target, line, odds)
                 conf = self.calculate_confidence(pred, line, rmse)
                 
                 # Filters
                 if ev > min_ev and conf >= confidence_threshold:
+                    side = 'Over' if delta >= 1.5 else 'Under'
                     bets.append({
                         'player': row['player_name'],
                         'team': row.get('playerteamName', 'N/A'),
@@ -315,6 +340,8 @@ class BettingStrategy:
                         'target': target,
                         'line': line,
                         'prediction': pred,
+                        'delta': round(delta, 2),
+                        'side': side,
                         'ev': ev,
                         'win_prob': win_prob,
                         'odds': odds,
@@ -355,93 +382,126 @@ class BettingStrategy:
         
         return bets_df
 
-    def generate_parlays(self, bets_df, num_parlays=5):
-        # Generate 5 parlays from top selections
-        # Constraint: Uncorrelated legs (Max 1 leg per Game ID)
-        
-        parlays = []
-        # Pool of best bets (Top 20)
-        pool = bets_df.head(20).copy()
-        
-        if len(pool) < 2:
+    def select_top_props(self, bets_df, n=5):
+        """
+        Select top n bets for each target (prop) based on EV.
+        """
+        if bets_df.empty:
             return pd.DataFrame()
             
-        import random
-        
-        attempts = 0
-        while len(parlays) < num_parlays and attempts < 50:
-            attempts += 1
-            num_legs = random.randint(2, 5)
-            
-            # Iterative selection to ensure unique games
-            current_parlay = []
-            used_games = set()
-            
-            # Shuffle pool to randomize start
-            shuffled_pool = pool.sample(frac=1)
-            
-            for _, bet in shuffled_pool.iterrows():
-                if len(current_parlay) >= num_legs:
-                    break
-                    
-                game_id = bet.get('game_id')
-                # If game_id missing, assume unique? Or skip?
-                # If we have game_id, check usage.
-                if game_id and game_id != 'N/A':
-                    if game_id in used_games:
-                        continue
-                    used_games.add(game_id)
-                
-                current_parlay.append(bet)
-                
-            if len(current_parlay) < 2:
+        top_props = []
+        for target in self.targets:
+            # Filter for this target
+            tgt_df = bets_df[bets_df['target'] == target].copy()
+            if tgt_df.empty:
                 continue
                 
-            # Create Parlay Object
-            legs = pd.DataFrame(current_parlay)
+            # Sort by EV descending
+            tgt_df = tgt_df.sort_values('ev', ascending=False)
             
-            combined_prob = legs['win_prob'].prod()
-            # Odds calc: Convert all to decimal, multiply, convert back to American?
-            # Or just store decimal.
-            combined_dec_odds = legs['odds'].apply(lambda x: (1 + 100/abs(x)) if x < 0 else (1 + x/100)).prod()
+            # Take top n
+            top_props.append(tgt_df.head(n))
             
-            # EV
-            parlay_ev = (combined_prob * (combined_dec_odds - 1)) - (1 - combined_prob)
-            
-            parlays.append({
-                'legs': legs['player'].tolist(),
-                'targets': legs['target'].tolist(),
-                'combined_odds': combined_dec_odds, # Decimal
-                'combined_prob': combined_prob,
-                'ev': parlay_ev,
-                'num_legs': len(legs)
-            })
-            
-        return pd.DataFrame(parlays)
-
-    def generate_round_robins(self, bets_df, num_rr=5):
-        # Generate Round Robins (e.g. 3 bets, all 2-leg combos)
-        rrs = []
-        top_bets = bets_df.head(5) # Top 5 for RR
-        
-        if len(top_bets) < 3:
+        if not top_props:
             return pd.DataFrame()
             
-        # Example: 3x2 (3 selections, parlay size 2)
+        return pd.concat(top_props)
+
+    def generate_calibrated_round_robins(self, bets_df, n_candidates=4):
+        """
+        Generate Round Robin parlays (2, 3, 4 legs) from the top `n_candidates` distinct-game bets.
+        
+        Constraints:
+        - No multiple legs from same game (GameID check)
+        - Candidates selected by highest EV
+        """
         from itertools import combinations
         
-        combos = list(combinations(top_bets.index, 2))
-        
-        for idx_list in combos:
-            legs = top_bets.loc[list(idx_list)]
-            rrs.append({
-                'type': '2-leg RR',
-                'legs': legs['player'].tolist(),
-                'combined_odds': combined_odds,
-                'ev': parlay_ev
-            })
+        if bets_df.empty:
+            return []
             
-        return pd.DataFrame(rrs)
+        # 1. Select Candidates: Best EV, Distinct Games
+        sorted_bets = bets_df.sort_values('ev', ascending=False)
+        
+        candidates = []
+        seen_games = set()
+        
+        for _, row in sorted_bets.iterrows():
+            if len(candidates) >= n_candidates:
+                break
+                
+            gid = row.get('game_id')
+            if pd.isna(gid) or gid == 'N/A':
+                # If game_id missing, assume distinct (or skip? strict: skip)
+                continue
+                
+            if gid in seen_games:
+                continue
+                
+            seen_games.add(gid)
+            candidates.append(row)
+            
+        if len(candidates) < 2:
+            return []
+            
+        # 2. Generate RRs
+        rrs = []
+        candidate_df = pd.DataFrame(candidates)
+        
+        # Determine sizes to generate (2, 3, 4 if possible)
+        sizes = [2, 3, 4]
+        
+        for size in sizes:
+            if len(candidates) < size:
+                break
+                
+            combos = list(combinations(candidates, size))
+            
+            for combo in combos:
+                # combo is a tuple of Series
+                
+                # Verify distinct games (redundant if candidates are distinct, but safe)
+                gids = {c['game_id'] for c in combo}
+                if len(gids) < size:
+                    continue
+                    
+                # Calculate Combo Odds & EV
+                # Combined Odds (Decimal)
+                dec_odds = 1.0
+                combo_prob = 1.0
+                
+                legs_desc = []
+                
+                for leg in combo:
+                    # Convert odds to decimal
+                    o = leg['odds']
+                    d = (1 + o/100) if o > 0 else (1 + 100/abs(o))
+                    dec_odds *= d
+                    combo_prob *= leg['win_prob']
+                    legs_desc.append(f"{leg['player']} ({leg['target']} {leg['side']})")
+                
+                # EV = (Prob * (Odds - 1)) - (1 - Prob)
+                # Note: This implies "True Odds" calculation. 
+                # If we use purely book odds, EV > 0 if all legs EV > 0? Not necessarily additive.
+                # Standard Independent Event EV:
+                combo_ev = (combo_prob * (dec_odds - 1)) - (1 - combo_prob)
+                
+                # Convert Combined Decimal to American for Display
+                if dec_odds >= 2.0:
+                    us_odds = (dec_odds - 1) * 100
+                else:
+                    us_odds = -100 / (dec_odds - 1)
+                    
+                rrs.append({
+                    'type': f"{size}-Leg RR",
+                    'legs': legs_desc,
+                    'combined_odds': int(us_odds),
+                    'combined_prob': combo_prob,
+                    'ev': combo_ev,
+                    'leg_data': combo # For logging if needed
+                })
+                
+        return rrs
 
     def backtest(self, start_season=2020, end_season=2026, confidence_threshold=10, kelly_fraction=0.25, min_ev=0.0):
         # Backtest Strategy with Season-Aware Model Loading

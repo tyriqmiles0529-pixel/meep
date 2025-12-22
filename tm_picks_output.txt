@@ -1,0 +1,83 @@
+==================================================
+PAPER TRADING - 2025-12-22
+==================================================
+
+[1] Loading team stats...
+Loaded advanced stats for 30 teams
+Loaded opponent per game stats
+Loaded stats for 30 teams
+
+[2] Fetching 2025-12-22 events...
+Found 7 games
+  ID 26876: Charlotte Hornets @ Cleveland Cavaliers
+  ID 26877: Indiana Pacers @ Boston Celtics
+  ID 26878: Dallas Mavericks @ New Orleans Pelicans
+  ID 26879: Utah Jazz @ Denver Nuggets
+  ID 26880: Memphis Grizzlies @ Oklahoma City Thunder
+  ID 26881: Orlando Magic @ Golden State Warriors
+  ID 26882: Detroit Pistons @ Portland Trail Blazers
+
+[3] Fetching player props...
+  Event 26876: 38 props
+  Event 26877: 39 props
+  Event 26878: 37 props
+  Event 26879: 39 props
+  Event 26880: 0 props (no data)
+  Event 26881: 40 props
+  Event 26882: 38 props
+
+Total props: 231
+
+[4] Enriching and Archiving Data...
+[OK] Archived 231 props to historical_data/odds_2025-12-22.csv
+Enriching predictions with team stats (using opponent)...
+Matched 231/231 predictions with team stats
+
+[4.5] Filtering inactive players...
+Remaining props: 231
+
+[5] Selecting bets...
+
+==================================================
+ALL QUALIFYING PICKS (Sorted by Value)
+==================================================
+1. Caris LeVert Three Points Made 1.5 OVER @ 2.88
+   vs Portland Trail Blazers (Matchup: 1.00x)
+   Est. Win: 50% | Rec. Stake: 5.9% of Bankroll
+2. Saddiq Bey Three Points Made 1.5 OVER @ 2.38
+   vs New Orleans Pelicans (Matchup: 1.05x)
+   Est. Win: 54% | Rec. Stake: 5.1% of Bankroll
+3. Tobias Harris Three Points Made 1.5 OVER @ 2.59
+   vs Portland Trail Blazers (Matchup: 1.00x)
+   Est. Win: 50% | Rec. Stake: 4.7% of Bankroll
+4. Trey Murphy III Three Points Made 2.5 OVER @ 2.30
+   vs New Orleans Pelicans (Matchup: 1.05x)
+   Est. Win: 54% | Rec. Stake: 4.6% of Bankroll
+5. Jordan Walsh Points 6.5 UNDER @ 1.91
+   vs Boston Celtics (Matchup: 0.94x)
+   Est. Win: 55% | Rec. Stake: 1.2% of Bankroll
+6. Derrick White Points 18.5 UNDER @ 1.91
+   vs Boston Celtics (Matchup: 0.94x)
+   Est. Win: 55% | Rec. Stake: 1.2% of Bankroll
+7. Bruce Brown Jr. Rebounds 4.5 OVER @ 2.00
+   vs Denver Nuggets (Matchup: 1.03x)
+   Est. Win: 52% | Rec. Stake: 1.1% of Bankroll
+
+==================================================
+SUGGESTED PARLAYS (no same-game)
+==================================================
+
+2-LEG PARLAYS:
+  Parlay 1: Caris LeVert OVER + Saddiq Bey OVER @ 6.85
+  Parlay 2: Caris LeVert OVER + Jordan Walsh UNDER @ 5.50
+  Parlay 3: Caris LeVert OVER + Bruce Brown Jr. OVER @ 5.76
+  Parlay 4: Saddiq Bey OVER + Jordan Walsh UNDER @ 4.55
+  Parlay 5: Saddiq Bey OVER + Bruce Brown Jr. OVER @ 4.76
+  Parlay 6: Jordan Walsh UNDER + Bruce Brown Jr. OVER @ 3.82
+
+3-LEG PARLAY:
+  Caris LeVert OVER + Saddiq Bey OVER + Jordan Walsh UNDER @ 13.09
+
+==================================================
+Bankroll: $30.00 | Daily Budget: $6.00
+==================================================
