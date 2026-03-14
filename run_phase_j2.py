@@ -110,7 +110,7 @@ def run_phase_j2():
     # 4. Generate Bets (±1.5 Delta is now inside BettingStrategy)
     bs = BettingStrategy(load_models=False)
     # Bankroll, Conf, etc.
-    bets = bs.generate_bets(merged, bankroll=1000.0, confidence_threshold=10, min_ev=0.0)
+    bets = bs.generate_bets(merged, bankroll=1000.0, confidence_threshold=10, min_ev=0.3)
     
     if bets.empty:
         print("[INFO] No bets met the ±1.5 delta and EV thresholds today.")

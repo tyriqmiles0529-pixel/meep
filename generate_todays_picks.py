@@ -12,9 +12,9 @@ LIVE_ODDS_FILE = f"historical_data/odds_{TARGET_DATE}.csv"
 PREDICTIONS_FILE = "predictions/live_ensemble_2025.csv"
 MIN_DELTA = 1.5  # Edge filter threshold
 
-# RMSE values for confidence calculations (only for trained models)
-RMSES = {'points': 4.5, 'rebounds': 2.0, 'assists': 1.8}
-SKEWS = {'points': 2.0, 'rebounds': 2.5, 'assists': 2.2}
+# J.6 Production Calibrated RMSE values (includes 3PM)
+RMSES = {'points': 5.2, 'rebounds': 2.4, 'assists': 2.1, 'three_pointers': 0.9}
+SKEWS = {'points': 2.0, 'rebounds': 2.5, 'assists': 2.2, 'three_pointers': 1.5}
 
 def calculate_win_prob(pred, line, market):
     """Calculate probability of winning the bet"""
@@ -95,6 +95,9 @@ def main():
         line = odds_row['line']
         odds = odds_row['over_odds']
         
+        if odds_row['line'] <= 0:
+            continue
+
         # Convert odds to American format if needed
         if odds < 2.0:  # Decimal odds < 2.0 are favorites
             american_odds = -100 / (odds - 1)
@@ -121,8 +124,8 @@ def main():
         # Calculate EV
         ev = calculate_ev(win_prob, american_odds)
         
-        # Only include positive EV bets
-        if ev > 0:
+        # Only include positive EV bets (min 0.3 as requested)
+        if ev >= 0.3:
             merged.append({
                 'player': player,
                 'team': odds_row['team'],
@@ -194,7 +197,7 @@ def main():
         f.write(f"**Total Qualifying Bets:** {len(bets_df)}\\n\\n")
         f.write(f"*Generated on {datetime.now().strftime('%Y-%m-%d at %I:%M %p')}*\\n")
     
-    print(f"\\n✅ Report generated: {md_filename}")
+    print(f"\\n[SUCCESS] Report generated: {md_filename}")
 
 if __name__ == "__main__":
     main()

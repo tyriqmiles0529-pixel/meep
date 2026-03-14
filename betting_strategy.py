@@ -150,7 +150,8 @@ class BettingStrategy:
                 preds = self.predictors[target].predict(X_pred, use_stacking=True)
                 predictions[target] = preds
             else:
-                predictions[target] = np.zeros(len(df_day))
+                # Do not fill with zeros! Skip or set to NaN.
+                continue
             
         # Combine into a results DF
         results = df_day[['player_name', 'playerteamName', 'opponentteamName', 'minutes']].copy()
@@ -162,28 +163,27 @@ class BettingStrategy:
         
         return results
 
-    def calculate_ev(self, row, target, line, odds):
-        # Simple EV calculation
-        # Prob = Probability of winning bet
-        # We need a distribution to get Prob(pred > line).
-        # For now, assume normal distribution with std dev from validation RMSE.
-        
-        # Load RMSE from report
-        rmses = {'points': 4.5, 'rebounds': 2.0, 'assists': 1.8, 'three_pointers': 0.8}
+    def calculate_ev(self, row, target, line, odds, side='Over'):
+        """
+        [Phase J.9] Calculate EV and Win Prob for a specific line and side.
+        """
+        # Load RMSE from report (J.6 calibrated)
+        rmses = {'points': 5.2, 'rebounds': 2.4, 'assists': 2.1, 'three_pointers': 0.9}
         skews = {'points': 2.0, 'rebounds': 2.5, 'assists': 2.2, 'three_pointers': 1.5}
         
         rmse = rmses.get(target, 4.5)
         skew_a = skews.get(target, 0)
         
-        from scipy.stats import norm, skewnorm
-        
+        from scipy.stats import skewnorm
         pred = row[f'pred_{target}']
         
-        # Probability of Over
-        prob_over = 1 - skewnorm.cdf(line, skew_a, loc=pred, scale=rmse)
+        if side == 'Over':
+            win_prob = 1 - skewnorm.cdf(line, skew_a, loc=pred, scale=rmse)
+        else:
+            win_prob = skewnorm.cdf(line, skew_a, loc=pred, scale=rmse)
         
-        # Probability of Under
-        prob_under = skewnorm.cdf(line, skew_a, loc=pred, scale=rmse)
+        # J.9: Cap win_prob at 99.9% for realism
+        win_prob = min(0.999, max(0.001, win_prob))
         
         # Decimal Odds
         dec_odds = odds
@@ -192,15 +192,7 @@ class BettingStrategy:
         else:
             dec_odds = 1 + (odds / 100)
             
-        # EV
-        # Assuming we bet OVER if pred > line
-        if pred > line:
-            win_prob = prob_over
-        else:
-            win_prob = prob_under
-            
         ev = (win_prob * (dec_odds - 1)) - (1 - win_prob)
-        
         return ev, win_prob
 
     def calculate_confidence(self, prediction, line, rmse):
@@ -209,9 +201,6 @@ class BettingStrategy:
         """
         if rmse <= 0: return 0
         z_score = abs(prediction - line) / rmse
-        # Map Z-score to 0-100. 
-        # Z=1 (1 sigma) -> ~68% conf interval? 
-        # Let's scale: Z=2 -> 100% confidence (arbitrary but practical)
         raw_score = (z_score / 2.0) * 100
         return min(100.0, max(0.0, raw_score))
 
@@ -266,77 +255,54 @@ class BettingStrategy:
         else:
             print(f"Warning: FT-Transformer not found for {train_season} at {ft_path}")
 
-    def generate_bets(self, predictions_df, bankroll=1000, confidence_threshold=10, kelly_fraction=0.25, min_ev=0.0):
-        # 1. Filter by Minutes (Strict)
-        min_col = 'pred_minutes' if 'pred_minutes' in predictions_df.columns else 'minutes'
-        if min_col not in predictions_df.columns:
-            mask_min = pd.Series([True] * len(predictions_df))
+    def generate_bets(self, merged_df, bankroll=1000, confidence_threshold=10, kelly_fraction=0.25, min_ev=0.05):
+        """
+        [Phase J.9] Generate bets from normalized prop lines.
+        Expects: player_name, market, line, odds_over, odds_under
+        """
+        # 1. Filter by Minutes
+        min_col = 'pred_minutes' if 'pred_minutes' in merged_df.columns else 'minutes'
+        if min_col in merged_df.columns:
+            candidates = merged_df[merged_df[min_col] >= 20].copy()
         else:
-            mask_min = predictions_df[min_col] >= 20
+            candidates = merged_df.copy()
             
-        candidates = predictions_df[mask_min].copy()
-        
         bets = []
-        rmses = {'points': 4.5, 'rebounds': 2.0, 'assists': 1.8, 'three_pointers': 0.8}
+        rmses = {'points': 5.2, 'rebounds': 2.4, 'assists': 2.1, 'three_pointers': 0.9}
         
-        for idx, row in candidates.iterrows():
-            for target in self.targets:
-                line = row.get(f'line_{target}')
-                odds = row.get(f'odds_{target}', -110)
+        for _, row in candidates.iterrows():
+            target = row['market']
+            line = row['line']
+            pred = row.get(f'pred_{target}')
+            if pred is None: continue
+            
+            rmse = rmses.get(target, 4.5)
+            delta = pred - line
+            
+            # Check Edge Filter Constraint (±1.5 for most, ±0.5 for threes)
+            edge_threshold = 0.5 if target == 'three_pointers' else 1.5
+            
+            # Check for Over and Under favorites
+            for side, o_col in zip(['Over', 'Under'], ['odds_over', 'odds_under']):
+                odds = row.get(o_col)
+                if odds is None or pd.isna(odds): continue
                 
-                if line is None:
-                    # Map full target name to dataset column abbreviation
-                    # dataset: prior_pts, prior_reb, prior_ast, prior_three_pointers (maybe?)
-                    abbr_map = {
-                        'points': 'prior_pts',
-                        'rebounds': 'prior_reb', 
-                        'assists': 'prior_ast',
-                        'three_pointers': 'prior_three_pointers' # Verify this one exists or fallback
-                    }
-                    
-                    prior_col = abbr_map.get(target)
-                    
-                    if prior_col and prior_col in row:
-                        line = row[prior_col]
-                    else:
-                        # Fallback for three pointers if not in prior
-                        # or if prior_col is null
-                        continue 
-                        
-                pred_col = f'pred_{target}'
-                if pred_col not in row:
-                    # Try V4 specific naming if the standard mapping fails
-                    v4_map = {
-                        'points': 'pred_points',
-                        'rebounds': 'pred_rebounds',
-                        'assists': 'pred_assists',
-                        'three_pointers': 'pred_three_pointers'
-                    }
-                    pred_col = v4_map.get(target)
-                    if not pred_col or pred_col not in row:
-                        continue
-                    
-                pred = row[pred_col]
-                rmse = rmses.get(target, 4.5)
+                # J.9: Favorites (-200 to -500) per user request (Strong Favorites)
+                if odds > -200: continue
+                if odds < -500: continue
                 
-                # Calculate Delta for Edge Filter (±1.5 constraint)
-                delta = pred - line
+                # Check Edge Filter Constraint
+                if side == 'Over' and delta < edge_threshold: continue
+                if side == 'Under' and delta > -edge_threshold: continue
                 
-                # Check Edge Filter Constraint: delta >= +1.5 for Over, delta <= -1.5 for Under
-                # This ensures we take high-signal/non-sweaty bets.
-                if abs(delta) < 1.5:
-                    continue
-
-                ev, win_prob = self.calculate_ev(row, target, line, odds)
+                ev, win_prob = self.calculate_ev(row, target, line, odds, side=side)
                 conf = self.calculate_confidence(pred, line, rmse)
                 
-                # Filters
                 if ev > min_ev and conf >= confidence_threshold:
-                    side = 'Over' if delta >= 1.5 else 'Under'
                     bets.append({
                         'player': row['player_name'],
-                        'team': row.get('playerteamName', 'N/A'),
-                        'game_id': row.get('gameId', 'N/A'),
+                        'team': row.get('team', row.get('playerteamName', 'N/A')),
+                        'game_id': row.get('event_id', row.get('gameId', 'N/A')),
                         'target': target,
                         'line': line,
                         'prediction': pred,
@@ -349,159 +315,211 @@ class BettingStrategy:
                     })
                     
         bets_df = pd.DataFrame(bets)
-        if bets_df.empty:
-            return pd.DataFrame()
+        if bets_df.empty: return pd.DataFrame()
             
-        # 3. Ranking
-        bets_df = bets_df.sort_values('ev', ascending=False)
-        
-        # 4. Dynamic Kelly
         def get_kelly(row):
-            b = 0.909 
-            if row['odds'] < 0:
-                b = 100 / abs(row['odds'])
-            else:
-                b = row['odds'] / 100
+            # Decimal odds payout multiplier
+            o = row['odds']
+            b = (o / 100) if o > 0 else (100 / abs(o))
             p = row['win_prob']
             q = 1 - p
-            f = (b * p - q) / b
+            f = (b * p - q) / b if b > 0 else 0
             return max(0, f)
             
         bets_df['kelly_fraction'] = bets_df.apply(get_kelly, axis=1)
-        
-        # Scale by Confidence & User Fraction
-        bets_df['adj_kelly'] = bets_df['kelly_fraction'] * (bets_df['confidence'] / 100.0)
-        
-        # Drawdown Protection (Placeholder)
-        drawdown_pct = 0.0
-        if drawdown_pct > 0.10:
-            bets_df['adj_kelly'] *= 0.5
-            
-        bets_df['stake_pct'] = bets_df['adj_kelly'] * kelly_fraction # Use passed fraction (default 0.25 = 1/4)
+        # Scale Kelly by confidence and the user's kelly_fraction (risk setting)
+        bets_df['stake_pct'] = bets_df['kelly_fraction'] * (bets_df['confidence'] / 100.0) * kelly_fraction
         bets_df['stake_amt'] = bets_df['stake_pct'] * bankroll
         
         return bets_df
 
-    def select_top_props(self, bets_df, n=5):
+    def select_top_props(self, bets_df, n=7):
         """
-        Select top n bets for each target (prop) based on EV.
+        [Phase J.9] Select top n bets for each target (prop) based on EV.
+        Constraint: Heavy Favorites only (Negative Odds).
         """
         if bets_df.empty:
             return pd.DataFrame()
             
         top_props = []
+        # Filter for Target Range (Favorites -200 to -500)
+        favorites_df = bets_df[(bets_df['odds'] <= -200) & (bets_df['odds'] >= -500)].copy()
+        
         for target in self.targets:
-            # Filter for this target
-            tgt_df = bets_df[bets_df['target'] == target].copy()
-            if tgt_df.empty:
-                continue
-                
-            # Sort by EV descending
-            tgt_df = tgt_df.sort_values('ev', ascending=False)
+            tgt_df = favorites_df[favorites_df['target'] == target].copy()
+            if tgt_df.empty: continue
             
-            # Take top n
+            # Balance Edge and EV (Composite Score)
+            # Normalize EV and Edge (Abs Delta) to 0-1 scale within the group
+            tgt_df['abs_delta'] = tgt_df['delta'].abs()
+            
+            max_ev = tgt_df['ev'].max()
+            min_ev = tgt_df['ev'].min()
+            denom_ev = max_ev - min_ev if max_ev != min_ev else 1.0
+            
+            max_edge = tgt_df['abs_delta'].max()
+            min_edge = tgt_df['abs_delta'].min()
+            denom_edge = max_edge - min_edge if max_edge != min_edge else 1.0
+            
+            tgt_df['norm_ev'] = (tgt_df['ev'] - min_ev) / denom_ev
+            tgt_df['norm_edge'] = (tgt_df['abs_delta'] - min_edge) / denom_edge
+            
+            # 50% EV, 50% Edge
+            tgt_df['score'] = 0.5 * tgt_df['norm_ev'] + 0.5 * tgt_df['norm_edge']
+            
+            # Sort by Composite Score
+            tgt_df = tgt_df.sort_values('score', ascending=False)
             top_props.append(tgt_df.head(n))
             
-        if not top_props:
-            return pd.DataFrame()
-            
+        if not top_props: return pd.DataFrame()
         return pd.concat(top_props)
 
-    def generate_calibrated_round_robins(self, bets_df, n_candidates=4):
+    def generate_calibrated_round_robins(self, bets_df, n_candidates=15):
         """
-        Generate Round Robin parlays (2, 3, 4 legs) from the top `n_candidates` distinct-game bets.
-        
-        Constraints:
-        - No multiple legs from same game (GameID check)
-        - Candidates selected by highest EV
+        [DEPRECATED by J.8] Standard RR generation. Use generate_optimal_targeted_parlays.
+        """
+        res = self.generate_optimal_targeted_parlays(bets_df)
+        return res['rr']
+
+    def generate_optimal_targeted_parlays(self, bets_df, bankroll=20.0, kelly_fraction=0.10):
+        """
+        Phase J.9: Targeted construction (+100 to +1000) using favorites only.
+        All bankroll allocation (15% cap) applies here.
         """
         from itertools import combinations
+        if bets_df.empty: return {'rr': [], 'traditional': []}
         
-        if bets_df.empty:
-            return []
+        # 1. Filter: Range [-500, -200]
+        favorites = bets_df[(bets_df['odds'] <= -200) & (bets_df['odds'] >= -500)].copy()
+        if len(favorites) < 3:
+            print("[J.9] Not enough -200+ favorites for parlay construction.")
+            return {'rr': [], 'traditional': []}
             
-        # 1. Select Candidates: Best EV, Distinct Games
-        sorted_bets = bets_df.sort_values('ev', ascending=False)
+        # 2. Generate all valid combinations (3-6 legs)
+        all_valid_combos = []
+        # J.9: Increase candidates to 50 to handle strict usage cap
+        candidates = favorites.sort_values('ev', ascending=False).head(50).to_dict('records')
         
-        candidates = []
-        seen_games = set()
-        
-        for _, row in sorted_bets.iterrows():
-            if len(candidates) >= n_candidates:
-                break
-                
-            gid = row.get('game_id')
-            if pd.isna(gid) or gid == 'N/A':
-                # If game_id missing, assume distinct (or skip? strict: skip)
-                continue
-                
-            if gid in seen_games:
-                continue
-                
-            seen_games.add(gid)
-            candidates.append(row)
-            
-        if len(candidates) < 2:
-            return []
-            
-        # 2. Generate RRs
-        rrs = []
-        candidate_df = pd.DataFrame(candidates)
-        
-        # Determine sizes to generate (2, 3, 4 if possible)
-        sizes = [2, 3, 4]
-        
-        for size in sizes:
-            if len(candidates) < size:
-                break
-                
-            combos = list(combinations(candidates, size))
-            
-            for combo in combos:
-                # combo is a tuple of Series
-                
-                # Verify distinct games (redundant if candidates are distinct, but safe)
+        for size in [3, 4, 5, 6]:
+            if len(candidates) < size: continue
+            for combo in combinations(candidates, size):
                 gids = {c['game_id'] for c in combo}
-                if len(gids) < size:
-                    continue
-                    
-                # Calculate Combo Odds & EV
-                # Combined Odds (Decimal)
+                if len(gids) < size: continue
+                pnames = {c['player'] for c in combo}
+                if len(pnames) < size: continue
+                
                 dec_odds = 1.0
                 combo_prob = 1.0
-                
                 legs_desc = []
-                
+                leg_ids = []
+                avg_conf = 0
                 for leg in combo:
-                    # Convert odds to decimal
                     o = leg['odds']
                     d = (1 + o/100) if o > 0 else (1 + 100/abs(o))
                     dec_odds *= d
                     combo_prob *= leg['win_prob']
-                    legs_desc.append(f"{leg['player']} ({leg['target']} {leg['side']})")
+                    legs_desc.append(f"{leg['player']} ({leg.get('team', 'UNK')}) ({leg['target']} {leg['side']} @ {leg['odds']})")
+                    leg_ids.append(f"{leg['player']}_{leg['target']}_{leg['side']}")
+                    avg_conf += leg.get('confidence', 50)
                 
-                # EV = (Prob * (Odds - 1)) - (1 - Prob)
-                # Note: This implies "True Odds" calculation. 
-                # If we use purely book odds, EV > 0 if all legs EV > 0? Not necessarily additive.
-                # Standard Independent Event EV:
+                avg_conf /= len(combo)
                 combo_ev = (combo_prob * (dec_odds - 1)) - (1 - combo_prob)
+                us_odds = int((dec_odds - 1) * 100) if dec_odds >= 2.0 else int(-100 / (dec_odds - 1))
                 
-                # Convert Combined Decimal to American for Display
-                if dec_odds >= 2.0:
-                    us_odds = (dec_odds - 1) * 100
-                else:
-                    us_odds = -100 / (dec_odds - 1)
-                    
-                rrs.append({
-                    'type': f"{size}-Leg RR",
+                # Check Max Odds Constraint (+700)
+                if us_odds > 700: continue
+                
+                # Kelly Calculation for Parlay
+                b = (dec_odds - 1)
+                p = combo_prob
+                q = 1 - p
+                f = (b * p - q) / b if b > 0 else 0
+                kelly_stake = max(0, f) * (avg_conf / 100.0) * kelly_fraction
+                
+                all_valid_combos.append({
+                    'size': size,
                     'legs': legs_desc,
-                    'combined_odds': int(us_odds),
+                    'combined_odds': us_odds,
                     'combined_prob': combo_prob,
                     'ev': combo_ev,
-                    'leg_data': combo # For logging if needed
+                    'leg_data': list(combo),
+                    'combo_hash': tuple(sorted(leg_ids)),
+                    'stake_pct': kelly_stake
                 })
+        
+        if not all_valid_combos: return {'rr': [], 'traditional': []}
+        
+        results = {'rr': [], 'traditional': []}
+        used_hashes = set()
+        leg_usage = {} # Prop ID -> Count
+        MAX_USAGE = 1 # Each prop used in exactly one parlay MAX for ultra-diversity
+
+        def can_use_combo(combo_hashes):
+            """Diversity check: Ensure no leg exceeds MAX_USAGE."""
+            for h in combo_hashes:
+                if leg_usage.get(h, 0) >= MAX_USAGE:
+                    return False
+            return True
+
+        def increment_usage(combo_hashes):
+            for h in combo_hashes:
+                leg_usage[h] = leg_usage.get(h, 0) + 1
+
+        # A. Round Robin (Targeted up to +1000)
+        rr_targets = [(150, 3), (300, 3), (500, 4), (750, 5), (1000, 6)]
+        for target, size in rr_targets:
+            best_match = None
+            min_diff = 999999
+            for c in all_valid_combos:
+                if c['size'] != size or c['combo_hash'] in used_hashes: continue
+                if not can_use_combo(c['combo_hash']): continue # Diversity
                 
-        return rrs
+                diff = abs(c['combined_odds'] - target)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_match = c
+            if best_match:
+                rr_entry = best_match.copy()
+                rr_entry['type'] = f"{size}-Leg RR"
+                results['rr'].append(rr_entry)
+                used_hashes.add(best_match['combo_hash'])
+                increment_usage(best_match['combo_hash'])
+        
+        # B. Traditional (5 total, scaled 100-1000)
+        targets = [100, 250, 500, 750, 1000]
+        for target in targets:
+            best_match = None
+            min_diff = 999999
+            for c in all_valid_combos:
+                if c['combo_hash'] in used_hashes: continue
+                if not can_use_combo(c['combo_hash']): continue # Diversity
+                if c['combined_odds'] < 0: continue # Strict Positive Odds only for Traditional
+                
+                diff = abs(c['combined_odds'] - target)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_match = c
+            if best_match:
+                best_match['type'] = f"{best_match['size']}-Leg"
+                results['traditional'].append(best_match)
+                used_hashes.add(best_match['combo_hash'])
+                increment_usage(best_match['combo_hash'])
+        
+        # C. BANKROLL ALLOCATION (J.9)
+        all_parlays = results['rr'] + results['traditional']
+        total_p_exposure = sum(p['stake_pct'] for p in all_parlays)
+        DAILY_CAP = 0.15
+        
+        scale = 1.0
+        if total_p_exposure > DAILY_CAP:
+            scale = DAILY_CAP / total_p_exposure
+            print(f"[J.9] Parlay exposure capped: {total_p_exposure:.1%} -> {DAILY_CAP:.0%}")
+            
+        for p in all_parlays:
+            p['stake_pct'] *= scale
+            p['stake_amt'] = p['stake_pct'] * bankroll
+                
+        return results
 
     def backtest(self, start_season=2020, end_season=2026, confidence_threshold=10, kelly_fraction=0.25, min_ev=0.0):
         # Backtest Strategy with Season-Aware Model Loading
@@ -612,6 +630,176 @@ class BettingStrategy:
             'final_bankroll': bankroll,
             'history': hist_df
         }
+
+    def generate_lotto_parlays(self, top_props_df, n=3):
+        """
+        [Phase J.9] Generate 'Lotto Slips' - high odds (+1000+) parlays.
+        - Start odds >= +1000.
+        - No odds cap for upper bound.
+        - Max 10 legs.
+        - Disregard usage limits (can reuse props from main card).
+        - Must be unique among lotto slips (disjoint legs).
+        - Source: top_props_df (Top 7 props).
+        """
+        from itertools import combinations
+        if top_props_df.empty: return []
+
+        candidates = top_props_df.to_dict('records')
+        
+        # Need at least ~5-6 legs to hit +1000 with strong favorites (-200 to -500 avg ~-300 = 1.33. 1.33^8 ~ 9.7)
+        # We will try sizes 5 to 10
+        sizes = [5, 6, 7, 8, 9, 10]
+        
+        potential_lottos = []
+
+        for size in sizes:
+            if len(candidates) < size: continue
+            # Limit iterations
+            combos = combinations(candidates, size)
+            
+            count = 0 
+            for combo in combos:
+                count += 1
+                if count > 5000: break
+                
+                # Check Unique Games/Players? 
+                # Standard logic: unique player at least?
+                players = {c['player'] for c in combo}
+                if len(players) < size: continue # Ensure different players for safety/simplicity
+                
+                dec_odds = 1.0
+                combo_prob = 1.0
+                legs_desc = []
+                leg_ids = []
+                
+                for leg in combo:
+                    o = leg['odds']
+                    d = (1 + o/100) if o > 0 else (1 + 100/abs(o))
+                    dec_odds *= d
+                    combo_prob *= leg['win_prob']
+                    legs_desc.append(f"{leg['player']} ({leg.get('team', 'UNK')}) ({leg['target']} {leg['side']} @ {leg['odds']})")
+                    leg_ids.append(leg['player'] + leg['target'])
+                
+                us_odds = int((dec_odds - 1) * 100) if dec_odds >= 2.0 else int(-100 / (dec_odds - 1))
+                
+                if us_odds < 1000: continue
+                
+                # EV Calc
+                combo_ev = (combo_prob * (dec_odds - 1)) - (1 - combo_prob)
+                
+                potential_lottos.append({
+                    'legs': legs_desc,
+                    'combined_odds': us_odds,
+                    'combined_prob': combo_prob,
+                    'ev': combo_ev,
+                    'combo_hash': set(leg_ids)
+                })
+
+        # Sort by EV descending
+        potential_lottos.sort(key=lambda x: x['ev'], reverse=True)
+        
+        final_lottos = []
+        
+        for l in potential_lottos:
+            if len(final_lottos) >= n: break
+            
+            # Disjoint check against existing lottos
+            overlap = False
+            for existing in final_lottos:
+                if not l['combo_hash'].isdisjoint(existing['combo_hash']):
+                    overlap = True
+                    break
+            
+            if overlap: continue
+            
+            final_lottos.append(l)
+        
+        return final_lottos
+
+    def generate_lotto_parlays(self, top_props_df, n=3):
+        """
+        [Phase J.9] Generate 'Lotto Slips' - high odds (+1000+) parlays.
+        - Start odds >= +1000.
+        - No odds cap for upper bound.
+        - Max 10 legs.
+        - Disregard usage limits (can reuse props from main card).
+        - Must be unique among lotto slips (disjoint legs).
+        - Source: top_props_df (Top 7 props).
+        """
+        from itertools import combinations
+        if top_props_df.empty: return []
+
+        candidates = top_props_df.to_dict('records')
+        
+        # Need at least ~5-6 legs to hit +1000 with strong favorites (-200 to -500 avg ~-300 = 1.33. 1.33^8 ~ 9.7)
+        # We will try sizes 5 to 10
+        sizes = [5, 6, 7, 8, 9, 10]
+        
+        potential_lottos = []
+
+        for size in sizes:
+            if len(candidates) < size: continue
+            # Limit iterations
+            combos = combinations(candidates, size)
+            
+            count = 0 
+            for combo in combos:
+                count += 1
+                if count > 5000: break
+                
+                # Check Unique Games/Players? 
+                # Standard logic: unique player at least?
+                players = {c['player'] for c in combo}
+                if len(players) < size: continue # Ensure different players for safety/simplicity
+                
+                dec_odds = 1.0
+                combo_prob = 1.0
+                legs_desc = []
+                leg_ids = []
+                
+                for leg in combo:
+                    o = leg['odds']
+                    d = (1 + o/100) if o > 0 else (1 + 100/abs(o))
+                    dec_odds *= d
+                    combo_prob *= leg['win_prob']
+                    legs_desc.append(f"{leg['player']} ({leg.get('team', 'UNK')}) ({leg['target']} {leg['side']} @ {leg['odds']})")
+                    leg_ids.append(leg['player'] + leg['target'])
+                
+                us_odds = int((dec_odds - 1) * 100) if dec_odds >= 2.0 else int(-100 / (dec_odds - 1))
+                
+                if us_odds < 1000: continue
+                
+                # EV Calc
+                combo_ev = (combo_prob * (dec_odds - 1)) - (1 - combo_prob)
+                
+                potential_lottos.append({
+                    'legs': legs_desc,
+                    'combined_odds': us_odds,
+                    'combined_prob': combo_prob,
+                    'ev': combo_ev,
+                    'combo_hash': set(leg_ids)
+                })
+
+        # Sort by EV descending
+        potential_lottos.sort(key=lambda x: x['ev'], reverse=True)
+        
+        final_lottos = []
+        
+        for l in potential_lottos:
+            if len(final_lottos) >= n: break
+            
+            # Disjoint check against existing lottos
+            overlap = False
+            for existing in final_lottos:
+                if not l['combo_hash'].isdisjoint(existing['combo_hash']):
+                    overlap = True
+                    break
+            
+            if overlap: continue
+            
+            final_lottos.append(l)
+        
+        return final_lottos
 
 if __name__ == "__main__":
     bs = BettingStrategy()

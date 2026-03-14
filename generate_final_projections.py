@@ -22,8 +22,11 @@ def generate():
     # 2. Load Models
     features = joblib.load(os.path.join(MODELS_DIR, "features.joblib"))
     models = {}
-    for target in ['PTS', 'AST', 'REB']:
-        models[target] = joblib.load(os.path.join(MODELS_DIR, f"xgb_{target}.joblib"))
+    # J.6: Added FG3M (3PM)
+    for target in ['PTS', 'AST', 'REB', 'FG3M']:
+        model_path = os.path.join(MODELS_DIR, f"xgb_{target}.joblib")
+        if os.path.exists(model_path):
+            models[target] = joblib.load(model_path)
         
     # 3. Process data in chunks to find features
     print("Processing features in chunks...")
@@ -45,8 +48,17 @@ def generate():
     
     # 4. Predict
     results = df_final_features[['PLAYER_NAME', 'TEAM_ID', 'GAME_ID']].copy()
-    # Placeholder for Team Abbreviation (since it's missing in this file)
-    results['team'] = "UNK" 
+    
+    # Team Mapping for Display
+    team_map = {
+        1610612737: 'ATL', 1610612738: 'BOS', 1610612739: 'CLE', 1610612740: 'NOH', 1610612741: 'CHI',
+        1610612742: 'DAL', 1610612743: 'DEN', 1610612744: 'GSW', 1610612745: 'HOU', 1610612746: 'LAC',
+        1610612747: 'LAL', 1610612748: 'MIA', 1610612749: 'MIL', 1610612750: 'MIN', 1610612751: 'BKN',
+        1610612752: 'NYK', 1610612753: 'ORL', 1610612754: 'IND', 1610612755: 'PHI', 1610612756: 'PHX',
+        1610612757: 'POR', 1610612758: 'SAC', 1610612759: 'SAS', 1610612760: 'OKC', 1610612761: 'TOR',
+        1610612762: 'UTA', 1610612763: 'MEM', 1610612764: 'WAS', 1610612765: 'DET', 1610612766: 'CHA'
+    }
+    results['team'] = results['TEAM_ID'].map(team_map).fillna("UNK")
     results.rename(columns={'PLAYER_NAME': 'player', 'GAME_ID': 'game_id'}, inplace=True)
     
     X = df_final_features[features].fillna(0)
@@ -59,6 +71,8 @@ def generate():
     results.to_csv(OUTPUT_FILE, index=False)
     print(f"\n[SUCCESS] Saved to {OUTPUT_FILE}")
     print(results[['player', 'proj_PTS', 'proj_AST', 'proj_REB']].head())
+    if 'proj_FG3M' in results.columns:
+        print("3PM (FG3M) projections included.")
 
 if __name__ == "__main__":
     generate()

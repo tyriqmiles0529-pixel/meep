@@ -52,7 +52,7 @@ def generate_validation_data():
     print(f"Matched {len(df_features)} feature records.")
     
     # 3. Predict
-    results = df_features[['PLAYER_NAME', 'GAME_DATE', 'TEAM_ID']].copy()
+    results = df_features[['PLAYER_NAME', 'GAME_DATE', 'TEAM_ID', 'PTS', 'AST', 'REB']].copy()
     X = df_features[features_list].fillna(0)
     
     for target_key, target_col in market_map.items():

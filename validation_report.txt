@@ -1,0 +1,19 @@
+=== Phase J.4: Validation Analysis (Corrected Outcomes) ===
+Matched 22648 lines with projections and outcomes.
+
+--- Delta Bucket Analysis ---
+ bucket  count  hit_rate
+0.0-0.5   5053  0.526816
+0.5-1.0   3850  0.585195
+1.0-1.5   2457  0.611722
+1.5-2.0   1587  0.681790
+2.0-5.0   4019  0.703409
+   5.0+   1169  0.869974
+
+--- Book Performance Summary ---
+                   n   avg_line  hit_rate       mae
+book                                               
+betrivers       5712  14.150910  0.655812  4.708859
+draftkings      3812   9.657922  0.614376  3.320042
+williamhill_us  4849   8.489276  0.612704  3.059291
+fanduel         3762   9.855130  0.607390  3.402977

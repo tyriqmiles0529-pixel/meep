@@ -1,0 +1,9 @@
+=== Phase J.4.3: Probability Calibration Analysis ===
+
+Residual Stats by Market:
+         market     rmse      std     skew    n
+  player_points 6.252153 6.251693 0.294675 8257
+ player_assists 2.222512 2.218815 0.504017 4281
+player_rebounds 2.506338 2.506475 0.300808 5597
+
+Validation of 1.5 Delta Probability Implication:
