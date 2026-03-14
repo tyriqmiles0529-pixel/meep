@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 
 # API Config
-API_KEY = "feb98d2672d0505df5dbb1cfa8d06ccd"
+API_KEY = "5648e037727b48a34a679ac87a1d0edb"
 BASE_URL = "https://api.the-odds-api.com/v4/historical/sports/basketball_nba"
 REGIONS = "us"
 MARKETS = "player_points,player_rebounds,player_assists,player_threes"

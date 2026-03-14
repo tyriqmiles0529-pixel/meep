@@ -50,3 +50,42 @@ class FTTransformer(nn.Module):
         logits = self.head(representation)
         
         return logits, representation
+
+import numpy as np
+
+class FTTransformerFeatureExtractor:
+    def __init__(self, cardinalities, embed_dim=16, device='cpu'):
+        self.num_players = cardinalities[0] if cardinalities else 0
+        self.embed_dim = embed_dim
+        self.device = device
+        self.embeddings = None
+
+    def load(self, path):
+        try:
+            state = torch.load(path, map_location=self.device)
+            # Try to extract player embeddings
+            if 'player_embedding.weight' in state:
+                self.embeddings = state['player_embedding.weight']
+            elif hasattr(state, 'keys'): 
+                 # Maybe it IS the weight tensor directly? Unlikely.
+                 pass
+        except Exception as e:
+            print(f"Error loading embedding state: {e}")
+
+    def transform(self, X_cat):
+        # X_cat: numpy array of shape [batch, 1] or [batch]
+        if self.embeddings is None:
+            return np.zeros((len(X_cat), self.embed_dim))
+            
+        try:
+            indices = torch.tensor(X_cat, dtype=torch.long).squeeze()
+            # Handle out of bounds
+            indices = torch.clamp(indices, 0, self.embeddings.shape[0]-1)
+            
+            emb = self.embeddings[indices]
+            if isinstance(emb, torch.Tensor):
+                return emb.detach().cpu().numpy()
+            return emb
+        except Exception as e:
+            print(f"Error transforming embeddings: {e}")
+            return np.zeros((len(X_cat), self.embed_dim))

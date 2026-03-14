@@ -1,46 +1,40 @@
 ---
-description: Daily routine for NBA Paper Trading and Data Collection
+description: Daily routine for NBA Paper Trading & GUI Analytics
 ---
 
-# NBA Paper Trading Daily Workflow
+# NBA Elite Predictor: Daily Workflow (GUI Edition)
 
-Follow this routine every day to generate betting picks and accumulate historical data.
+Follow this routine every day to maintain data integrity and generate high-EV picks.
 
-## 1. Morning: Generate Picks & Archive Odds
-Run the paper trading script with today's date. This fetches live odds from RapidAPI, archives them to `historical_data/`, and outputs the best value bets.
-
-```powershell
-# Replace YYYY-MM-DD with today's date (e.g., 2025-12-14)
-python paper_trading_live.py --date 2025-12-14
-```
-
-**Output Review:**
-- Look for **"ALL QUALIFYING PICKS (Sorted by Value)"**.
-- Focus on picks with positive **"Rec. Stake"** (Recommended Stake).
-- Picks labeled **[ALT LINE PREDICTED]** suggest a massive edge—check your sportsbook for alternative lines (e.g., if line is 18.5 but we predict 25, look for Over 22.5 for better odds).
-
-## 2. Verify Data Archival
-Determine that the odds were saved correctly for future model training.
+## 1. Launch the Terminal
+Launch the sleek GUI to manage your slate and analytics.
 
 ```powershell
-ls historical_data
+python run_terminal.py
 ```
-*Ensure `odds_2025-12-14.csv` was created.*
 
-## 3. Evening: Check Results (Optional)
-The system currently tracks results in `paper_ledger.json` automatically when you run the script, assuming we add a "Resolve" step later.
-*Note: Currently `paper_trading_live.py` is set up for **Generating Picks**. Result resolution requires fetching box scores the next day.*
+## 2. Daily Data Sync (Morning)
+Once the app opens, navigate to the sidebar and click **"🔄 REFRESH DATA"** (or "Sync NBA Data").
+- This fetches the latest box scores from last night.
+- It automatically optimizes your master file (keeping 2021+ data) to prevent MemoryErrors.
+- It recalculates all player streaks and rolling averages.
 
-## 4. Weekly/Monthly: Retrain Models
-As you accumulate more data (or every few weeks), retrain the core models to adapt to recent player form and new stats.
+## 3. Generate & Review Picks
+Go to the **"🎯 COMMAND"** tab (or "Value Picks" tab):
+- Click **"🚀 GENERATE PICKS"**.
+- Review the **Heat Score** and **Tier** for each projection.
+- Use the **Expected Value (EV)** slider to filter for the best edges.
 
-**Prerequisite**: Ensure `final_feature_matrix_with_per_min_1997_onward.csv` is in the `meep` folder.
+## 4. Deep Dive Analytics
+Before locking in a high-stake bet, use the **"🔬 ANALYTICS PLATFORM"** tab:
+- Search for the player (filtered to active 2025/26 players only).
+- Check the **"🧬 ARCHETYPE DNA"** tab to see how they compare to their style-peers.
+- Switch the graph axes to **Impact (BPM)** to see if their value is defensive or box-score driven.
 
-```powershell
-# Retrain for the current season (adjust start_season as needed)
-python train_all_targets.py --epochs 20 --start_season 2025 --end_season 2025
-```
+## 5. Execution
+- Add your favorite picks to the **Bet Slip**.
+- View your historical wins/losses in **"📊 PERFORMANCE"**.
 
 ## Troubleshooting
-- **API Error**: If you see "0 props", check your RapidAPI key usage or try again in 5 minutes (rate limits).
-- **Unicode Error**: If you see `charmap` errors, ensure your terminal supports UTF-8, though the script was patched to use `[OK]` instead of checkmarks.
+- **Memory Errors**: If you see "Unable to allocate", the system will auto-retry in Ultra-Low memory mode. Ensure you've clicked "Refresh Data" at least once to trim the file.
+- **Missing Player**: If a player isn't in the list, they might not have played enough minutes this season yet. Check the "Analyzing Profile... 🧪" status.

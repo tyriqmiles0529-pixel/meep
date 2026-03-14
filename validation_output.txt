@@ -1,0 +1,40 @@
+Traceback (most recent call last):
+  File "C:\Users\tmiles11\nba_predictor\meep\meep\diagnostic_integrity_validation.py", line 40, in <module>
+    print(f"[\u2713] Dataset Staleness: {engine.dataset_staleness} days")
+  File "C:\Users\tmiles11\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 1: character maps to <undefined>
+======================================================================
+PHASE S3 INTEGRITY VALIDATION - DIAGNOSTIC MODE
+======================================================================
+Timestamp: 2026-02-01 17:16:48
+
+[1/5] Initializing Prediction Engine...
+
+[DATA] Loading aggregated data from final_feature_matrix_with_per_min_1997_onward.csv...
+[WARN] No date column found for freshness check.
+   Loaded 976,165 player-games with 84 features
+
+[MODELS] Loading trained models...
+  [MISSING] minutes model not found
+  [MISSING] points model not found
+  [MISSING] rebounds model not found
+  [MISSING] assists model not found
+  [MISSING] threes model not found
+[WARN] No models loaded at all.
+
+[CRITICAL ERROR] Pipeline crashed: 'charmap' codec can't encode character '\u2713' in position 1: character maps to <undefined>
+
+======================================================================
+DIAGNOSTIC SUMMARY
+======================================================================
+Total Players Processed: 0
+Total Predictions Generated: 0
+Freshness Penalties Applied: 0
+Volatility Penalties Applied: 0
+Vectors Flagged for Anomalies: 0
+Schema Errors: 0
+Pipeline Crashed: True
+
+[!!!] VALIDATION FAILED - Review errors above

@@ -43,6 +43,9 @@ logs/
 .DS_Store
 NUL
 
+# Database
+meep_terminal/data/*.db
+
 # Temp
 meep/
 temp_meep/

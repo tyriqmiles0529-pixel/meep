@@ -206,6 +206,21 @@ def fetch_live_data():
 - **Ensemble Accuracy**: 25-model temporal diversity
 - **Prediction Speed**: Sub-second inference with explainability
 
+##### V6: Possession & Lineup Neural Flow (Current Phase)
+The system has evolved into a high-fidelity **Micro-Stat Modeling** platform. By integrating **Graph Neural Networks (GNNs)**, we now model the synergy between all 5 players on the court and simulate every single **possession** of a game to generate statistical distributions.
+
+- **Lineup GNN**: Neural coordination between 5 players (Node=DNA, Edge=Synergy).
+- **Possession Simulator**: Simulates ~100 possessions per game based on GNN ratings.
+- **Game-Flow Logic**: Dynamic substitution, minute distribution, and "Clutch Factor" modeling.
+
+### V4/V5: Autonomous DNA (Production Stable)
+- **Latent DNA**: 16-dimensional player playstyle embeddings (FT-Transformer).
+- **Monte Carlo Engine**: 10,000-iteration outcome simulations (Poisson/Skew-Normal).
+- **Market Intelligence**: Automated edge detection and vig removal.
+- **Uncertainty Quantification**: Confidence intervals for all predictions
+
+---
+
 ### Business Value
 - **Comprehensive Coverage**: 79 years of NBA history
 - **Scalable Architecture**: Cloud-native deployment

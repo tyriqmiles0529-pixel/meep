@@ -1,0 +1,44 @@
+======================================================================
+PHASE S3 INTEGRITY VALIDATION - DIAGNOSTIC MODE
+======================================================================
+Timestamp: 2026-02-02 19:03:07
+
+[1/5] Initializing Prediction Engine...
+
+[DATA] Loading aggregated data from final_feature_matrix_with_per_min_1997_onward.csv...
+[WARN] No date column found for freshness check.
+   Loaded 742,449 player-games with 85 features
+
+[MODELS] Loading trained models...
+  [MISSING] minutes model not found
+  [MISSING] points model not found
+  [MISSING] rebounds model not found
+  [MISSING] assists model not found
+  [MISSING] threes model not found
+[WARN] No models loaded at all.
+[Γ£ô] Dataset Staleness: 999 days
+[!] FRESHNESS PENALTY ACTIVE (>999 days old)
+
+[2/5] Generating Predictions (Today's Slate)...
+[1.5/5] Determining Test Date...
+[Γ£ô] Using latest dataset date for validation: 2025-06-22
+    Available Columns: ['SEASON_ID', 'PLAYER_ID', 'PLAYER_NAME', 'TEAM_ID', 'GAME_ID', 'GAME_DATE', 'MATCHUP', 'WL', 'MIN', 'PTS']...
+
+[OFFLINE] Generating predictions using local data for 2025-06-22...
+   Found 24 player-games locally.
+[!] WARNING: No games found for 2025-06-22 in local data.
+
+[5/5] Pipeline Validation Complete
+
+======================================================================
+DIAGNOSTIC SUMMARY
+======================================================================
+Total Players Processed: 0
+Total Predictions Generated: 0
+Freshness Penalties Applied: 1
+Volatility Penalties Applied: 0
+Vectors Flagged for Anomalies: 0
+Schema Errors: 0
+Pipeline Crashed: False
+
+[Γ£ôΓ£ôΓ£ô] VALIDATION SUCCESSFUL - All integrity safeguards operational

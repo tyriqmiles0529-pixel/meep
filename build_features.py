@@ -25,7 +25,7 @@ class StrictFeatureEngine:
             self.df = self.data_source.copy()
         
         # Ensure UTC Date
-        self.df['GAME_DATE'] = pd.to_datetime(self.df['GAME_DATE'])
+        self.df['GAME_DATE'] = pd.to_datetime(self.df['GAME_DATE'], format='mixed')
         self.df = self.df.sort_values(['GAME_DATE', 'GAME_ID'])
         
         # Filter Garbage (but be careful not to drop Inference rows which have 0/NaN stats)
@@ -68,20 +68,16 @@ class StrictFeatureEngine:
         metrics = ['PTS', 'AST', 'REB', 'MIN', 'FGA', 'FG3A']
         
         for m in metrics:
-            # 1. Shift first to move T to T+1 (so T sees T-1)
-            # Row T gets value of T-1.
-            shifted_col = self.df.groupby('PLAYER_ID')[m].shift(1)
+            if m not in self.df.columns:
+                print(f"   [WARN] Skipping rolling stats for {m} (column missing)")
+                continue
             
+            # 1. Expand Season Avg (Grouped)
+            self.df[f'season_{m}_avg'] = self.df.groupby(['PLAYER_ID', 'SEASON_ID'])[m].transform(lambda x: x.shift(1).expanding().mean()).fillna(0)
+            
+            # 2. Rolling Windows (Grouped)
             for w in windows:
-                # 2. Rolling on the shifted column
-                # min_periods=1 allows early season data (expanding-ish)
-                self.df[f'roll_{m}_{w}'] = shifted_col.rolling(window=w, min_periods=1).mean()
-                
-            # Expanding Season Mean using same shifted logic
-            # Group by [Player, Season] -> Shift(1) -> Expanding Mean
-            self.df[f'season_{m}_avg'] = self.df.groupby(['PLAYER_ID', 'SEASON_ID'])[m]\
-                                              .apply(lambda x: x.shift(1).expanding().mean())\
-                                              .reset_index(level=[0,1], drop=True)
+                self.df[f'roll_{m}_{w}'] = self.df.groupby('PLAYER_ID')[m].transform(lambda x: x.shift(1).rolling(window=w, min_periods=1).mean()).fillna(0)
                                               
         print(f"Rolling stats computed for {metrics}")
 
@@ -111,11 +107,11 @@ class StrictFeatureEngine:
         
         # Unique Game-Team rows
         # We have TEAM_ID and GAME_ID.
-        team_games = self.df.groupby(['TEAM_ID', 'GAME_ID', 'GAME_DATE', 'MATCHUP']).agg({
-             'PTS': 'sum', # Total points scored BY this team
-             'FGA': 'sum',
-             'FG_PCT': 'mean' # approximate
-        }).reset_index()
+        agg_map = {'PTS': 'sum'}
+        if 'FGA' in self.df.columns: agg_map['FGA'] = 'sum'
+        if 'FG_PCT' in self.df.columns: agg_map['FG_PCT'] = 'mean'
+        
+        team_games = self.df.groupby(['TEAM_ID', 'GAME_ID', 'GAME_DATE', 'MATCHUP']).agg(agg_map).reset_index()
         
         # Now, we need to link this to the OPPONENT.
         # self.df has 'MATCHUP'. We need to parse it to find Opponent Team ID?
@@ -158,17 +154,20 @@ class StrictFeatureEngine:
         # Easier: In game_summary, 'TEAM_ID' is the 'Subject' team.
         # If we have 'TEAM_ID_OPP' in main df, we merge on that.
         
-        # Let's add Opponent ID to main df
-        # We can extract it from the same game_summary logic
         # Map (Game_ID, Team_ID) -> Opponent_ID
         matchup_map = game_summary[['GAME_ID', 'TEAM_ID', 'TEAM_ID_OPP']].copy()
         
+        # Cleanup and ensure no duplicates before merge
+        self.df = self.df.drop(columns=['TEAM_ID_OPP'], errors='ignore')
         self.df = self.df.merge(matchup_map, on=['GAME_ID', 'TEAM_ID'], how='left')
         
-        # Now merge the stats
-        # We want stats for TEAM_ID_OPP
+        # Now merge the stats for the OPPONENT
         stats_to_merge = game_summary[['GAME_ID', 'TEAM_ID'] + [f'opp_allow_pts_roll_{w}' for w in windows]]
         
+        # Drop existing opp columns if we are re-calculating
+        for w in windows:
+            self.df = self.df.drop(columns=[f'opp_allow_pts_roll_{w}'], errors='ignore')
+
         self.df = self.df.merge(
             stats_to_merge,
             left_on=['GAME_ID', 'TEAM_ID_OPP'],
@@ -178,7 +177,13 @@ class StrictFeatureEngine:
         )
         
         # Cleanup
-        self.df = self.df.drop(columns=['TEAM_ID_trash'])
+        if 'TEAM_ID_trash' in self.df.columns:
+            self.df = self.df.drop(columns=['TEAM_ID_trash'])
+        
+        # Final hardening: Fill NaNs for opponent stats with 0
+        opp_cols = [f'opp_allow_pts_roll_{w}' for w in windows]
+        self.df[opp_cols] = self.df[opp_cols].fillna(0)
+        
         print("Computed Opponent Strength (Pts Allowed).")
 
     def compute_advanced_rolling_stats(self):
@@ -192,46 +197,58 @@ class StrictFeatureEngine:
         span_med = 10
         
         for m in metrics:
-            shifted = self.df.groupby('PLAYER_ID')[m].shift(1)
-            # EWMA
-            self.df[f'ewma_{m}_{span_short}'] = shifted.ewm(span=span_short, adjust=False, min_periods=1).mean()
-            self.df[f'ewma_{m}_{span_med}'] = shifted.ewm(span=span_med, adjust=False, min_periods=1).mean()
+            # 1. EWMA - Grouped and Shifted
+            self.df[f'ewma_{m}_{span_short}'] = self.df.groupby('PLAYER_ID')[m].transform(
+                lambda x: x.shift(1).ewm(span=span_short, adjust=False).mean()
+            ).fillna(0)
             
-            # Variance (Consistency)
-            self.df[f'roll_{m}_std_10'] = shifted.rolling(window=10, min_periods=3).std()
+            self.df[f'ewma_{m}_{span_med}'] = self.df.groupby('PLAYER_ID')[m].transform(
+                lambda x: x.shift(1).ewm(span=span_med, adjust=False).mean()
+            ).fillna(0)
+            
+            # 2. Variance (Consistency) - Grouped and Shifted
+            self.df[f'roll_{m}_std_10'] = self.df.groupby('PLAYER_ID')[m].transform(
+                lambda x: x.shift(1).rolling(window=10, min_periods=3).std()
+            ).fillna(0)
 
     def compute_advanced_player_metrics(self):
         print("Computing Advanced Player Metrics (TS%, Usage, Roles)...")
         # Need to handle division by zero safely
         
         # 1. Rolling TS% (True Shooting)
-        # TS% = PTS / (2 * (FGA + 0.44 * FTA))
-        # We need Rolling PTS, Rolling FGA, Rolling FTA.
-        # Shift(1) first
         grouped = self.df.groupby('PLAYER_ID')
-        s_pts = grouped['PTS'].shift(1)
-        s_fga = grouped['FGA'].shift(1)
-        s_fta = grouped['FTA'].shift(1)
-        
-        # Rolling Sums for 10 games to stabilize
-        w = 10
-        r_pts = s_pts.rolling(w, min_periods=1).sum()
-        r_fga = s_fga.rolling(w, min_periods=1).sum()
-        r_fta = s_fta.rolling(w, min_periods=1).sum()
-        
-        tsa = 2 * (r_fga + 0.44 * r_fta)
-        # Avoid division by zero
-        self.df['roll_TS_pct_10'] = (r_pts / tsa).replace([np.inf, -np.inf], 0).fillna(0)
-        
+        if all(c in self.df.columns for c in ['PTS', 'FGA', 'FTA']):
+            s_pts = grouped['PTS'].shift(1)
+            s_fga = grouped['FGA'].shift(1)
+            s_fta = grouped['FTA'].shift(1)
+            
+            # Rolling Sums for 10 games to stabilize
+            w = 10
+            r_pts = s_pts.rolling(w, min_periods=1).sum()
+            r_fga = s_fga.rolling(w, min_periods=1).sum()
+            r_fta = s_fta.rolling(w, min_periods=1).sum()
+            
+            tsa = 2 * (r_fga + 0.44 * r_fta)
+            self.df['roll_TS_pct_10'] = (r_pts / tsa).replace([np.inf, -np.inf], 0).fillna(0)
+        else:
+            print("   [WARN] Skipping TS% (columns missing)")
+            self.df['roll_TS_pct_10'] = 0
+
         # 2. Rolling Usage Proxy
-        # Usage ~ (FGA + 0.44*FTA + TOV)
-        # We don't have Team Totals easily at player row level without heavy merge.
-        # Proxy: Player's FGA+TOV relative to their own history? 
-        # Or just Raw Volume Metric: FGA + TOV + 0.44*FTA
-        s_tov = grouped['TOV'].shift(1)
-        r_tov = s_tov.rolling(w, min_periods=1).sum()
-        
-        self.df['roll_usage_proxy_10'] = (r_fga + 0.44 * r_fta + r_tov)
+        if all(c in self.df.columns for c in ['FGA', 'FTA', 'TOV']):
+            if 's_fga' not in locals(): s_fga = grouped['FGA'].shift(1)
+            if 's_fta' not in locals(): s_fta = grouped['FTA'].shift(1)
+            s_tov = grouped['TOV'].shift(1)
+            
+            w = 10
+            if 'r_fga' not in locals(): r_fga = s_fga.rolling(w, min_periods=1).sum()
+            if 'r_fta' not in locals(): r_fta = s_fta.rolling(w, min_periods=1).sum()
+            r_tov = s_tov.rolling(w, min_periods=1).sum()
+            
+            self.df['roll_usage_proxy_10'] = (r_fga + 0.44 * r_fta + r_tov)
+        else:
+            print("   [WARN] Skipping Usage Proxy (columns missing)")
+            self.df['roll_usage_proxy_10'] = 0
         
         # 3. Role / Minutes Percentile
         # Is this player trending up in minutes?
@@ -257,7 +274,7 @@ class StrictFeatureEngine:
         # Let's verify standard NBA API format.
         # Yes: @ is road, vs. is home.
         
-        self.df['is_home'] = self.df['MATCHUP'].str.contains('vs.').astype(int)
+        self.df['is_home'] = self.df['MATCHUP'].str.contains('vs.', na=False).astype(int)
         
         # Rest Days already done in `compute_rest_days`
         # Add Opponent Position metrics?
@@ -349,7 +366,12 @@ class StrictFeatureEngine:
         # If Missing < 0, we have more people than avg (e.g. injuries healing).
         
         # Merge back to Main DF
+        # Drop existing column to avoid .x/.y suffixes if re-running
+        self.df = self.df.drop(columns=['missing_high_impact_production'], errors='ignore')
+        
         self.df = self.df.merge(team_game_stats[['GAME_ID', 'TEAM_ID', 'missing_high_impact_production']], on=['GAME_ID', 'TEAM_ID'], how='left')
+        self.df['missing_high_impact_production'] = self.df['missing_high_impact_production'].fillna(0)
+        
         print(" Availability features attached.")
 
     def compute_per_minute_features(self):
@@ -377,13 +399,16 @@ class StrictFeatureEngine:
         self.df['roll_REB_per_MIN_10'] = (r_reb / r_min_safe).fillna(0)
         
         # Usage Density: (FGA + 0.44*FTA + TOV) / MIN
-        # We need sum(FGA), sum(FTA), sum(TOV)
-        r_fga = roll_sum_shifted('FGA')
-        r_fta = roll_sum_shifted('FTA')
-        r_tov = roll_sum_shifted('TOV')
-        
-        usage_num = r_fga + 0.44 * r_fta + r_tov
-        self.df['roll_usage_density_10'] = (usage_num / r_min_safe).fillna(0)
+        if all(c in self.df.columns for c in ['FGA', 'FTA', 'TOV']):
+            r_fga = roll_sum_shifted('FGA')
+            r_fta = roll_sum_shifted('FTA')
+            r_tov = roll_sum_shifted('TOV')
+            
+            usage_num = r_fga + 0.44 * r_fta + r_tov
+            self.df['roll_usage_density_10'] = (usage_num / r_min_safe).fillna(0)
+        else:
+            print("   [WARN] Skipping Usage Density (columns missing)")
+            self.df['roll_usage_density_10'] = 0
         
     def merge_embeddings(self, embedding_path):
         if not os.path.exists(embedding_path):
@@ -487,6 +512,21 @@ class StrictFeatureEngine:
         
         print("Embeddings generated and assigned.")
 
+    def finalize_features(self):
+        print("Scrubbing NaNs from feature space...")
+        # Target all feature-like columns
+        feature_cols = [c for c in self.df.columns if 
+                        'roll' in c or 
+                        'lag' in c or 
+                        'season' in c or 
+                        'ewma' in c or 
+                        'emb_' in c or
+                        c in ['is_home', 'rest_days', 'is_b2b', 'missing_high_impact_production', 'role_trend_min']]
+        
+        # Also include any numeric columns that might have slipped through
+        self.df[feature_cols] = self.df[feature_cols].fillna(0)
+        return self.df
+
     def save_features(self, output_path):
         # Update feature selector to include new types
         feature_cols = [c for c in self.df.columns if 
@@ -502,7 +542,7 @@ class StrictFeatureEngine:
         
         print(f"Saving {len(feature_cols)} features to {output_path}...")
         # Keep explicit columns + identifiers
-        save_cols = ['SEASON_ID', 'PLAYER_ID', 'PLAYER_NAME', 'TEAM_ID', 'GAME_ID', 'GAME_DATE', 'MATCHUP', 'WL', 'MIN', 'PTS', 'AST', 'REB'] + feature_cols
+        save_cols = ['SEASON_ID', 'PLAYER_ID', 'PLAYER_NAME', 'TEAM_ID', 'TEAM_ABBREVIATION', 'team', 'GAME_ID', 'GAME_DATE', 'MATCHUP', 'WL', 'MIN', 'PTS', 'AST', 'REB', 'FG3M', 'FGA', 'FG3A', 'FG_PCT', 'TOV', 'FTA'] + feature_cols
         
         # Ensure all save_cols exist (some might be missing if steps skipped?)
         valid_cols = [c for c in save_cols if c in self.df.columns]

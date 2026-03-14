@@ -2,6 +2,9 @@ pandas
 numpy
 scikit-learn
 lightgbm
+xgboost
+catboost
+joblib
 pytorch-tabnet
 torch
 pyarrow
@@ -11,3 +14,8 @@ kaggle
 requests
 google-cloud-storage
 google-cloud-secretmanager
+streamlit
+sqlalchemy
+plotly
+openai
+psutil

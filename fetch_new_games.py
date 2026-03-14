@@ -185,7 +185,7 @@ if __name__ == "__main__":
     if stats is not None:
         clean_df = standardize_data(stats, games)
         print("Scraped Data Sample:")
-        print(clean_df.head())
+        # print(clean_df.head()) # Commented out to prevent Unicode Error in background process
         
         # Save raw daily file
         filename = f"daily_games_{target_date}.csv"
